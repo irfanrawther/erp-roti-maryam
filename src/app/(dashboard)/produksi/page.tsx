@@ -71,9 +71,10 @@ export default function ProduksiPage() {
   const [batches,   setBatches]   = useState<Batch[]>([]);
   const [showForm,  setShowForm]  = useState(false);
   const [editBatch, setEditBatch] = useState<Batch | null>(null);
-  const [loading,   setLoading]   = useState(false);
-  const [deleting,  setDeleting]  = useState<string | null>(null);
-  const [sukses,    setSukses]    = useState(false);
+  const [loading,    setLoading]    = useState(false);
+  const [deleting,   setDeleting]   = useState<string | null>(null);
+  const [sukses,     setSukses]     = useState(false);
+  const [stockError, setStockError] = useState<string[]>([]);
 
   const today = new Date().toISOString().split("T")[0];
 
@@ -105,7 +106,8 @@ export default function ProduksiPage() {
   }
 
   function getSkuId(brand: string, varianDB: string): string {
-    return skuList.find((s) => s.brand === brand && s.varian === varianDB)?.id ?? "";
+    const list = skuList.filter((s) => s.brand === brand);
+    return list.find((s) => s.varian === varianDB)?.id ?? list[0]?.id ?? "";
   }
 
   // ── Master resep & pemakaian helpers ─────────────────────
@@ -121,17 +123,28 @@ export default function ProduksiPage() {
     return (data as PenggunaanBahan[] | null) ?? [];
   }
 
+  // Konversi satuan resep (gr/ml) ke satuan stok (Kg/Liter) agar trigger DB akurat
+  function toBaseUnit(jumlah: number, satuan: string): { jumlah: number; satuan: string } {
+    switch (satuan) {
+      case "gr": return { jumlah: jumlah / 1000, satuan: "Kg" };
+      case "ml": return { jumlah: jumlah / 1000, satuan: "Liter" };
+      case "L":  return { jumlah: jumlah,        satuan: "Liter" };
+      default:   return { jumlah,                satuan };
+    }
+  }
+
   async function applyIngredients(batchId: string, skuId: string, kgJumlah: number, tanggal: string) {
     if (!user) return;
     const resep = await fetchResep(skuId);
     for (const r of resep) {
-      const jumlah = r.jumlah_per_pack * kgJumlah;
+      const rawJumlah = r.jumlah_per_pack * kgJumlah;
+      const { jumlah, satuan } = toBaseUnit(rawJumlah, r.satuan);
       await supabase.from("penggunaan_bahan").insert({
         batch_produksi_id: batchId, bahan_baku_id: r.bahan_baku_id,
-        jumlah_digunakan: jumlah, satuan: r.satuan, created_by: user.id,
+        jumlah_digunakan: jumlah, satuan, created_by: user.id,
       });
       await supabase.from("penerimaan_bahan_baku").insert({
-        bahan_baku_id: r.bahan_baku_id, jumlah, satuan: r.satuan, tipe: "keluar",
+        bahan_baku_id: r.bahan_baku_id, jumlah, satuan, tipe: "keluar",
         tanggal, keterangan: `Produksi batch #${batchId.slice(0, 8)}`, created_by: user.id,
       });
     }
@@ -155,6 +168,48 @@ export default function ProduksiPage() {
   // ── Grand total ───────────────────────────────────────────
   function grandTotal(): number {
     return Object.values(form.varianKg).reduce((s, v) => s + (parseFloat(v) || 0), 0);
+  }
+
+  // ── Validasi stok sebelum submit ──────────────────────────
+  async function validateStock(): Promise<string[]> {
+    if (!form.brand) return [];
+    const brandCfg  = BRANDS_CONFIG[form.brand];
+    const toProcess = brandCfg.variants.filter((v) => parseFloat(form.varianKg[v.key] || "0") > 0);
+    if (toProcess.length === 0) return [];
+
+    // Akumulasi kebutuhan per bahan_baku_id (sudah dalam satuan dasar Kg/Liter/Pcs)
+    const needed: Record<string, { jumlah: number; satuan: string }> = {};
+    for (const v of toProcess) {
+      const skuId = getSkuId(form.brand, v.varianDB);
+      if (!skuId) continue;
+      const resep = await fetchResep(skuId);
+      const kg    = parseFloat(form.varianKg[v.key]);
+      for (const r of resep) {
+        const { jumlah, satuan } = toBaseUnit(r.jumlah_per_pack * kg, r.satuan);
+        if (!needed[r.bahan_baku_id]) needed[r.bahan_baku_id] = { jumlah: 0, satuan };
+        needed[r.bahan_baku_id].jumlah += jumlah;
+      }
+    }
+
+    const ids = Object.keys(needed);
+    if (ids.length === 0) return [];
+
+    const { data } = await supabase
+      .from("bahan_baku")
+      .select("id, nama, stok_saat_ini, satuan")
+      .in("id", ids);
+
+    const errors: string[] = [];
+    for (const b of (data as { id:string; nama:string; stok_saat_ini:number; satuan:string }[] | null) ?? []) {
+      const req = needed[b.id];
+      if (!req) continue;
+      if (b.stok_saat_ini < req.jumlah) {
+        const butuh = req.jumlah.toFixed(3).replace(/\.?0+$/, "");
+        const ada   = b.stok_saat_ini.toFixed(3).replace(/\.?0+$/, "");
+        errors.push(`${b.nama}: butuh ${butuh} ${req.satuan}, stok tersisa ${ada} ${b.satuan}`);
+      }
+    }
+    return errors;
   }
 
   // ── Open edit ─────────────────────────────────────────────
@@ -195,13 +250,22 @@ export default function ProduksiPage() {
     e.preventDefault();
     if (!user || !form.brand || !form.tanggal) return;
 
-    const brandCfg = BRANDS_CONFIG[form.brand];
+    const brandCfg  = BRANDS_CONFIG[form.brand];
     const toProcess = brandCfg.variants.filter(
       (v) => parseFloat(form.varianKg[v.key] || "0") > 0
     );
     if (toProcess.length === 0) return;
 
     setLoading(true);
+    setStockError([]);
+
+    // Cek kecukupan stok dulu
+    const errors = await validateStock();
+    if (errors.length > 0) {
+      setStockError(errors);
+      setLoading(false);
+      return;
+    }
 
     if (editBatch) {
       // Edit: exactly one variant entry
@@ -233,6 +297,7 @@ export default function ProduksiPage() {
 
     setLoading(false);
     setSukses(true);
+    setStockError([]);
     setForm({ tanggal: today, brand: "", varianKg: {} });
     setEditBatch(null);
     fetchData();
@@ -243,19 +308,29 @@ export default function ProduksiPage() {
   return (
     <div className="p-4 space-y-4 max-w-lg mx-auto">
 
-      <div className="flex items-center justify-between">
+      <div className="space-y-3">
         <h1 className="text-xl font-bold text-gray-800">Produksi Adonan</h1>
-        <button
-          onClick={() => {
-            setEditBatch(null);
-            setForm({ tanggal: today, brand: "", varianKg: {} });
-            setSukses(false);
-            setShowForm(true);
-          }}
-          className="btn-primary flex items-center gap-2 text-sm"
-        >
-          <Plus size={16} /> Buat Batch
-        </button>
+        <div className="grid grid-cols-2 gap-2">
+          {(Object.entries(BRANDS_CONFIG) as [BrandKey, typeof BRANDS_CONFIG[BrandKey]][]).map(([key, cfg]) => (
+            <button key={key}
+              onClick={() => {
+                setEditBatch(null);
+                setForm({ tanggal: today, brand: key, varianKg: {} });
+                setSukses(false);
+                setStockError([]);
+                setShowForm(true);
+              }}
+              className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl font-semibold text-sm transition-all shadow-sm ${
+                cfg.color === "amber"
+                  ? "bg-amber-500 hover:bg-amber-600 text-white"
+                  : "bg-blue-500 hover:bg-blue-600 text-white"
+              }`}
+            >
+              <Plus size={15} />
+              <span>Buat Batch {cfg.label}</span>
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Riwayat Batch */}
@@ -312,7 +387,11 @@ export default function ProduksiPage() {
           <div className="bg-white rounded-2xl w-full max-w-md max-h-[92vh] flex flex-col shadow-xl">
 
             <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 shrink-0">
-              <h2 className="font-bold text-gray-800">{editBatch ? "Edit Batch" : "Buat Batch Baru"}</h2>
+              <h2 className="font-bold text-gray-800">
+                {editBatch
+                  ? `Edit Batch — ${form.brand ? BRANDS_CONFIG[form.brand].label : ""}`
+                  : form.brand ? `Buat Batch ${BRANDS_CONFIG[form.brand].label}` : "Buat Batch"}
+              </h2>
               <button onClick={() => { setShowForm(false); setEditBatch(null); }}
                 className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100">
                 <X size={20} />
@@ -331,24 +410,17 @@ export default function ProduksiPage() {
                   />
                 </div>
 
-                {/* Brand */}
-                <div>
-                  <label className="label">Brand *</label>
-                  <div className="grid grid-cols-2 gap-3">
-                    {(Object.entries(BRANDS_CONFIG) as [BrandKey, typeof BRANDS_CONFIG[BrandKey]][]).map(([key, cfg]) => (
-                      <button key={key} type="button"
-                        onClick={() => setForm((f) => ({ ...f, brand: key, varianKg: {} }))}
-                        disabled={!!editBatch}
-                        className={`py-3 px-4 rounded-xl border-2 text-sm font-semibold transition-all disabled:opacity-70 disabled:cursor-not-allowed ${
-                          form.brand === key
-                            ? cfg.color === "amber" ? "bg-amber-500 text-white border-amber-500" : "bg-blue-500 text-white border-blue-500"
-                            : "bg-white text-gray-600 border-gray-200 hover:border-gray-300"
-                        }`}>
-                        {cfg.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
+                {/* Brand pill — read-only indicator */}
+                {form.brand && (() => {
+                  const cfg = BRANDS_CONFIG[form.brand];
+                  return (
+                    <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-semibold ${
+                      cfg.color === "amber" ? "bg-amber-100 text-amber-700" : "bg-blue-100 text-blue-700"
+                    }`}>
+                      <span>Brand: {cfg.label}</span>
+                    </div>
+                  );
+                })()}
 
                 {/* Varian + kg inputs */}
                 {form.brand && (() => {
@@ -360,13 +432,13 @@ export default function ProduksiPage() {
                       <div className="space-y-2">
                         {cfg.variants.map((v) => {
                           const isEditLocked = !!editBatch && !(v.key in form.varianKg);
+                          const hasValue = parseFloat(form.varianKg[v.key] || "0") > 0;
+                          const activeClass = cfg.color === "amber" ? "bg-amber-50 border-amber-200" : "bg-blue-50 border-blue-200";
                           return (
                             <div key={v.key}
                               className={`flex items-center gap-3 px-3 py-2.5 rounded-xl border transition-colors ${
                                 isEditLocked ? "bg-gray-50 border-gray-100 opacity-40" :
-                                parseFloat(form.varianKg[v.key] || "0") > 0
-                                  ? "bg-amber-50 border-amber-200"
-                                  : "bg-white border-gray-200"
+                                hasValue ? activeClass : "bg-white border-gray-200"
                               }`}>
                               <span className="text-sm font-semibold text-gray-700 flex-1 min-w-0">{v.label}</span>
                               <div className="flex items-center gap-1 shrink-0">
@@ -411,6 +483,16 @@ export default function ProduksiPage() {
                   </div>
                 )}
 
+                {/* Error stok tidak cukup */}
+                {stockError.length > 0 && (
+                  <div className="bg-red-50 border border-red-200 rounded-xl p-3 space-y-1">
+                    <p className="text-red-700 font-semibold text-sm">⚠ Stok bahan baku tidak cukup:</p>
+                    {stockError.map((e, i) => (
+                      <p key={i} className="text-xs text-red-600">• {e}</p>
+                    ))}
+                  </div>
+                )}
+
                 {sukses && (
                   <div className="bg-green-50 border border-green-200 rounded-xl p-3 text-center">
                     <p className="text-green-700 font-semibold text-sm">✓ Batch berhasil disimpan!</p>
@@ -419,8 +501,16 @@ export default function ProduksiPage() {
 
                 <button type="submit"
                   disabled={loading || !form.brand || !form.tanggal || grandTotal() <= 0}
-                  className="btn-primary w-full py-3 text-base">
-                  {loading ? "Menyimpan & mengurangi stok..." : editBatch ? "Simpan Perubahan" : "Simpan Batch"}
+                  className={`w-full py-3 text-base font-semibold rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed text-white ${
+                    form.brand && BRANDS_CONFIG[form.brand].color === "blue"
+                      ? "bg-blue-500 hover:bg-blue-600"
+                      : "bg-amber-500 hover:bg-amber-600"
+                  }`}>
+                  {loading
+                    ? "Mengecek stok & menyimpan..."
+                    : editBatch
+                      ? "Simpan Perubahan"
+                      : form.brand ? `Simpan Batch ${BRANDS_CONFIG[form.brand].label}` : "Simpan Batch"}
                 </button>
               </form>
             </div>
