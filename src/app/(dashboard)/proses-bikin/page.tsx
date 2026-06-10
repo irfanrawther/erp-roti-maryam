@@ -191,10 +191,29 @@ export default function ProsesBikinPage() {
     setTimeout(() => setForm(brand.key, { suksesKey: null }), 2000);
   }
 
+  // ── Restore stok: insert "masuk" untuk setiap item sebelum dihapus ──
+  async function restoreStok(items: RiwayatItem[], tanggal: string, note: string) {
+    if (!user || items.length === 0) return;
+    for (const item of items) {
+      await supabase.from("penerimaan_bahan_baku").insert({
+        bahan_baku_id: item.bahan_baku_id,
+        jumlah:        item.jumlah,
+        satuan:        item.satuan,
+        tipe:          "masuk",
+        tanggal,
+        keterangan:    note,
+        created_by:    user.id,
+      });
+    }
+  }
+
   // ── Delete ─────────────────────────────────────────────────
   async function handleDelete(grp: RiwayatGroup) {
     if (!confirm(`Hapus proses bikin ${grp.varianLabel} (${formatTanggal(grp.tanggal)})?\nStok bahan akan dikembalikan.`)) return;
     setDeleting(grp.batchId);
+    // 1. Restore stok dulu via INSERT masuk (trigger DB butuh INSERT, bukan DELETE)
+    await restoreStok(grp.items, grp.tanggal, `Restore hapus proses bikin ${grp.varianLabel}`);
+    // 2. Baru hapus record keluar-nya
     const ids = grp.items.map(it => it.id);
     if (ids.length) await supabase.from("penerimaan_bahan_baku").delete().in("id", ids);
     await fetchAll();
@@ -219,7 +238,13 @@ export default function ProsesBikinPage() {
 
     setEditSaving(true);
 
-    // Hapus record lama (stok dikembalikan)
+    // 1. Restore stok dari record lama (INSERT masuk dulu — trigger DB hanya fire saat INSERT)
+    await restoreStok(
+      editModal.grp.items,
+      editModal.grp.tanggal,
+      `Restore edit proses bikin ${editModal.varian.label}`,
+    );
+    // 2. Hapus record lama
     const ids = editModal.grp.items.map(it => it.id);
     if (ids.length) await supabase.from("penerimaan_bahan_baku").delete().in("id", ids);
 
