@@ -564,6 +564,25 @@ function MiniCalendar({ value, onChange, minDate, maxDate }: {
   );
 }
 
+// ── Stok awal referensi (nilai reset terakhir migration 020) ──
+const STOK_AWAL: Record<string, number> = {
+  "Terigu":              500,
+  "Minyak":              500,
+  "Garam":                25,
+  "Gula":                 50,
+  "Air":                 190,
+  "Margarine Menara":    100,
+  "Mesis Innova":        100,
+  "Keju Calf":            32,
+  "Margarine Blue Band":  50,
+  "Mesis Tulip":          50,
+  "Keju Kraft Martabak":  16,
+  "Baking Powder":         1,
+  "Telur":               225,
+  "Tepung Gandum":         5,
+  "Butter Hollmann":       1,
+};
+
 // ── BahanCard ────────────────────────────────────────────────
 function BahanCard({ bahan, onSubmit }: {
   bahan: BahanBaku;
@@ -587,6 +606,10 @@ function BahanCard({ bahan, onSubmit }: {
     if (ok) closeForm();
   }
 
+  const stokAwal    = STOK_AWAL[bahan.nama] ?? null;
+  const pengurangan = stokAwal !== null ? stokAwal - bahan.stok_saat_ini : 0;
+  const adaPengurangan = stokAwal !== null && pengurangan > 0.0005; // threshold supaya 0.000 tidak tampil
+
   return (
     <div className={`rounded-xl border p-3 transition-all ${kritis ? "bg-red-50 border-red-200" : "border-gray-100"}`}>
       <div className="flex items-start justify-between">
@@ -596,8 +619,20 @@ function BahanCard({ bahan, onSubmit }: {
           {kritis && <p className="text-xs text-red-500 font-medium mt-0.5">⚠ Stok kritis!</p>}
         </div>
         <div className="text-right ml-3 shrink-0">
-          <p className={`font-bold text-xl leading-none ${kritis ? "text-red-600" : "text-gray-800"}`}>{formatAngka(bahan.stok_saat_ini)}</p>
-          <p className="text-xs text-gray-400">{bahan.satuan}</p>
+          {/* Stok real */}
+          <p className={`font-bold text-xl leading-none ${kritis ? "text-red-600" : "text-gray-800"}`}>
+            {formatAngka(bahan.stok_saat_ini)}
+            <span className="text-sm font-normal text-gray-400 ml-1">{bahan.satuan}</span>
+          </p>
+          {/* Pengurangan — hanya tampil jika ada pemakaian */}
+          {adaPengurangan && (
+            <p className="text-xs mt-0.5 flex items-center justify-end gap-0.5">
+              <span style={{ color: "#EF4444" }} className="font-bold text-sm">↓</span>
+              <span style={{ color: "#EF4444" }} className="font-semibold">
+                {formatAngka(pengurangan)} {bahan.satuan}
+              </span>
+            </p>
+          )}
         </div>
       </div>
 
