@@ -21,6 +21,30 @@ interface RiwayatPemakaian {
   batch_produksi: { tanggal_produksi: string; produk_sku: { nama_brand: string; varian: string }; };
   users: { nama: string };
 }
+interface ProsesBikinRow {
+  id: string; jumlah: number; satuan: string; keterangan: string; created_at: string;
+  bahan_baku: { nama: string };
+  users: { nama: string };
+}
+
+// Unified entry untuk Riwayat Pemakaian (dari kedua sumber)
+interface PemakaianEntry {
+  id: string;
+  sumber: "produksi" | "proses_bikin";
+  namaBahan: string;
+  jumlah: number;
+  satuan: string;
+  created_at: string;
+  label: string;       // e.g. "Cane Original" atau "Produksi Batch"
+  tanggal?: string;
+  namaUser: string;
+}
+
+// Label mapping untuk proses bikin brand+varian key
+const PROSES_BIKIN_LABEL: Record<string, Record<string, string>> = {
+  cane:   { original:"Cane Original", melted_choco:"Cane Melted Choco", grated_cheese:"Cane Grated Cheese", wholewheat:"Cane Whole Wheat" },
+  mehana: { original:"Mehana Original", cokelat:"Mehana Cokelat", keju:"Mehana Keju" },
+};
 
 const SATUAN_OPTIONS = ["Kg", "Liter", "Pcs"];
 const URUTAN_BAHAN = [
@@ -97,8 +121,9 @@ export default function BahanBakuPage() {
   const user = getUserSession();
 
   const [bahanList,        setBahanList]        = useState<BahanBaku[]>([]);
-  const [riwayat,          setRiwayat]          = useState<Riwayat[]>([]);
-  const [riwayatPemakaian, setRiwayatPemakaian] = useState<RiwayatPemakaian[]>([]);
+  const [riwayat,           setRiwayat]           = useState<Riwayat[]>([]);
+  const [riwayatPemakaian,  setRiwayatPemakaian]  = useState<RiwayatPemakaian[]>([]);
+  const [riwayatProsesBikin,setRiwayatProsesBikin] = useState<ProsesBikinRow[]>([]);
   const [activeTab,        setActiveTab]        = useState<ActiveTab>("stok");
   const [filterRiwayatBahan,   setFilterRiwayatBahan]   = useState("");
   const [filterPemakaianBahan, setFilterPemakaianBahan] = useState("");
@@ -127,24 +152,32 @@ export default function BahanBakuPage() {
   }, []);
 
   async function fetchData() {
-    const [bahanRes, riwayatRes, pemakaianRes] = await Promise.all([
+    const [bahanRes, riwayatRes, pemakaianRes, prosesBikinRes] = await Promise.all([
       supabase.from("bahan_baku").select("id,nama,satuan,stok_saat_ini,stok_minimum").eq("aktif", true),
+      // Riwayat Penerimaan/Pengurangan: exclude semua activity produksi
       supabase.from("penerimaan_bahan_baku")
         .select("id,tipe,jumlah,satuan,tanggal,created_at,keterangan,bahan_baku:bahan_baku_id(nama),users:created_by(nama)")
         .not("keterangan","like","Produksi batch%")
         .not("keterangan","like","Restore dari%")
         .not("keterangan","like","proses_bikin::%")
         .order("created_at", { ascending: false }).limit(500),
+      // Riwayat Pemakaian sumber 1: Produksi Adonan (penggunaan_bahan)
       supabase.from("penggunaan_bahan")
         .select(`id,jumlah_digunakan,satuan,created_at,
           bahan_baku:bahan_baku_id(nama),
           batch_produksi:batch_produksi_id(tanggal_produksi,produk_sku:produk_sku_id(nama_brand,varian)),
           users:created_by(nama)`)
         .order("created_at", { ascending: false }).limit(500),
+      // Riwayat Pemakaian sumber 2: Proses Bikin (penerimaan_bahan_baku tipe keluar proses_bikin)
+      supabase.from("penerimaan_bahan_baku")
+        .select("id,jumlah,satuan,keterangan,created_at,bahan_baku:bahan_baku_id(nama),users:created_by(nama)")
+        .like("keterangan","proses_bikin::%")
+        .order("created_at", { ascending: false }).limit(500),
     ]);
-    if (bahanRes.data)     setBahanList(sortBahan(bahanRes.data));
-    if (riwayatRes.data)   setRiwayat(riwayatRes.data as unknown as Riwayat[]);
-    if (pemakaianRes.data) setRiwayatPemakaian(pemakaianRes.data as unknown as RiwayatPemakaian[]);
+    if (bahanRes.data)       setBahanList(sortBahan(bahanRes.data));
+    if (riwayatRes.data)     setRiwayat(riwayatRes.data as unknown as Riwayat[]);
+    if (pemakaianRes.data)   setRiwayatPemakaian(pemakaianRes.data as unknown as RiwayatPemakaian[]);
+    if (prosesBikinRes.data) setRiwayatProsesBikin(prosesBikinRes.data as unknown as ProsesBikinRow[]);
   }
 
   async function submitTransaksi(bahanId: string, tipe: "masuk" | "keluar", jumlah: number, satuan: string): Promise<boolean> {
@@ -169,9 +202,50 @@ export default function BahanBakuPage() {
     inRange(r.created_at) &&
     (!filterRiwayatBahan || r.bahan_baku?.nama?.toLowerCase().includes(filterRiwayatBahan.toLowerCase()))
   );
-  const pemakaianFiltered = riwayatPemakaian.filter((r) =>
+
+  // ── Merge Produksi Adonan + Proses Bikin → unified PemakaianEntry ──
+  const allPemakaian: PemakaianEntry[] = [
+    // Sumber 1: Produksi Adonan (penggunaan_bahan)
+    ...riwayatPemakaian.map((r): PemakaianEntry => {
+      const sku    = r.batch_produksi?.produk_sku as { nama_brand: string; varian: string } | null;
+      const brand  = sku?.nama_brand ?? "";
+      const varian = sku?.varian ?? "";
+      return {
+        id:         `prod-${r.id}`,
+        sumber:     "produksi",
+        namaBahan:  r.bahan_baku?.nama ?? "?",
+        jumlah:     r.jumlah_digunakan,
+        satuan:     r.satuan,
+        created_at: r.created_at,
+        label:      [brand, varian].filter(Boolean).join(" ") || "Produksi Adonan",
+        tanggal:    r.batch_produksi?.tanggal_produksi,
+        namaUser:   r.users?.nama ?? "",
+      };
+    }),
+    // Sumber 2: Proses Bikin (penerimaan_bahan_baku proses_bikin::)
+    ...riwayatProsesBikin.map((r): PemakaianEntry => {
+      let label = "Proses Bikin";
+      try {
+        const json = JSON.parse(r.keterangan.replace("proses_bikin::", ""));
+        const brandLabels = PROSES_BIKIN_LABEL[json.brandKey] ?? {};
+        label = brandLabels[json.varianKey] ?? `Proses Bikin ${json.varianKey ?? ""}`;
+      } catch {}
+      return {
+        id:         `pb-${r.id}`,
+        sumber:     "proses_bikin",
+        namaBahan:  r.bahan_baku?.nama ?? "?",
+        jumlah:     r.jumlah,
+        satuan:     r.satuan,
+        created_at: r.created_at,
+        label,
+        namaUser:   r.users?.nama ?? "",
+      };
+    }),
+  ].sort((a, b) => b.created_at.localeCompare(a.created_at)); // terbaru di atas
+
+  const pemakaianFiltered = allPemakaian.filter((r) =>
     inRange(r.created_at) &&
-    (!filterPemakaianBahan || r.bahan_baku?.nama?.toLowerCase().includes(filterPemakaianBahan.toLowerCase()))
+    (!filterPemakaianBahan || r.namaBahan.toLowerCase().includes(filterPemakaianBahan.toLowerCase()))
   );
 
   function handlePreset(p: DatePreset) {
@@ -283,6 +357,38 @@ export default function BahanBakuPage() {
             onCustomStart={setCustomStart} onCustomEnd={setCustomEnd}
             rangeLabel={rangeLabel()}
           />
+          {/* Grand Total panel — gabungan Produksi + Proses Bikin */}
+          {pemakaianFiltered.length > 0 && (() => {
+            const totals: Record<string, { jumlah: number; satuan: string }> = {};
+            for (const r of pemakaianFiltered) {
+              if (!totals[r.namaBahan]) totals[r.namaBahan] = { jumlah: 0, satuan: r.satuan };
+              totals[r.namaBahan].jumlah += r.jumlah;
+            }
+            const prodCount = pemakaianFiltered.filter(r => r.sumber === "produksi").length;
+            const pbCount   = pemakaianFiltered.filter(r => r.sumber === "proses_bikin").length;
+            const sorted = Object.entries(totals).sort((a, b) => {
+              const ia = URUTAN_BAHAN.indexOf(a[0]), ib = URUTAN_BAHAN.indexOf(b[0]);
+              return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+            });
+            return (
+              <div className="bg-gray-900 rounded-xl p-3 space-y-1.5">
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-xs font-bold text-amber-400 uppercase tracking-wide">═ Grand Total Pemakaian</p>
+                  <div className="flex gap-2">
+                    {prodCount > 0 && <span className="text-[10px] bg-amber-900 text-amber-300 px-1.5 py-0.5 rounded-full">Produksi ×{prodCount}</span>}
+                    {pbCount   > 0 && <span className="text-[10px] bg-blue-900  text-blue-300  px-1.5 py-0.5 rounded-full">Proses Bikin ×{pbCount}</span>}
+                  </div>
+                </div>
+                {sorted.map(([nama, { jumlah, satuan }]) => (
+                  <div key={nama} className="flex items-center justify-between">
+                    <span className="text-xs text-gray-300">{nama}</span>
+                    <span className="text-xs font-bold text-white">{formatAngka(jumlah)} {satuan}</span>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
+
           <div className="card">
             <div className="flex items-center gap-2 mb-3">
               <label className="text-xs text-gray-500 shrink-0">Cari bahan:</label>
@@ -298,24 +404,27 @@ export default function BahanBakuPage() {
             <div className="space-y-2.5">
               {pemakaianFiltered.length === 0
                 ? <p className="text-gray-400 text-sm text-center py-4">Tidak ada data dalam rentang ini</p>
-                : pemakaianFiltered.map((r) => {
-                    const sku    = r.batch_produksi?.produk_sku as { nama_brand: string; varian: string } | null;
-                    const brand  = sku?.nama_brand ?? "—";
-                    const varian = sku?.varian ?? "";
-                    const tgl    = r.batch_produksi?.tanggal_produksi;
-                    return (
-                      <div key={r.id} className="border-b border-gray-50 pb-2.5">
+                : pemakaianFiltered.map((r) => (
+                    <div key={r.id} className="border-b border-gray-50 pb-2.5">
+                      <div className="flex items-start justify-between gap-2">
                         <p className="text-sm font-bold text-red-500">
-                          − {formatAngka(r.jumlah_digunakan)} {r.satuan} — {r.bahan_baku?.nama}
+                          − {formatAngka(r.jumlah)} {r.satuan} — {r.namaBahan}
                         </p>
-                        <p className="text-xs text-gray-600 mt-0.5">
-                          dari <span className="font-medium">{brand}{varian ? ` ${varian}` : ""}</span>
-                          {tgl ? `, ${formatTanggal(tgl)}` : ""}
-                        </p>
-                        <p className="text-xs text-gray-400">oleh {r.users?.nama} · {formatTanggalWaktu(r.created_at)}</p>
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0 ${
+                          r.sumber === "produksi"
+                            ? "bg-amber-50 text-amber-600"
+                            : "bg-blue-50 text-blue-600"
+                        }`}>
+                          {r.sumber === "produksi" ? "Produksi" : "Proses Bikin"}
+                        </span>
                       </div>
-                    );
-                  })}
+                      <p className="text-xs text-gray-600 mt-0.5">
+                        dari <span className="font-medium">{r.label}</span>
+                        {r.tanggal ? `, ${formatTanggal(r.tanggal)}` : ""}
+                      </p>
+                      <p className="text-xs text-gray-400">oleh {r.namaUser} · {formatTanggalWaktu(r.created_at)}</p>
+                    </div>
+                  ))}
             </div>
           </div>
         </div>
