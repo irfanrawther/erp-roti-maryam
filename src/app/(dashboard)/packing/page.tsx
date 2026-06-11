@@ -116,7 +116,7 @@ export default function PackingPage() {
     const next = nextStatus[batch.status];
     if (!next) return;
     const defaultJumlah =
-      batch.status === "adonan" ? String(batch.jumlah_pack_adonan ?? batch.jumlah_pack_rencana) :
+      batch.status === "adonan" ? String(batch.jumlah_pack_adonan ?? "") :  // kosong — user isi jumlah direndam
       batch.status === "bikin"  ? String(batch.jumlah_pack_adonan ?? batch.jumlah_pack_rencana) :
       batch.status === "packing"? String(batch.jumlah_pack_packing ?? batch.jumlah_pack_adonan ?? batch.jumlah_pack_rencana) :
                                    String(batch.jumlah_pack_freezer ?? batch.jumlah_pack_packing ?? batch.jumlah_pack_rencana);
@@ -139,6 +139,7 @@ export default function PackingPage() {
       catatan_reject: formUpdate.catatan_reject || null,
     };
 
+    if (batch.status === "adonan")  updateData.jumlah_pack_adonan  = jumlah; // jumlah direndam (Pcs)
     if (batch.status === "bikin")   updateData.jumlah_pack_packing = jumlah;
     if (batch.status === "packing") updateData.jumlah_pack_freezer = jumlah;
 
@@ -252,6 +253,12 @@ export default function PackingPage() {
                       <p className="text-gray-400">Adonan</p>
                       <p className="font-bold text-gray-700">{formatAngka(b.jumlah_pack_rencana)} kg</p>
                     </div>
+                    {b.jumlah_pack_adonan != null && b.status !== "adonan" && (
+                      <div className="text-center bg-orange-50 rounded px-3 py-2 min-w-[60px]">
+                        <p className="text-orange-400">Direndam</p>
+                        <p className="font-bold text-orange-700">{formatAngka(b.jumlah_pack_adonan)} pcs</p>
+                      </div>
+                    )}
                     {b.jumlah_pack_packing != null && (
                       <div className="text-center bg-blue-50 rounded px-3 py-2 min-w-[60px]">
                         <p className="text-blue-400">Packing</p>
@@ -367,48 +374,103 @@ export default function PackingPage() {
                 </p>
               </div>
 
-              {/* Input jumlah hanya untuk bikin→packing dan packing→freezer */}
-              {(updateModal.batch.status === "bikin" || updateModal.batch.status === "packing") && (
-                <div>
-                  <label className="label">
-                    {updateModal.batch.status === "bikin"
-                      ? "Jumlah Pack setelah Panggang & Packing"
-                      : "Jumlah Pack masuk Freezer"}
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    className="input"
-                    value={formUpdate.jumlah_pack}
-                    onChange={(e) => setFormUpdate({ ...formUpdate, jumlah_pack: e.target.value })}
-                  />
-                  <p className="text-xs text-gray-400 mt-1">
-                    Rencana: {formatAngka(updateModal.batch.jumlah_pack_rencana)} kg adonan
-                  </p>
-                </div>
+              {/* Adonan → Bikin: input jumlah direndam + catatan */}
+              {updateModal.batch.status === "adonan" && (
+                <>
+                  <div>
+                    <label className="label">Total Jumlah Direndam</label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        min="0"
+                        className="input flex-1 text-lg font-semibold"
+                        placeholder="0"
+                        value={formUpdate.jumlah_pack}
+                        onChange={(e) => setFormUpdate({ ...formUpdate, jumlah_pack: e.target.value })}
+                      />
+                      <span className="text-sm font-semibold text-gray-500 shrink-0">Pcs</span>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="label">Catatan <span className="text-gray-400 font-normal">(optional)</span></label>
+                    <textarea
+                      className="input resize-none"
+                      rows={2}
+                      placeholder="Catatan tambahan..."
+                      value={formUpdate.catatan_reject}
+                      onChange={(e) => setFormUpdate({ ...formUpdate, catatan_reject: e.target.value })}
+                    />
+                  </div>
+                </>
               )}
 
-              <div>
-                <label className="label">Jumlah Reject/Defect</label>
-                <input
-                  type="number"
-                  min="0"
-                  className="input"
-                  value={formUpdate.jumlah_reject}
-                  onChange={(e) => setFormUpdate({ ...formUpdate, jumlah_reject: e.target.value })}
-                />
-              </div>
+              {/* Bikin → Packing: jumlah pack */}
+              {updateModal.batch.status === "bikin" && (
+                <>
+                  <div>
+                    <label className="label">Jumlah Pack setelah Panggang & Packing</label>
+                    <input
+                      type="number"
+                      min="0"
+                      className="input"
+                      value={formUpdate.jumlah_pack}
+                      onChange={(e) => setFormUpdate({ ...formUpdate, jumlah_pack: e.target.value })}
+                    />
+                    <p className="text-xs text-gray-400 mt-1">Adonan: {formatAngka(updateModal.batch.jumlah_pack_rencana)} kg</p>
+                  </div>
+                  <div>
+                    <label className="label">Jumlah Reject/Defect</label>
+                    <input type="number" min="0" className="input" value={formUpdate.jumlah_reject}
+                      onChange={(e) => setFormUpdate({ ...formUpdate, jumlah_reject: e.target.value })} />
+                  </div>
+                  {parseInt(formUpdate.jumlah_reject) > 0 && (
+                    <div>
+                      <label className="label">Catatan Reject</label>
+                      <textarea className="input resize-none" rows={2} placeholder="Penyebab reject..."
+                        value={formUpdate.catatan_reject}
+                        onChange={(e) => setFormUpdate({ ...formUpdate, catatan_reject: e.target.value })} />
+                    </div>
+                  )}
+                </>
+              )}
 
-              {parseInt(formUpdate.jumlah_reject) > 0 && (
+              {/* Packing → Freezer: jumlah pack */}
+              {updateModal.batch.status === "packing" && (
+                <>
+                  <div>
+                    <label className="label">Jumlah Pack masuk Freezer</label>
+                    <input
+                      type="number"
+                      min="0"
+                      className="input"
+                      value={formUpdate.jumlah_pack}
+                      onChange={(e) => setFormUpdate({ ...formUpdate, jumlah_pack: e.target.value })}
+                    />
+                    <p className="text-xs text-gray-400 mt-1">Adonan: {formatAngka(updateModal.batch.jumlah_pack_rencana)} kg</p>
+                  </div>
+                  <div>
+                    <label className="label">Jumlah Reject/Defect</label>
+                    <input type="number" min="0" className="input" value={formUpdate.jumlah_reject}
+                      onChange={(e) => setFormUpdate({ ...formUpdate, jumlah_reject: e.target.value })} />
+                  </div>
+                  {parseInt(formUpdate.jumlah_reject) > 0 && (
+                    <div>
+                      <label className="label">Catatan Reject</label>
+                      <textarea className="input resize-none" rows={2} placeholder="Penyebab reject..."
+                        value={formUpdate.catatan_reject}
+                        onChange={(e) => setFormUpdate({ ...formUpdate, catatan_reject: e.target.value })} />
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* Freezer → Selesai: catatan saja */}
+              {updateModal.batch.status === "freezer" && (
                 <div>
-                  <label className="label">Catatan Reject</label>
-                  <textarea
-                    className="input resize-none"
-                    rows={2}
+                  <label className="label">Catatan <span className="text-gray-400 font-normal">(optional)</span></label>
+                  <textarea className="input resize-none" rows={2} placeholder="Catatan tambahan..."
                     value={formUpdate.catatan_reject}
-                    onChange={(e) => setFormUpdate({ ...formUpdate, catatan_reject: e.target.value })}
-                    placeholder="Penyebab reject..."
-                  />
+                    onChange={(e) => setFormUpdate({ ...formUpdate, catatan_reject: e.target.value })} />
                 </div>
               )}
 
