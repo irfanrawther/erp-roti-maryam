@@ -15,6 +15,7 @@ interface StokBahan {
 
 interface StokProduk {
   id: string;
+  brand: string;
   nama_brand: string;
   varian: string;
   isi_per_pack: number;
@@ -65,7 +66,7 @@ export default function DashboardPage() {
     setLoading(true);
     const [bahanRes, produkRes, batchRes, pengirimanRes] = await Promise.all([
       supabase.from("bahan_baku").select("id, nama, satuan, stok_saat_ini, stok_minimum").eq("aktif", true).order("nama"),
-      supabase.from("produk_sku").select("id, nama_brand, varian, isi_per_pack, kode_sku, stok_saat_ini").eq("aktif", true).order("brand").order("varian"),
+      supabase.from("produk_sku").select("id, brand, nama_brand, varian, isi_per_pack, kode_sku, stok_saat_ini").eq("aktif", true),
       supabase.from("batch_produksi").select("id, tanggal_produksi, shift, status, jumlah_pack_rencana, produk_sku:produk_sku_id(nama_brand, varian, isi_per_pack), users:created_by(nama)").neq("status", "selesai").order("created_at", { ascending: false }),
       supabase.from("pengiriman").select("id, jumlah_pack, produk_sku:produk_sku_id(nama_brand, varian)").eq("tanggal_keluar", today),
     ]);
@@ -74,7 +75,19 @@ export default function DashboardPage() {
       setAllBahan(bahanRes.data);
       setBahanKritis(bahanRes.data.filter((b) => b.stok_saat_ini <= b.stok_minimum));
     }
-    if (produkRes.data) setStokProduk(produkRes.data);
+    if (produkRes.data) {
+      const URUTAN: Record<string, number> = {
+        "Original": 1, "Melted Choco": 2, "Grated Cheese": 3, "Whole Wheat": 4,
+        "Cokelat": 2, "Keju": 3,
+      };
+      const BRAND_URUTAN: Record<string, number> = { "cane": 1, "mehana": 2 };
+      const sorted = [...produkRes.data].sort((a, b) => {
+        const brandDiff = (BRAND_URUTAN[a.brand as string] ?? 9) - (BRAND_URUTAN[b.brand as string] ?? 9);
+        if (brandDiff !== 0) return brandDiff;
+        return (URUTAN[a.varian] ?? 9) - (URUTAN[b.varian] ?? 9);
+      });
+      setStokProduk(sorted);
+    }
     if (batchRes.data) setBatchBerjalan(batchRes.data as unknown as BatchBerjalan[]);
     if (pengirimanRes.data) setPengirimanHariIni(pengirimanRes.data as unknown as PengirimanHariIni[]);
     setLoading(false);
