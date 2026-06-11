@@ -386,13 +386,23 @@ export default function PackingPage() {
               {updateModal.batch.status === "adonan" && (() => {
                 const skuU = updateModal.batch.produk_sku as { nama_brand: string; varian: string };
                 const pcsKg = PCS_PER_KG[skuU?.nama_brand]?.[skuU?.varian] ?? 0;
-                const standar = Math.round(updateModal.batch.jumlah_pack_rencana * pcsKg);
+                const kg = updateModal.batch.jumlah_pack_rencana;
+                const standar = Math.round(kg * pcsKg);
                 return (
                   <>
+                    {/* Info adonan dari Produksi Adonan */}
+                    <div className="bg-gray-50 rounded-lg px-3 py-2.5 space-y-1">
+                      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Adonan</p>
+                      <p className="text-base font-bold text-gray-800">{formatAngka(kg)} kg</p>
+                      <p className="text-xs text-gray-400">data dari Produksi Adonan</p>
+                    </div>
                     {standar > 0 && (
-                      <div className="flex items-center justify-between px-3 py-2 bg-amber-50 rounded-lg">
-                        <span className="text-xs text-amber-700 font-medium">Standar</span>
-                        <span className="text-sm font-bold text-amber-700">{formatAngka(standar)} pcs</span>
+                      <div className="bg-amber-50 rounded-lg px-3 py-2.5 space-y-0.5">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-semibold text-amber-700 uppercase tracking-wide">Standar</span>
+                          <span className="text-base font-bold text-amber-700">{formatAngka(standar)} pcs</span>
+                        </div>
+                        <p className="text-xs text-amber-500">{pcsKg} pcs/kg × {formatAngka(kg)} kg</p>
                       </div>
                     )}
                     <div>
