@@ -30,7 +30,7 @@ type Stage = typeof STAGES[number];
 
 const statusLabel: Record<string, string> = {
   adonan:  "Adonan",
-  bikin:   "Bikin",
+  bikin:   "Rendam",
   packing: "Panggang & Packing",
   freezer: "Freezer",
   selesai: "Selesai",
@@ -49,7 +49,7 @@ const nextStatus: Record<string, string> = {
   freezer: "selesai",
 };
 const nextLabel: Record<string, string> = {
-  adonan:  "Pindah ke Bikin",
+  adonan:  "Pindah ke Rendam",
   bikin:   "Pindah ke Panggang & Packing",
   packing: "Pindah ke Freezer",
   freezer: "Selesai",
@@ -61,7 +61,7 @@ const prevStatus: Record<string, string> = {
 };
 const prevLabel: Record<string, string> = {
   bikin:   "Kembali ke Adonan",
-  packing: "Kembali ke Bikin",
+  packing: "Kembali ke Rendam",
   freezer: "Kembali ke Panggang & Packing",
 };
 
@@ -72,7 +72,7 @@ const PCS_PER_KG: Record<string, Record<string, number>> = {
 
 const stageIcon: Record<string, string> = {
   adonan:  "🥣",
-  bikin:   "🍳",
+  bikin:   "💧",
   packing: "📦",
   freezer: "❄️",
 };
