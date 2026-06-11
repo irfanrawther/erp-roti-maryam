@@ -124,7 +124,7 @@ export default function PackingPage() {
     const pcsPerKg = PCS_PER_KG[sku?.nama_brand]?.[sku?.varian] ?? 0;
     const standarPcs = Math.round(batch.jumlah_pack_rencana * pcsPerKg);
     const defaultJumlah =
-      batch.status === "adonan" ? String(batch.jumlah_pack_adonan ?? (standarPcs > 0 ? standarPcs : "")) :
+      batch.status === "adonan" ? "" :
       batch.status === "bikin"  ? String(batch.jumlah_pack_adonan ?? batch.jumlah_pack_rencana) :
       batch.status === "packing"? String(batch.jumlah_pack_packing ?? batch.jumlah_pack_adonan ?? batch.jumlah_pack_rencana) :
                                    String(batch.jumlah_pack_freezer ?? batch.jumlah_pack_packing ?? batch.jumlah_pack_rencana);
