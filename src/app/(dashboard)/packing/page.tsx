@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { getUserSession } from "@/lib/auth";
 import { formatAngka, formatTanggal, formatTanggalWaktu } from "@/lib/utils";
-import { Snowflake, ChevronRight, X, CheckCircle } from "lucide-react";
+import { Snowflake, ChevronRight, ChevronLeft, X, CheckCircle } from "lucide-react";
 
 interface Batch {
   id: string;
@@ -54,6 +54,16 @@ const nextLabel: Record<string, string> = {
   packing: "Pindah ke Freezer",
   freezer: "Selesai",
 };
+const prevStatus: Record<string, string> = {
+  bikin:   "adonan",
+  packing: "bikin",
+  freezer: "packing",
+};
+const prevLabel: Record<string, string> = {
+  bikin:   "Kembali ke Adonan",
+  packing: "Kembali ke Bikin",
+  freezer: "Kembali ke Panggang & Packing",
+};
 
 const stageIcon: Record<string, string> = {
   adonan:  "🥣",
@@ -66,6 +76,10 @@ interface UpdateModal {
   batch: Batch;
   nextSt: string;
 }
+interface UndoModal {
+  batch: Batch;
+  prevSt: string;
+}
 
 export default function PackingPage() {
   const user = getUserSession();
@@ -73,6 +87,7 @@ export default function PackingPage() {
   const [activeTab,   setActiveTab]   = useState<Stage>("adonan");
   const [loading,     setLoading]     = useState(false);
   const [updateModal, setUpdateModal] = useState<UpdateModal | null>(null);
+  const [undoModal,   setUndoModal]   = useState<UndoModal | null>(null);
   const [formUpdate,  setFormUpdate]  = useState({ jumlah_pack: "", jumlah_reject: "0", catatan_reject: "" });
 
   useEffect(() => {
@@ -130,6 +145,25 @@ export default function PackingPage() {
     await supabase.from("batch_produksi").update(updateData).eq("id", batch.id);
     setLoading(false);
     setUpdateModal(null);
+    fetchData();
+  }
+
+  async function handleUndo() {
+    if (!user || !undoModal) return;
+    setLoading(true);
+    const { batch, prevSt } = undoModal;
+    // Clear field yang terkait dengan stage yang ditinggalkan
+    const clearData: Record<string, unknown> = {
+      status: prevSt,
+      updated_by: user.id,
+      status_updated_at: new Date().toISOString(),
+    };
+    if (batch.status === "packing") clearData.jumlah_pack_packing = null;
+    if (batch.status === "freezer") clearData.jumlah_pack_freezer = null;
+
+    await supabase.from("batch_produksi").update(clearData).eq("id", batch.id);
+    setLoading(false);
+    setUndoModal(null);
     fetchData();
   }
 
@@ -238,14 +272,25 @@ export default function PackingPage() {
                     )}
                   </div>
 
-                  {nextStatus[b.status] && (
-                    <button
-                      onClick={() => openUpdateModal(b)}
-                      className="btn-primary w-full text-sm py-2"
-                    >
-                      {nextLabel[b.status]}
-                    </button>
-                  )}
+                  <div className={`flex gap-2 ${prevStatus[b.status] ? "flex-col sm:flex-row" : ""}`}>
+                    {nextStatus[b.status] && (
+                      <button
+                        onClick={() => openUpdateModal(b)}
+                        className="btn-primary flex-1 text-sm py-2"
+                      >
+                        {nextLabel[b.status]}
+                      </button>
+                    )}
+                    {prevStatus[b.status] && (
+                      <button
+                        onClick={() => setUndoModal({ batch: b, prevSt: prevStatus[b.status] })}
+                        className="flex items-center justify-center gap-1.5 flex-1 text-sm py-2 rounded-xl border-2 border-red-200 text-red-600 hover:bg-red-50 transition-colors font-medium"
+                      >
+                        <ChevronLeft size={15} />
+                        {prevLabel[b.status]}
+                      </button>
+                    )}
+                  </div>
                 </div>
               );
             })}
@@ -257,6 +302,47 @@ export default function PackingPage() {
         <div className="card text-center py-8">
           <Snowflake size={32} className="text-gray-300 mx-auto mb-2" />
           <p className="text-gray-400">Tidak ada batch yang sedang berjalan</p>
+        </div>
+      )}
+
+      {/* Undo Modal */}
+      {undoModal && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-4">
+          <div className="bg-white rounded-2xl w-full max-w-sm">
+            <div className="flex items-center justify-between p-4 border-b">
+              <h2 className="font-bold text-gray-800">Kembalikan ke Stage Sebelumnya</h2>
+              <button onClick={() => setUndoModal(null)} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
+            </div>
+            <div className="p-4 space-y-4">
+              <div className="bg-red-50 border border-red-100 rounded-xl p-3">
+                <p className="font-medium text-gray-800 text-sm">
+                  {(undoModal.batch.produk_sku as { nama_brand: string; varian: string })?.nama_brand} —{" "}
+                  {(undoModal.batch.produk_sku as { nama_brand: string; varian: string })?.varian}
+                </p>
+                <p className="text-sm text-gray-600 mt-1">
+                  <span className={statusClass[undoModal.batch.status]}>{statusLabel[undoModal.batch.status]}</span>
+                  {" → "}
+                  <span className={statusClass[undoModal.prevSt]}>{statusLabel[undoModal.prevSt]}</span>
+                </p>
+              </div>
+              <p className="text-sm text-gray-600">
+                Item akan dipindahkan kembali ke stage <strong>{statusLabel[undoModal.prevSt]}</strong>.
+                {undoModal.batch.status === "packing" && " Data jumlah pack packing akan dihapus."}
+                {undoModal.batch.status === "freezer" && " Data jumlah pack freezer akan dihapus."}
+              </p>
+              <div className="flex gap-2">
+                <button type="button" onClick={() => setUndoModal(null)} className="btn-secondary flex-1">Batal</button>
+                <button
+                  onClick={handleUndo}
+                  disabled={loading}
+                  className="flex-1 py-2.5 rounded-xl text-sm font-semibold text-white bg-red-500 hover:bg-red-600 transition-colors disabled:opacity-50 flex items-center justify-center gap-1.5"
+                >
+                  <ChevronLeft size={15} />
+                  {loading ? "Memproses..." : `Kembali ke ${statusLabel[undoModal.prevSt]}`}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
