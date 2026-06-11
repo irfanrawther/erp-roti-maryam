@@ -65,6 +65,11 @@ const prevLabel: Record<string, string> = {
   freezer: "Kembali ke Panggang & Packing",
 };
 
+const PCS_PER_KG: Record<string, Record<string, number>> = {
+  "Cane RawtheR":      { "Original": 20, "Melted Choco": 25, "Grated Cheese": 25, "Whole Wheat": 20 },
+  "Mehana Boga Utama": { "Original": 45, "Cokelat": 45, "Keju": 45 },
+};
+
 const stageIcon: Record<string, string> = {
   adonan:  "🥣",
   bikin:   "🍳",
@@ -115,8 +120,11 @@ export default function PackingPage() {
   function openUpdateModal(batch: Batch) {
     const next = nextStatus[batch.status];
     if (!next) return;
+    const sku = batch.produk_sku as { nama_brand: string; varian: string };
+    const pcsPerKg = PCS_PER_KG[sku?.nama_brand]?.[sku?.varian] ?? 0;
+    const standarPcs = Math.round(batch.jumlah_pack_rencana * pcsPerKg);
     const defaultJumlah =
-      batch.status === "adonan" ? String(batch.jumlah_pack_adonan ?? "") :  // kosong — user isi jumlah direndam
+      batch.status === "adonan" ? String(batch.jumlah_pack_adonan ?? (standarPcs > 0 ? standarPcs : "")) :
       batch.status === "bikin"  ? String(batch.jumlah_pack_adonan ?? batch.jumlah_pack_rencana) :
       batch.status === "packing"? String(batch.jumlah_pack_packing ?? batch.jumlah_pack_adonan ?? batch.jumlah_pack_rencana) :
                                    String(batch.jumlah_pack_freezer ?? batch.jumlah_pack_packing ?? batch.jumlah_pack_rencana);
@@ -375,34 +383,45 @@ export default function PackingPage() {
               </div>
 
               {/* Adonan → Bikin: input jumlah direndam + catatan */}
-              {updateModal.batch.status === "adonan" && (
-                <>
-                  <div>
-                    <label className="label">Total Jumlah Direndam</label>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="number"
-                        min="0"
-                        className="input flex-1 text-lg font-semibold"
-                        placeholder="0"
-                        value={formUpdate.jumlah_pack}
-                        onChange={(e) => setFormUpdate({ ...formUpdate, jumlah_pack: e.target.value })}
-                      />
-                      <span className="text-sm font-semibold text-gray-500 shrink-0">Pcs</span>
+              {updateModal.batch.status === "adonan" && (() => {
+                const skuU = updateModal.batch.produk_sku as { nama_brand: string; varian: string };
+                const pcsKg = PCS_PER_KG[skuU?.nama_brand]?.[skuU?.varian] ?? 0;
+                const standar = Math.round(updateModal.batch.jumlah_pack_rencana * pcsKg);
+                return (
+                  <>
+                    {standar > 0 && (
+                      <div className="flex items-center justify-between px-3 py-2 bg-amber-50 rounded-lg">
+                        <span className="text-xs text-amber-700 font-medium">Standar</span>
+                        <span className="text-sm font-bold text-amber-700">{formatAngka(standar)} pcs</span>
+                      </div>
+                    )}
+                    <div>
+                      <label className="label">Total Jumlah Direndam (Actual)</label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="number"
+                          min="0"
+                          className="input flex-1 text-lg font-semibold"
+                          placeholder="0"
+                          value={formUpdate.jumlah_pack}
+                          onChange={(e) => setFormUpdate({ ...formUpdate, jumlah_pack: e.target.value })}
+                        />
+                        <span className="text-sm font-semibold text-gray-500 shrink-0">Pcs</span>
+                      </div>
                     </div>
-                  </div>
-                  <div>
-                    <label className="label">Catatan <span className="text-gray-400 font-normal">(optional)</span></label>
-                    <textarea
-                      className="input resize-none"
-                      rows={2}
-                      placeholder="Catatan tambahan..."
-                      value={formUpdate.catatan_reject}
-                      onChange={(e) => setFormUpdate({ ...formUpdate, catatan_reject: e.target.value })}
-                    />
-                  </div>
-                </>
-              )}
+                    <div>
+                      <label className="label">Catatan <span className="text-gray-400 font-normal">(optional)</span></label>
+                      <textarea
+                        className="input resize-none"
+                        rows={2}
+                        placeholder="Catatan tambahan..."
+                        value={formUpdate.catatan_reject}
+                        onChange={(e) => setFormUpdate({ ...formUpdate, catatan_reject: e.target.value })}
+                      />
+                    </div>
+                  </>
+                );
+              })()}
 
               {/* Bikin → Packing: jumlah pack */}
               {updateModal.batch.status === "bikin" && (
@@ -416,7 +435,6 @@ export default function PackingPage() {
                       value={formUpdate.jumlah_pack}
                       onChange={(e) => setFormUpdate({ ...formUpdate, jumlah_pack: e.target.value })}
                     />
-                    <p className="text-xs text-gray-400 mt-1">Adonan: {formatAngka(updateModal.batch.jumlah_pack_rencana)} kg</p>
                   </div>
                   <div>
                     <label className="label">Jumlah Reject/Defect</label>
@@ -446,7 +464,6 @@ export default function PackingPage() {
                       value={formUpdate.jumlah_pack}
                       onChange={(e) => setFormUpdate({ ...formUpdate, jumlah_pack: e.target.value })}
                     />
-                    <p className="text-xs text-gray-400 mt-1">Adonan: {formatAngka(updateModal.batch.jumlah_pack_rencana)} kg</p>
                   </div>
                   <div>
                     <label className="label">Jumlah Reject/Defect</label>
