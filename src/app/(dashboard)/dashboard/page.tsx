@@ -84,6 +84,17 @@ export default function DashboardPage() {
   const statusLabels: Record<string, string> = { adonan: "Adonan", packing: "Packing", freezer: "Freezer", selesai: "Selesai" };
   const statusClass: Record<string, string> = { adonan: "badge-status-adonan", packing: "badge-status-packing", freezer: "badge-status-freezer", selesai: "badge-status-selesai" };
 
+  // pcs per kg adonan — sesuai BRANDS config di proses-bikin
+  const PCS_PER_KG: Record<string, Record<string, number>> = {
+    "Cane RawtheR":      { "Original": 20, "Melted Choco": 25, "Grated Cheese": 25, "Whole Wheat": 20 },
+    "Mehana Boga Utama": { "Original": 45, "Cokelat": 45, "Keju": 45 },
+  };
+  function hitungTotalPcs(b: BatchBerjalan): number {
+    const sku = b.produk_sku as { nama_brand: string; varian: string };
+    const pcsPerKg = PCS_PER_KG[sku?.nama_brand]?.[sku?.varian] ?? 0;
+    return Math.round(b.jumlah_pack_rencana * pcsPerKg);
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -166,20 +177,29 @@ export default function DashboardPage() {
             <p className="text-gray-400 text-sm text-center py-4">Tidak ada batch aktif</p>
           ) : (
             <div className="space-y-2">
-              {batchBerjalan.map((b) => (
-                <div key={b.id} className="flex items-start justify-between p-3 bg-gray-50 rounded-lg">
-                  <div>
-                    <p className="font-medium text-sm text-gray-800">
-                      {(b.produk_sku as { nama_brand: string; varian: string })?.nama_brand} - {(b.produk_sku as { nama_brand: string; varian: string })?.varian}
-                    </p>
-                    <p className="text-xs text-gray-500">
-                      {b.jumlah_pack_rencana} pack • Shift {b.shift}
-                    </p>
-                    <p className="text-xs text-gray-400">{formatTanggal(b.tanggal_produksi)}</p>
+              {batchBerjalan.map((b) => {
+                const sku      = b.produk_sku as { nama_brand: string; varian: string };
+                const namaUser = (b.users as { nama: string })?.nama ?? "—";
+                const totalPcs = hitungTotalPcs(b);
+                return (
+                  <div key={b.id} className="flex items-start justify-between p-3 bg-gray-50 rounded-lg">
+                    <div className="min-w-0 flex-1 pr-2">
+                      <p className="font-medium text-sm text-gray-800 leading-snug">
+                        {sku?.nama_brand} - {sku?.varian}
+                      </p>
+                      <p className="text-xs text-gray-600 font-semibold mt-0.5">
+                        {totalPcs > 0
+                          ? <><span className="text-amber-600">{formatAngka(totalPcs)} pcs</span> · {b.jumlah_pack_rencana} kg</>
+                          : <span>{b.jumlah_pack_rencana} kg</span>
+                        }
+                        <span className="text-gray-400 font-normal"> — {namaUser}</span>
+                      </p>
+                      <p className="text-xs text-gray-400 mt-0.5">{formatTanggal(b.tanggal_produksi)}</p>
+                    </div>
+                    <span className={statusClass[b.status]}>{statusLabels[b.status]}</span>
                   </div>
-                  <span className={statusClass[b.status]}>{statusLabels[b.status]}</span>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
