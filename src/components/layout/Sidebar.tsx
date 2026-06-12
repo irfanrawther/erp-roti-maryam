@@ -6,21 +6,17 @@ import { cn } from "@/lib/utils";
 import {
   LayoutDashboard,
   Package,
-  ChefHat,
   Snowflake,
   Truck,
   Users,
   BookOpen,
   LogOut,
   X,
-  CookingPot,
 } from "lucide-react";
 
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/bahan-baku", label: "Bahan Baku", icon: Package },
-  { href: "/produksi", label: "Produksi", icon: ChefHat },
-  { href: "/proses-bikin", label: "Proses Bikin", icon: CookingPot },
   { href: "/packing", label: "Packing & Freezer", icon: Snowflake },
   { href: "/pengiriman", label: "Pengiriman", icon: Truck },
 ];
