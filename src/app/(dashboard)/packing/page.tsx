@@ -24,45 +24,46 @@ interface Batch {
   updated_user: { nama: string } | null;
 }
 
-// Flow: adonan → bikin → packing → freezer → selesai
-const STAGES = ["adonan", "bikin", "packing", "freezer"] as const;
+// Flow: adonan → bikin → packing → selesai
+// Tab "packing" menampung status "packing" DAN "freezer" (backward compat)
+const STAGES = ["adonan", "bikin", "packing"] as const;
 type Stage = typeof STAGES[number];
 
 const statusLabel: Record<string, string> = {
   adonan:  "Adonan",
   bikin:   "Rendam",
-  packing: "Panggang & Packing",
-  freezer: "Freezer",
+  packing: "Packing & Freezer",
+  freezer: "Packing & Freezer",
   selesai: "Selesai",
 };
 const statusClass: Record<string, string> = {
   adonan:  "badge-status-adonan",
   bikin:   "badge-status-bikin",
   packing: "badge-status-packing",
-  freezer: "badge-status-freezer",
+  freezer: "badge-status-packing",
   selesai: "badge-status-selesai",
 };
 const nextStatus: Record<string, string> = {
   adonan:  "bikin",
   bikin:   "packing",
-  packing: "freezer",
+  packing: "selesai",
   freezer: "selesai",
 };
 const nextLabel: Record<string, string> = {
   adonan:  "Pindah ke Rendam",
-  bikin:   "Pindah ke Panggang & Packing",
-  packing: "Pindah ke Freezer",
+  bikin:   "Pindah ke Packing & Freezer",
+  packing: "Selesai",
   freezer: "Selesai",
 };
 const prevStatus: Record<string, string> = {
   bikin:   "adonan",
   packing: "bikin",
-  freezer: "packing",
+  freezer: "bikin",
 };
 const prevLabel: Record<string, string> = {
   bikin:   "Kembali ke Adonan",
   packing: "Kembali ke Rendam",
-  freezer: "Kembali ke Panggang & Packing",
+  freezer: "Kembali ke Rendam",
 };
 
 const PCS_PER_KG: Record<string, Record<string, number>> = {
@@ -73,8 +74,7 @@ const PCS_PER_KG: Record<string, Record<string, number>> = {
 const stageIcon: Record<string, string> = {
   adonan:  "🥣",
   bikin:   "💧",
-  packing: "📦",
-  freezer: "❄️",
+  packing: "📦❄️",
 };
 
 interface UpdateModal {
@@ -114,6 +114,7 @@ export default function PackingPage() {
   }
 
   function countFor(stage: Stage) {
+    if (stage === "packing") return batches.filter((b) => b.status === "packing" || b.status === "freezer").length;
     return batches.filter((b) => b.status === stage).length;
   }
 
@@ -176,7 +177,9 @@ export default function PackingPage() {
     fetchData();
   }
 
-  const batchInTab = batches.filter((b) => b.status === activeTab);
+  const batchInTab = activeTab === "packing"
+    ? batches.filter((b) => b.status === "packing" || b.status === "freezer")
+    : batches.filter((b) => b.status === activeTab);
 
   return (
     <div className="p-4 space-y-4 max-w-4xl mx-auto">
@@ -204,8 +207,7 @@ export default function PackingPage() {
                   activeTab === s
                     ? s === "adonan"  ? "bg-yellow-100 text-yellow-800 font-semibold" :
                       s === "bikin"   ? "bg-orange-100 text-orange-800 font-semibold" :
-                      s === "packing" ? "bg-blue-100 text-blue-800 font-semibold" :
-                                        "bg-indigo-100 text-indigo-800 font-semibold"
+                                        "bg-blue-100 text-blue-800 font-semibold"
                     : "hover:bg-gray-100 text-gray-400"
                 }`}
               >
@@ -437,7 +439,7 @@ export default function PackingPage() {
               {updateModal.batch.status === "bikin" && (
                 <>
                   <div>
-                    <label className="label">Jumlah Pack setelah Panggang & Packing</label>
+                    <label className="label">Jumlah Pack (Packing & Freezer)</label>
                     <input
                       type="number"
                       min="0"
@@ -466,7 +468,7 @@ export default function PackingPage() {
               {updateModal.batch.status === "packing" && (
                 <>
                   <div>
-                    <label className="label">Jumlah Pack masuk Freezer</label>
+                    <label className="label">Jumlah Pack (Packing & Freezer)</label>
                     <input
                       type="number"
                       min="0"
