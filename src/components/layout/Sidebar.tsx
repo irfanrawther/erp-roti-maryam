@@ -1,30 +1,18 @@
 "use client";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { getUserSession, clearUserSession, canAccessAdmin, getRoleLabel } from "@/lib/auth";
+import { getUserSession, clearUserSession, getRoleLabel, getScopeLabel } from "@/lib/auth";
+import { getCapabilities } from "@/lib/permissions";
 import { cn } from "@/lib/utils";
 import {
   LayoutDashboard,
-  Package,
-  Snowflake,
+  Workflow,
   Truck,
   Users,
   BookOpen,
   LogOut,
   X,
 } from "lucide-react";
-
-const navItems = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/bahan-baku", label: "Bahan Baku", icon: Package },
-  { href: "/packing", label: "Packing & Freezer", icon: Snowflake },
-  { href: "/pengiriman", label: "Pengiriman", icon: Truck },
-];
-
-const adminItems = [
-  { href: "/admin/users", label: "Kelola User", icon: Users },
-  { href: "/admin/resep", label: "Master Resep Adonan", icon: BookOpen },
-];
 
 interface SidebarProps {
   open: boolean;
@@ -35,6 +23,19 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
   const user = getUserSession();
+  const caps = getCapabilities(user);
+
+  // Nav items difilter berdasarkan capability
+  const navItems = [
+    { href: "/dashboard",  label: "Dashboard",   icon: LayoutDashboard, show: caps.dashboard },
+    { href: "/packing",    label: "Produksi",    icon: Workflow,        show: caps.bahanBaku || caps.produksiFlow },
+    { href: "/pengiriman", label: "Pengiriman",  icon: Truck,           show: caps.pengiriman },
+  ].filter((i) => i.show);
+
+  const adminItems = [
+    { href: "/admin/users", label: "Kelola User",         icon: Users,    show: caps.kelolaUser },
+    { href: "/admin/resep", label: "Master Resep Adonan", icon: BookOpen, show: caps.masterResep },
+  ].filter((i) => i.show);
 
   const handleLogout = () => {
     clearUserSession();
@@ -43,12 +44,8 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
 
   return (
     <>
-      {/* Overlay mobile */}
       {open && (
-        <div
-          className="fixed inset-0 bg-black/50 z-20 lg:hidden"
-          onClick={onClose}
-        />
+        <div className="fixed inset-0 bg-black/50 z-20 lg:hidden" onClick={onClose} />
       )}
 
       <aside
@@ -60,12 +57,9 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
       >
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-gray-100">
-          <div className="flex items-center gap-2">
-            <span className="text-2xl">🥐</span>
-            <div>
-              <p className="font-bold text-gray-800 text-sm">Roti Maryam</p>
-              <p className="text-xs text-gray-400">ERP System</p>
-            </div>
+          <div className="flex items-center gap-2.5">
+            <img src="/logo-cane.png" alt="Cane RawtheR" className="w-9 h-9 object-contain rounded-full" />
+            <p className="font-bold text-gray-800 text-sm leading-tight">Cane RawtheR</p>
           </div>
           <button onClick={onClose} className="lg:hidden text-gray-400 hover:text-gray-600">
             <X size={20} />
@@ -75,9 +69,16 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
         {/* User Info */}
         <div className="p-4 bg-amber-50 border-b border-amber-100">
           <p className="font-semibold text-gray-800 text-sm">{user?.nama}</p>
-          <span className="text-xs text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full">
-            {getRoleLabel(user?.role ?? "")}
-          </span>
+          <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+            <span className="text-xs text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full">
+              {getRoleLabel(user?.role ?? "")}
+            </span>
+            {getScopeLabel(user?.access_scope) && (
+              <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">
+                {getScopeLabel(user?.access_scope)}
+              </span>
+            )}
+          </div>
         </div>
 
         {/* Nav */}
@@ -93,9 +94,7 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
                   onClick={onClose}
                   className={cn(
                     "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors",
-                    active
-                      ? "bg-amber-500 text-white"
-                      : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+                    active ? "bg-amber-500 text-white" : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
                   )}
                 >
                   <Icon size={18} />
@@ -105,11 +104,9 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
             })}
           </div>
 
-          {user && canAccessAdmin(user.role) && (
+          {adminItems.length > 0 && (
             <div className="mt-4">
-              <p className="text-xs text-gray-400 font-medium px-3 mb-1 uppercase tracking-wider">
-                Admin
-              </p>
+              <p className="text-xs text-gray-400 font-medium px-3 mb-1 uppercase tracking-wider">Admin</p>
               <div className="space-y-1">
                 {adminItems.map((item) => {
                   const Icon = item.icon;
@@ -121,9 +118,7 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
                       onClick={onClose}
                       className={cn(
                         "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors",
-                        active
-                          ? "bg-amber-500 text-white"
-                          : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+                        active ? "bg-amber-500 text-white" : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
                       )}
                     >
                       <Icon size={18} />

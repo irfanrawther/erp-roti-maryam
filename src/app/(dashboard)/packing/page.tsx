@@ -1,12 +1,17 @@
 "use client";
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
-import { getUserSession } from "@/lib/auth";
+import { getUserSession, canAccessAdmin } from "@/lib/auth";
+import { getCapabilities, homeRoute } from "@/lib/permissions";
 import { formatAngka, formatTanggal, formatTanggalWaktu } from "@/lib/utils";
-import { ChevronRight, ChevronLeft, X, CheckCircle, History, Trash2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, X, CheckCircle, History, RotateCcw, AlertTriangle, Trash2 } from "lucide-react";
+import BahanBakuView from "@/components/BahanBakuView";
+import { RiwayatFilter, getRiwayatRange } from "@/components/RiwayatFilter";
+import type { RiwayatPreset } from "@/components/RiwayatFilter";
 
 // ── Types ─────────────────────────────────────────────────────
-interface ProdukSku { id: string; brand: string; varian: string; }
+interface ProdukSku { id: string; brand: string; varian: string; isi_per_pack: number; }
 interface MasterResep { bahan_baku_id: string; jumlah_per_pack: number; satuan: string; }
 interface PenggunaanBahan { id: string; bahan_baku_id: string; jumlah_digunakan: number; satuan: string; }
 
@@ -24,6 +29,25 @@ interface Batch {
   created_at: string;
   produk_sku: { nama_brand: string; varian: string; isi_per_pack: number };
   users: { nama: string };
+}
+
+interface PackingInput {
+  id: string;
+  batch_produksi_id: string | null;
+  produk_sku_id: string | null;
+  brand: string;
+  varian: string;
+  tanggal: string;
+  total_direndam: number;
+  carry_in: number;
+  total_available: number;
+  pack5: number;
+  pack10: number;
+  reject: number;
+  lebihan: number;
+  catatan: string | null;
+  created_at: string;
+  users?: { nama: string };
 }
 
 // ── Brand + varian config (gabungan resep adonan + rendam) ────
@@ -84,6 +108,14 @@ function localDateStr(d: Date): string {
 }
 function addDays(d: Date, n: number): Date { const r = new Date(d); r.setDate(r.getDate() + n); return r; }
 
+// Tanggal WIB (Asia/Jakarta) — selalu real-time, tidak hardcode
+function wibDateStr(offsetDays = 0): string {
+  const d = new Date();
+  if (offsetDays) d.setDate(d.getDate() + offsetDays);
+  // en-CA menghasilkan format YYYY-MM-DD
+  return d.toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" });
+}
+
 // ── Konversi satuan resep → satuan stok ───────────────────────
 function toBaseUnit(jumlah: number, satuan: string): { jumlah: number; satuan: string } {
   switch (satuan) {
@@ -94,62 +126,131 @@ function toBaseUnit(jumlah: number, satuan: string): { jumlah: number; satuan: s
   }
 }
 
-type RiwayatPreset = "hari_ini" | "kemarin" | "7hari" | "1bulan" | "custom";
-
 export default function PackingPage() {
   const user = getUserSession();
+  const router = useRouter();
+  const caps = getCapabilities(user);
   const today = localDateStr(new Date());
+
+  // Tab awal sesuai capability:
+  // - bisa Alur Produksi → topTab 'packing', sub-tab pertama yang diizinkan
+  // - hanya Bahan Baku   → topTab 'bahan'
+  const initTopTab: "bahan" | "packing" = caps.produksiFlow ? "packing" : "bahan";
+  const initActiveTab: Stage | "riwayat" | "reject" =
+    caps.adonan ? "adonan" : caps.rendam ? "bikin" : caps.packingFreezer ? "packing" : "adonan";
+
+  // Route guard — kalau tidak punya akses Produksi sama sekali, tendang ke home role
+  useEffect(() => {
+    if (user && !caps.bahanBaku && !caps.produksiFlow) {
+      router.replace(homeRoute(user));
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Tick setiap 60 detik → paksa re-render agar filter tanggal selalu real-time
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), 60_000);
+    return () => clearInterval(id);
+  }, []);
 
   const [skuList,     setSkuList]     = useState<ProdukSku[]>([]);
   const [bahanMap,    setBahanMap]    = useState<Record<string, string>>({});
   const [allBatches,  setAllBatches]  = useState<Batch[]>([]);
-  const [activeTab,   setActiveTab]   = useState<Stage | "riwayat">("adonan");
+  const [topTab,      setTopTab]      = useState<"bahan" | "packing">(initTopTab);
+  const [activeTab,   setActiveTab]   = useState<Stage | "riwayat" | "reject">(initActiveTab);
   const [busy,        setBusy]        = useState(false);
+
+  // Input Stok (Packing & Freezer)
+  const [packingInputs,  setPackingInputs]  = useState<PackingInput[]>([]);
+  const [inputStokModal, setInputStokModal] = useState<{ batch: Batch; carryIn: number; carryFromDate: string | null } | null>(null);
 
   // Adonan input form
   const [adonanForm,  setAdonanForm]  = useState<{ tanggal: string; cane: Record<string, string>; mehana: Record<string, string> }>({ tanggal: today, cane: {}, mehana: {} });
   const [submitting,  setSubmitting]  = useState<BrandKey | null>(null);
   const [stockError,  setStockError]  = useState<string[]>([]);
 
-  // Rendam modal
-  const [rendamModal, setRendamModal] = useState<{ batch: Batch } | null>(null);
-  const [rendamForm,  setRendamForm]  = useState({ pcs: "", catatan: "" });
+  // Packing & Freezer modal (input actual pcs direndam)
+  const [packingModal, setPackingModal] = useState<{ batch: Batch } | null>(null);
+  const [packingForm,  setPackingForm]  = useState({ pcs: "", catatan: "" });
+  const [toast,        setToast]        = useState<string | null>(null);
 
   // Riwayat filter
-  const [preset,      setPreset]      = useState<RiwayatPreset>("hari_ini");
-  const [customStart, setCustomStart] = useState(today);
-  const [customEnd,   setCustomEnd]   = useState(today);
+  const [preset,        setPreset]        = useState<RiwayatPreset>("hari_ini");
+  const [customStart,   setCustomStart]   = useState(() => wibDateStr());
+  const [customEnd,     setCustomEnd]     = useState(() => wibDateStr());
+  const [selectedBulan, setSelectedBulan] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  });
+
+  // Delete riwayat confirmation
+  const [deleteConfirm, setDeleteConfirm] = useState<Batch | null>(null);
 
   // ── Fetch ───────────────────────────────────────────────────
   useEffect(() => {
     fetchData();
     const ch = supabase.channel("packing-rt")
       .on("postgres_changes", { event: "*", schema: "public", table: "batch_produksi" }, fetchData)
+      .on("postgres_changes", { event: "*", schema: "public", table: "packing_input" }, fetchData)
       .subscribe();
     return () => { supabase.removeChannel(ch); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Re-fetch saat filter berubah agar data selalu fresh dari DB
+  useEffect(() => { fetchData(); }, [preset, customStart, customEnd, selectedBulan]); // eslint-disable-line react-hooks/exhaustive-deps
+
   async function fetchData() {
-    const [skuRes, bahanRes, batchRes] = await Promise.all([
-      supabase.from("produk_sku").select("id, brand, varian").eq("aktif", true),
+    const [skuRes, bahanRes, batchRes, packingRes] = await Promise.all([
+      supabase.from("produk_sku").select("id, brand, varian, isi_per_pack").eq("aktif", true),
       supabase.from("bahan_baku").select("id, nama").eq("aktif", true),
       supabase.from("batch_produksi")
         .select("id, produk_sku_id, tanggal_produksi, status, jumlah_pack_rencana, jumlah_pack_adonan, jumlah_pack_packing, jumlah_pack_freezer, catatan_reject, status_updated_at, created_at, produk_sku:produk_sku_id(nama_brand, varian, isi_per_pack), users:created_by(nama)")
         .order("created_at", { ascending: false }).limit(300),
+      supabase.from("packing_input")
+        .select("id, batch_produksi_id, produk_sku_id, brand, varian, tanggal, total_direndam, carry_in, total_available, pack5, pack10, reject, lebihan, catatan, created_at, users:created_by(nama)")
+        .order("created_at", { ascending: false }).limit(500),
     ]);
+    if (packingRes.data) setPackingInputs(packingRes.data as unknown as PackingInput[]);
     if (skuRes.data) setSkuList(skuRes.data as ProdukSku[]);
     if (bahanRes.data) {
       const m: Record<string, string> = {};
       for (const b of bahanRes.data as { id: string; nama: string }[]) m[b.nama] = b.id;
       setBahanMap(m);
     }
-    if (batchRes.data) setAllBatches(batchRes.data as unknown as Batch[]);
+    if (batchRes.data) {
+      const batches = batchRes.data as unknown as Batch[];
+      setAllBatches(batches);
+      // Restore adonan form values from DB so state persists across navigation
+      const adonanBatches = batches.filter((b) => b.status === "adonan");
+      if (adonanBatches.length > 0) {
+        const cane: Record<string, string> = {};
+        const mehana: Record<string, string> = {};
+        for (const b of adonanBatches) {
+          const bk = brandKeyFromNama((b.produk_sku as { nama_brand: string })?.nama_brand ?? "");
+          if (!bk) continue;
+          const v = BRANDS[bk].variants.find((x) => x.varianDB === (b.produk_sku as { varian: string })?.varian);
+          if (!v) continue;
+          if (bk === "cane") cane[v.key] = String(b.jumlah_pack_rencana);
+          else mehana[v.key] = String(b.jumlah_pack_rencana);
+        }
+        setAdonanForm((f) => ({
+          ...f,
+          ...(Object.keys(cane).length   > 0 ? { cane }   : {}),
+          ...(Object.keys(mehana).length > 0 ? { mehana } : {}),
+        }));
+      }
+    }
   }
 
   const active = allBatches.filter((b) => b.status !== "selesai");
   function countFor(stage: Stage) {
     if (stage === "packing") return active.filter((b) => b.status === "packing" || b.status === "freezer").length;
     return active.filter((b) => b.status === stage).length;
+  }
+  // Derive saved-adonan batches from DB — no React state needed
+  function adonanBatchesForBrand(bk: BrandKey): Batch[] {
+    return active.filter((b) => b.status === "adonan" && brandKeyFromNama((b.produk_sku as { nama_brand: string })?.nama_brand ?? "") === bk);
   }
 
   // ── Resep helpers (adonan) ──────────────────────────────────
@@ -209,18 +310,24 @@ export default function PackingPage() {
     return errors;
   }
 
-  // ── Rendam ingredient helpers (bahan tambahan) ──────────────
+  // ── Rendam ingredient helpers (bahan tambahan dari resep_bikin) ──
   async function applyRendam(batch: Batch, actualPcs: number) {
     if (!user) return;
     const cfg = findVarian(batch);
     if (!cfg) return;
-    const effectiveKg = actualPcs / cfg.pcs_per_kg;
+    const { data } = await supabase
+      .from("resep_bikin")
+      .select("bahan_baku_id, jumlah_per_kg")
+      .eq("produk_sku_id", batch.produk_sku_id);
+    const resep = (data as { bahan_baku_id: string; jumlah_per_kg: number }[] | null) ?? [];
+    if (!resep.length) return;
     const meta = JSON.stringify({ batchId: batch.id, brandKey: cfg.brandKey, brandLabel: cfg.brandLabel, varianKey: cfg.key, varianLabel: cfg.label, tanggal: batch.tanggal_produksi });
-    for (const b of cfg.rendam) {
-      const bahanId = bahanMap[b.nama];
-      if (!bahanId) continue;
+    for (const r of resep) {
+      // gr/kg ÷ standar pcs/kg × actual pcs → convert ke Kg
+      const grPerPcs = r.jumlah_per_kg / cfg.pcs_per_kg;
+      const jumlahKg = (grPerPcs * actualPcs) / 1000;
       await supabase.from("penerimaan_bahan_baku").insert({
-        bahan_baku_id: bahanId, jumlah: (b.gr * effectiveKg) / 1000, satuan: "Kg",
+        bahan_baku_id: r.bahan_baku_id, jumlah: jumlahKg, satuan: "Kg",
         tipe: "keluar", tanggal: batch.tanggal_produksi, keterangan: "proses_bikin::" + meta, created_by: user.id,
       });
     }
@@ -247,17 +354,18 @@ export default function PackingPage() {
   }
 
   // ── STAGE 1: submit adonan ──────────────────────────────────
-  async function submitAdonan(brandKey: BrandKey) {
-    if (!user) return;
+  async function doCreateAdonan(brandKey: BrandKey): Promise<Batch[]> {
+    if (!user) return [];
     const kgMap = brandKey === "cane" ? adonanForm.cane : adonanForm.mehana;
     const variants = BRANDS[brandKey].variants.filter((v) => parseFloat(kgMap[v.key] || "0") > 0);
-    if (!variants.length) return;
+    if (!variants.length) return [];
 
-    setSubmitting(brandKey);
     setStockError([]);
     const errors = await validateStock(brandKey, kgMap);
-    if (errors.length) { setStockError(errors); setSubmitting(null); return; }
+    if (errors.length) { setStockError(errors); return []; }
 
+    const cfg = BRANDS[brandKey];
+    const created: Batch[] = [];
     for (const v of variants) {
       const kg = parseFloat(kgMap[v.key]);
       const skuId = getSkuId(brandKey, v.varianDB);
@@ -266,10 +374,48 @@ export default function PackingPage() {
         produk_sku_id: skuId, tanggal_produksi: adonanForm.tanggal, shift: "pagi",
         jumlah_pack_rencana: kg, jumlah_pack_adonan: null, status: "adonan", created_by: user.id,
       }).select("id").single();
-      if (!error && data) await applyIngredients((data as { id: string }).id, skuId, kg, adonanForm.tanggal);
+      if (!error && data) {
+        const batchId = (data as { id: string }).id;
+        await applyIngredients(batchId, skuId, kg, adonanForm.tanggal);
+        created.push({
+          id: batchId, produk_sku_id: skuId, tanggal_produksi: adonanForm.tanggal,
+          status: "adonan", jumlah_pack_rencana: kg, jumlah_pack_adonan: null,
+          jumlah_pack_packing: null, jumlah_pack_freezer: null, catatan_reject: null,
+          status_updated_at: new Date().toISOString(), created_at: new Date().toISOString(),
+          produk_sku: { nama_brand: cfg.label, varian: v.varianDB, isi_per_pack: 0 },
+          users: { nama: user.nama },
+        });
+      }
     }
-    setAdonanForm((f) => ({ ...f, [brandKey]: {} }));
+    return created;
+  }
+
+  async function submitAdonan(brandKey: BrandKey) {
+    setSubmitting(brandKey);
+    await doCreateAdonan(brandKey);
     setSubmitting(null);
+    fetchData();
+  }
+
+  function showToast(msg: string) {
+    setToast(msg);
+    setTimeout(() => setToast(null), 2500);
+  }
+
+  // Adonan → Rendam: pindah langsung tanpa modal
+  async function moveBrandToRendam(bk: BrandKey) {
+    if (!user) return;
+    const batches = adonanBatchesForBrand(bk);
+    if (!batches.length) return;
+    setBusy(true);
+    for (const b of batches) {
+      await supabase.from("batch_produksi").update({
+        status: "bikin", updated_by: user.id, status_updated_at: new Date().toISOString(),
+      }).eq("id", b.id);
+    }
+    setAdonanForm((f) => ({ ...f, [bk]: {} }));
+    setBusy(false);
+    showToast("✓ Berhasil pindah ke Rendam");
     fetchData();
   }
 
@@ -282,77 +428,263 @@ export default function PackingPage() {
     fetchData();
   }
 
-  // ── STAGE 2: Rendam ─────────────────────────────────────────
-  function openRendam(batch: Batch) {
-    setRendamForm({ pcs: "", catatan: "" });
-    setRendamModal({ batch });
-  }
-  async function confirmRendam() {
-    if (!user || !rendamModal) return;
-    const actualPcs = parseInt(rendamForm.pcs);
-    if (!actualPcs || actualPcs <= 0) return;
+  async function resetAllAdonan() {
+    const adonanBatches = active.filter((b) => b.status === "adonan");
+    if (adonanBatches.length === 0) {
+      alert("Tidak ada batch Adonan yang perlu direset.");
+      return;
+    }
+    if (!confirm(`Reset ${adonanBatches.length} batch Adonan?\n\nSemua batch Adonan akan dihapus dan stok bahan baku akan dikembalikan.`)) return;
     setBusy(true);
-    const { batch } = rendamModal;
-    await applyRendam(batch, actualPcs);
-    await supabase.from("batch_produksi").update({
-      status: "bikin", jumlah_pack_adonan: actualPcs,
-      catatan_reject: rendamForm.catatan || null, updated_by: user.id, status_updated_at: new Date().toISOString(),
-    }).eq("id", batch.id);
-    setBusy(false);
-    setRendamModal(null);
-    fetchData();
-  }
-  async function undoRendam(batch: Batch) {
-    if (!confirm(`Kembalikan ${batch.produk_sku?.varian} ke Adonan?\nStok bahan rendam akan dikembalikan.`)) return;
-    setBusy(true);
-    await restoreRendam(batch);
-    await supabase.from("batch_produksi").update({ status: "adonan", jumlah_pack_adonan: null, updated_by: user!.id, status_updated_at: new Date().toISOString() }).eq("id", batch.id);
+    for (const b of adonanBatches) {
+      await restoreIngredients(b.id, b.tanggal_produksi);
+      await supabase.from("batch_produksi").delete().eq("id", b.id);
+    }
+    setAdonanForm((f) => ({ ...f, cane: {}, mehana: {} }));
     setBusy(false);
     fetchData();
   }
 
-  // ── STAGE 3: Packing & Freezer ──────────────────────────────
-  async function toPacking(batch: Batch) {
-    const pcs = batch.jumlah_pack_adonan ?? 0;
-    if (!confirm(`Pindahkan ${batch.produk_sku?.varian} ke Packing & Freezer?\n${formatAngka(pcs)} pcs akan ditambahkan ke stok produk jadi.`)) return;
+  async function undoSavedAdonan(bk: BrandKey) {
+    const batches = adonanBatchesForBrand(bk);
+    if (!batches.length) return;
+    if (!confirm("Yakin batalkan simpan adonan?\nStok bahan baku akan di-restore.")) return;
     setBusy(true);
-    await adjustProdukJadi(batch.produk_sku_id, pcs);
-    await supabase.from("batch_produksi").update({ status: "packing", jumlah_pack_packing: pcs, updated_by: user!.id, status_updated_at: new Date().toISOString() }).eq("id", batch.id);
+    for (const b of batches) {
+      await restoreIngredients(b.id, b.tanggal_produksi);
+      await supabase.from("batch_produksi").delete().eq("id", b.id);
+    }
     setBusy(false);
+    fetchData();
+  }
+
+  // ── STAGE 2: Rendam → Undo ke Adonan (status only) ──────────
+  async function undoRendam(batch: Batch) {
+    if (!confirm(`Kembalikan ${batch.produk_sku?.varian} ke Adonan?`)) return;
+    setBusy(true);
+    await supabase.from("batch_produksi").update({ status: "adonan", updated_by: user!.id, status_updated_at: new Date().toISOString() }).eq("id", batch.id);
+    setBusy(false);
+    fetchData();
+  }
+
+  // ── STAGE 2 → 3: Rendam → Packing & Freezer (modal input pcs) ──
+  function openPacking(batch: Batch) {
+    setPackingForm({ pcs: "", catatan: "" });
+    setPackingModal({ batch });
+  }
+  async function confirmPacking() {
+    if (!user || !packingModal) return;
+    const { batch } = packingModal;
+    const cfg = findVarian(batch);
+    const standar = cfg ? Math.round(batch.jumlah_pack_rencana * cfg.pcs_per_kg) : 0;
+    const lebihan = parseInt(packingForm.pcs) || 0;
+    const actualPcs = standar + lebihan;
+    if (actualPcs <= 0) return;
+    setBusy(true);
+    await applyRendam(batch, actualPcs);                    // kurangi bahan rendam (margarine dll) sesuai actual pcs
+    await supabase.from("batch_produksi").update({
+      status: "packing", jumlah_pack_adonan: actualPcs,
+      catatan_reject: packingForm.catatan || null, updated_by: user.id, status_updated_at: new Date().toISOString(),
+    }).eq("id", batch.id);
+    setBusy(false);
+    setPackingModal(null);
     fetchData();
   }
   async function undoPacking(batch: Batch) {
-    if (!confirm(`Kembalikan ${batch.produk_sku?.varian} ke Rendam?\nStok produk jadi akan dikurangi kembali.`)) return;
+    if (!confirm(`Kembalikan ${batch.produk_sku?.varian} ke Rendam?\nStok bahan rendam akan dikembalikan.`)) return;
     setBusy(true);
-    await adjustProdukJadi(batch.produk_sku_id, -(batch.jumlah_pack_adonan ?? 0));
-    await supabase.from("batch_produksi").update({ status: "bikin", jumlah_pack_packing: null, updated_by: user!.id, status_updated_at: new Date().toISOString() }).eq("id", batch.id);
+    await restoreRendam(batch);
+    await supabase.from("batch_produksi").update({ status: "bikin", jumlah_pack_adonan: null, updated_by: user!.id, status_updated_at: new Date().toISOString() }).eq("id", batch.id);
     setBusy(false);
     fetchData();
   }
-  async function markSelesai(batch: Batch) {
-    if (!confirm(`Tandai ${batch.produk_sku?.varian} sebagai Selesai?`)) return;
+  // ── STAGE 3 → Selesai: Input Stok (pack/reject/lebihan) ─────
+  // Carry-over lebihan: ambil lebihan dari input stok terakhir varian yang sama
+  function carryInFor(brand: string, varian: string): { pcs: number; date: string | null } {
+    const row = packingInputs.find((p) => p.brand === brand && p.varian === varian);
+    if (!row) return { pcs: 0, date: null };
+    // lebihan disimpan sebagai raw (dari form); carry-over besok = sisa setelah gabungkan
+    const totalLeb = (row.carry_in ?? 0) + row.lebihan;
+    const pcs = totalLeb >= 5 ? totalLeb % 5 : totalLeb;
+    return { pcs, date: row.tanggal };
+  }
+
+  function openInputStok(batch: Batch) {
+    const cfg = findVarian(batch);
+    if (!cfg) return;
+    const { pcs, date } = carryInFor(cfg.brandKey, cfg.varianDB);
+    setInputStokModal({ batch, carryIn: pcs, carryFromDate: date });
+  }
+
+  async function confirmInputStok(data: { pack5: number; pack5Final: number; pack10: number; reject: number; lebihan: number; catatan: string }) {
+    if (!user || !inputStokModal) return;
+    const { batch, carryIn } = inputStokModal;
+    const cfg = findVarian(batch);
+    if (!cfg) return;
+    const direndam = batch.jumlah_pack_adonan ?? 0;
+    // pack5 = original dari form (untuk rekap); pack5Final = termasuk gabungkan carry-over
+    const packPcs = data.pack5Final * 5 + data.pack10 * 10;
     setBusy(true);
-    await supabase.from("batch_produksi").update({ status: "selesai", updated_by: user!.id, status_updated_at: new Date().toISOString() }).eq("id", batch.id);
-    setBusy(false);
-    fetchData();
+    try {
+      // 1. simpan record: pack5 & lebihan = nilai ORIGINAL dari form (raw)
+      const { error: insertErr } = await supabase.from("packing_input").insert({
+        batch_produksi_id: batch.id, produk_sku_id: batch.produk_sku_id,
+        brand: cfg.brandKey, varian: cfg.varianDB, tanggal: batch.tanggal_produksi,
+        total_direndam: direndam, carry_in: carryIn, total_available: direndam,
+        pack5: data.pack5, pack10: data.pack10, reject: data.reject, lebihan: data.lebihan,
+        catatan: data.catatan || null, created_by: user.id,
+      });
+      if (insertErr) throw new Error(insertErr.message);
+
+      // 2. stok produk jadi pakai pack5Final (termasuk pack dari gabungkan carry-over)
+      if (cfg.brandKey === "mehana") {
+        const sku5  = skuList.find((s) => s.brand === "mehana" && s.varian === cfg.varianDB && s.isi_per_pack === 5);
+        const sku10 = skuList.find((s) => s.brand === "mehana" && s.varian === cfg.varianDB && s.isi_per_pack === 10);
+        if (data.pack5Final > 0 && sku5)  await adjustProdukJadi(sku5.id,  data.pack5Final);
+        if (data.pack10     > 0 && sku10) await adjustProdukJadi(sku10.id, data.pack10);
+      } else {
+        if (data.pack5Final > 0) await adjustProdukJadi(batch.produk_sku_id, data.pack5Final);
+      }
+
+      // 3. batch → selesai
+      const { error: updateErr } = await supabase.from("batch_produksi").update({
+        status: "selesai", jumlah_pack_packing: packPcs, jumlah_reject: data.reject,
+        catatan_reject: data.catatan || null, updated_by: user.id, status_updated_at: new Date().toISOString(),
+      }).eq("id", batch.id);
+      if (updateErr) throw new Error(updateErr.message);
+
+      setInputStokModal(null);
+      showToast("✓ Stok berhasil diinput");
+      fetchData();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Terjadi kesalahan";
+      showToast(`❌ Gagal: ${msg}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // ── Hapus riwayat + restore semua data terkait ──────────────
+  async function deleteRiwayat(batch: Batch) {
+    if (!user) return;
+    setBusy(true);
+    setDeleteConfirm(null);
+    try {
+      // 1. Selalu restore bahan baku adonan (penggunaan_bahan)
+      await restoreIngredients(batch.id, batch.tanggal_produksi);
+
+      // 2. Jika sudah melewati stage Rendam → restore bahan rendam
+      if (batch.status === "packing" || batch.status === "freezer" || batch.status === "selesai") {
+        await restoreRendam(batch);
+      }
+
+      // 3. Jika sudah selesai (Input Stok dikonfirmasi) → restore stok produk jadi
+      if (batch.status === "selesai") {
+        const cfg = findVarian(batch);
+        // Ambil data pack5/pack10/carry_in/lebihan dari packing_input
+        const { data: piRows } = await supabase
+          .from("packing_input")
+          .select("pack5, pack10, carry_in, lebihan, brand, varian")
+          .eq("batch_produksi_id", batch.id);
+        for (const pi of (piRows as { pack5: number; pack10: number; carry_in: number; lebihan: number; brand: string; varian: string }[] | null) ?? []) {
+          // pack5 simpan nilai original; pack5Final = + extra dari gabungkan carry-over
+          const totalLeb  = (pi.carry_in ?? 0) + pi.lebihan;
+          const extraPack = totalLeb >= 5 ? Math.floor(totalLeb / 5) : 0;
+          const pack5Final = pi.pack5 + extraPack;
+          if (pi.brand === "mehana") {
+            const sku5  = skuList.find((s) => s.brand === "mehana" && s.varian === pi.varian && s.isi_per_pack === 5);
+            const sku10 = skuList.find((s) => s.brand === "mehana" && s.varian === pi.varian && s.isi_per_pack === 10);
+            if (pack5Final > 0 && sku5)  await adjustProdukJadi(sku5.id,  -pack5Final);
+            if (pi.pack10 > 0 && sku10) await adjustProdukJadi(sku10.id, -pi.pack10);
+          } else {
+            if (pack5Final > 0) await adjustProdukJadi(batch.produk_sku_id, -pack5Final);
+          }
+        }
+        // Hapus packing_input rows terkait batch ini
+        await supabase.from("packing_input").delete().eq("batch_produksi_id", batch.id);
+        void cfg; // used above via batch.produk_sku_id
+      }
+
+      // 4. Hapus batch
+      await supabase.from("batch_produksi").delete().eq("id", batch.id);
+
+      showToast("✓ Riwayat berhasil dihapus & data di-restore");
+      fetchData();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Terjadi kesalahan";
+      showToast(`❌ Gagal hapus: ${msg}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // ── [TEMP] Reset semua alur produksi (untuk testing) ─────────
+  async function resetAllProduction() {
+    if (!user || !canAccessAdmin(user.role)) return;
+    if (!confirm(
+      "⚠️ RESET SEMUA ALUR PRODUKSI?\n\n" +
+      "Semua batch (Adonan, Rendam, Packing & Freezer, Selesai) akan dihapus.\n" +
+      "Stok bahan baku & produk jadi akan di-restore otomatis.\n\n" +
+      "Yakin lanjutkan?"
+    )) return;
+    setBusy(true);
+    try {
+      for (const batch of allBatches) {
+        // Restore stok produk jadi (hanya untuk batch selesai)
+        if (batch.status === "selesai") {
+          const { data: piRows } = await supabase
+            .from("packing_input")
+            .select("pack5, pack10, carry_in, lebihan, brand, varian")
+            .eq("batch_produksi_id", batch.id);
+          for (const pi of (piRows as { pack5: number; pack10: number; carry_in: number; lebihan: number; brand: string; varian: string }[] | null) ?? []) {
+            const totalLeb   = (pi.carry_in ?? 0) + pi.lebihan;
+            const extraPack  = totalLeb >= 5 ? Math.floor(totalLeb / 5) : 0;
+            const pack5Final = pi.pack5 + extraPack;
+            if (pi.brand === "mehana") {
+              const sku5  = skuList.find((s) => s.brand === "mehana" && s.varian === pi.varian && s.isi_per_pack === 5);
+              const sku10 = skuList.find((s) => s.brand === "mehana" && s.varian === pi.varian && s.isi_per_pack === 10);
+              if (pack5Final > 0 && sku5)  await adjustProdukJadi(sku5.id, -pack5Final);
+              if (pi.pack10  > 0 && sku10) await adjustProdukJadi(sku10.id, -pi.pack10);
+            } else {
+              if (pack5Final > 0) await adjustProdukJadi(batch.produk_sku_id, -pack5Final);
+            }
+          }
+        }
+        // Restore bahan rendam (untuk batch yg sudah melewati Rendam)
+        if (batch.status === "packing" || batch.status === "freezer" || batch.status === "selesai") {
+          await restoreRendam(batch);
+        }
+        // Restore bahan adonan (semua batch)
+        await restoreIngredients(batch.id, batch.tanggal_produksi);
+      }
+      // Hapus semua packing_input dan batch_produksi
+      await supabase.from("packing_input").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+      await supabase.from("batch_produksi").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+      setAdonanForm((f) => ({ ...f, cane: {}, mehana: {} }));
+      setActiveTab("adonan");
+      showToast("✓ Reset selesai — alur produksi kembali ke awal");
+      fetchData();
+    } catch (err) {
+      showToast(`❌ Gagal reset: ${err instanceof Error ? err.message : "error"}`);
+    } finally {
+      setBusy(false);
+    }
   }
 
   // ── Riwayat range ───────────────────────────────────────────
-  function riwayatRange(): { start: string; end: string } {
-    const now = new Date();
-    const f = localDateStr;
-    switch (preset) {
-      case "hari_ini": return { start: f(now), end: f(now) };
-      case "kemarin":  { const y = addDays(now, -1); return { start: f(y), end: f(y) }; }
-      case "7hari":    return { start: f(addDays(now, -6)), end: f(now) };
-      case "1bulan":   return { start: f(addDays(now, -29)), end: f(now) };
-      case "custom":   return { start: customStart || f(now), end: customEnd || f(now) };
-    }
-  }
-  const { start: rStart, end: rEnd } = riwayatRange();
+  // Semua tanggal dihitung dalam WIB (Asia/Jakarta), real-time dari new Date()
+  const { start: rStart, end: rEnd } = getRiwayatRange(preset, customStart, customEnd, selectedBulan);
+  // tanggal_produksi adalah DATE string (YYYY-MM-DD); perbandingan string ISO aman
   const riwayat = allBatches.filter((b) => b.tanggal_produksi >= rStart && b.tanggal_produksi <= rEnd);
 
   // ── Render ──────────────────────────────────────────────────
+  // Sub-tab (stage) yang boleh diakses sesuai capability
+  const stageAllowed = (s: Stage): boolean =>
+    s === "adonan" ? caps.adonan :
+    s === "bikin"  ? caps.rendam :
+    s === "packing" ? caps.packingFreezer : false;
+  const allowedStages = STAGES.filter(stageAllowed);
+
   const tabActiveColor = (s: Stage | "riwayat") =>
     s === "adonan" ? "bg-yellow-100 text-yellow-800" :
     s === "bikin"  ? "bg-orange-100 text-orange-800" :
@@ -362,19 +694,59 @@ export default function PackingPage() {
   return (
     <div className="p-4 space-y-4 max-w-3xl mx-auto">
 
+      {/* Toast notifikasi sukses */}
+      {toast && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[60] bg-green-600 text-white text-sm font-semibold px-4 py-2.5 rounded-xl shadow-lg pointer-events-none">
+          {toast}
+        </div>
+      )}
+
+      {/* Top-level tab switcher: Bahan Baku | Alur Produksi.
+          Hanya ditampilkan kalau user punya akses ke KEDUA bagian. */}
+      {caps.bahanBaku && caps.produksiFlow && (
+        <div className="flex bg-white rounded-xl border border-gray-100 p-1 gap-1">
+          <button onClick={() => setTopTab("bahan")}
+            className={`flex-1 py-2 rounded-lg text-xs font-medium transition-colors ${
+              topTab === "bahan" ? "bg-amber-500 text-white" : "text-gray-600 hover:bg-gray-50"
+            }`}>
+            Bahan Baku
+          </button>
+          <button onClick={() => setTopTab("packing")}
+            className={`flex-1 py-2 rounded-lg text-xs font-medium transition-colors ${
+              topTab === "packing" ? "bg-amber-500 text-white" : "text-gray-600 hover:bg-gray-50"
+            }`}>
+            Alur Produksi
+          </button>
+        </div>
+      )}
+
+      {topTab === "bahan" && caps.bahanBaku && <BahanBakuView />}
+
+      {topTab === "packing" && caps.produksiFlow && (<>
+
       {/* Header + counter */}
       <div className="flex items-center justify-between flex-wrap gap-2">
-        <h1 className="text-xl font-bold text-gray-800">Packing & Freezer</h1>
-        <div className="flex flex-wrap gap-1.5">
+        <h1 className="text-xl font-bold text-gray-800">Alur Produksi</h1>
+        <div className="flex items-center flex-wrap gap-1.5">
           {STAGES.map((s) => (
             <span key={s} className={statusClass[s]}>{statusLabel[s]}: {countFor(s)}</span>
           ))}
+          {user && canAccessAdmin(user.role) && (
+            <button
+              onClick={resetAllProduction}
+              disabled={busy || allBatches.length === 0}
+              className="flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-lg bg-red-100 text-red-600 hover:bg-red-200 disabled:opacity-40 transition-colors"
+              title="Reset semua alur produksi (temporary)"
+            >
+              <RotateCcw size={11} /> Reset
+            </button>
+          )}
         </div>
       </div>
 
-      {/* Tabs */}
+      {/* Tabs — difilter sesuai capability */}
       <div className="flex items-center gap-1 overflow-x-auto pb-1">
-        {STAGES.map((s, i) => (
+        {allowedStages.map((s, i) => (
           <div key={s} className="flex items-center gap-1 shrink-0">
             <button onClick={() => setActiveTab(s)}
               className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm transition-all ${activeTab === s ? tabActiveColor(s) + " font-semibold" : "text-gray-400 hover:bg-gray-100"}`}>
@@ -383,19 +755,36 @@ export default function PackingPage() {
                 <span className={`text-xs px-1.5 py-0.5 rounded-full font-bold ${activeTab === s ? "bg-white/70" : "bg-gray-200 text-gray-600"}`}>{countFor(s)}</span>
               )}
             </button>
-            {i < STAGES.length - 1 && <ChevronRight size={14} className="text-gray-300 shrink-0" />}
+            {i < allowedStages.length - 1 && <ChevronRight size={14} className="text-gray-300 shrink-0" />}
           </div>
         ))}
-        <div className="w-px h-6 bg-gray-200 mx-1 shrink-0" />
-        <button onClick={() => setActiveTab("riwayat")}
-          className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm shrink-0 transition-all ${activeTab === "riwayat" ? "bg-gray-800 text-white font-semibold" : "text-gray-400 hover:bg-gray-100"}`}>
-          <History size={14} /> Riwayat
-        </button>
+        {caps.produksiRiwayat && (
+          <>
+            <div className="w-px h-6 bg-gray-200 mx-1 shrink-0" />
+            <button onClick={() => setActiveTab("riwayat")}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm shrink-0 transition-all ${activeTab === "riwayat" ? "bg-gray-800 text-white font-semibold" : "text-gray-400 hover:bg-gray-100"}`}>
+              <History size={14} /> Riwayat
+            </button>
+            <button onClick={() => setActiveTab("reject")}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm shrink-0 transition-all ${activeTab === "reject" ? "bg-red-600 text-white font-semibold" : "text-gray-400 hover:bg-gray-100"}`}>
+              <AlertTriangle size={14} /> Laporan Reject
+            </button>
+          </>
+        )}
       </div>
 
       {/* ════════ TAB: ADONAN ════════ */}
       {activeTab === "adonan" && (
         <div className="space-y-4">
+          {/* Reset button (admin only) */}
+          {canAccessAdmin(user?.role ?? "") && countFor("adonan") > 0 && (
+            <button onClick={resetAllAdonan} disabled={busy}
+              className="flex items-center gap-2 text-xs font-medium text-red-500 hover:text-red-700 hover:bg-red-50 px-3 py-2 rounded-lg border border-red-200 transition-colors disabled:opacity-40 w-full justify-center">
+              <RotateCcw size={13} />
+              Reset {countFor("adonan")} Batch Adonan &amp; Kembalikan Stok
+            </button>
+          )}
+
           {/* Tanggal */}
           <div className="card">
             <label className="label">Tanggal Produksi</label>
@@ -410,27 +799,49 @@ export default function PackingPage() {
             </div>
           )}
 
-          {/* Input cards per brand */}
+          {/* Input cards per brand — 2 kolom sejajar di sm ke atas */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
           {(Object.keys(BRANDS) as BrandKey[]).map((bk) => {
-            const cfg = BRANDS[bk];
-            const kgMap = bk === "cane" ? adonanForm.cane : adonanForm.mehana;
-            const total = Object.values(kgMap).reduce((s, v) => s + (parseFloat(v) || 0), 0);
-            const amber = cfg.color === "amber";
+            const cfg    = BRANDS[bk];
+            const kgMap  = bk === "cane" ? adonanForm.cane : adonanForm.mehana;
+            const total  = Object.values(kgMap).reduce((s, v) => s + (parseFloat(v) || 0), 0);
+            const amber  = cfg.color === "amber";
+            // Derive from DB: saved = has adonan batches in DB for this brand
+            const isSaved  = adonanBatchesForBrand(bk).length > 0;
+            const isDone   = false; // transient only — no persistent "done" card needed
+            const isLocked = isSaved;
             return (
-              <div key={bk} className={`rounded-2xl border-2 p-4 ${amber ? "border-amber-200" : "border-blue-200"}`}>
-                <div className="flex items-center gap-2 mb-3">
-                  <span className={`w-2.5 h-2.5 rounded-full ${amber ? "bg-amber-400" : "bg-blue-400"}`} />
-                  <h2 className={`font-bold ${amber ? "text-amber-700" : "text-blue-700"}`}>{cfg.label}</h2>
+              <div key={bk} className={`rounded-2xl border-2 p-4 transition-all ${
+                isDone   ? "border-green-200 bg-green-50/40 opacity-70" :
+                isSaved  ? (amber ? "border-amber-300 bg-amber-50/30" : "border-blue-300 bg-blue-50/30") :
+                amber    ? "border-amber-200" : "border-blue-200"
+              }`}>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <span className={`w-2.5 h-2.5 rounded-full ${isDone ? "bg-green-400" : amber ? "bg-amber-400" : "bg-blue-400"}`} />
+                    <h2 className={`font-bold ${isDone ? "text-green-700" : amber ? "text-amber-700" : "text-blue-700"}`}>{cfg.label}</h2>
+                  </div>
+                  {isDone && (
+                    <span className="flex items-center gap-1 text-xs font-semibold text-green-600 bg-green-100 px-2 py-1 rounded-full">
+                      <CheckCircle size={12} /> Sudah pindah ke Rendam
+                    </span>
+                  )}
+                  {isSaved && (
+                    <span className="flex items-center gap-1 text-xs font-semibold text-green-600 bg-green-100 px-2 py-1 rounded-full">
+                      <CheckCircle size={12} /> Adonan sudah disimpan
+                    </span>
+                  )}
                 </div>
                 <div className="space-y-2">
                   {cfg.variants.map((v) => {
                     const has = parseFloat(kgMap[v.key] || "0") > 0;
                     const activeCls = amber ? "bg-amber-50 border-amber-200" : "bg-blue-50 border-blue-200";
                     return (
-                      <div key={v.key} className={`flex items-center gap-3 px-3 py-2.5 rounded-xl border transition-colors ${has ? activeCls : "bg-white border-gray-200"}`}>
-                        <span className="text-sm font-semibold text-gray-700 flex-1 min-w-0">{v.label}</span>
+                      <div key={v.key} className={`flex items-center gap-3 px-3 py-2.5 rounded-xl border transition-colors ${isLocked ? "bg-gray-50 border-gray-100" : has ? activeCls : "bg-white border-gray-200"}`}>
+                        <span className={`text-sm font-semibold flex-1 min-w-0 ${isLocked ? "text-gray-400" : "text-gray-700"}`}>{v.label}</span>
                         <input type="number" step="0.1" min="0" placeholder="0"
-                          className="input py-1.5 text-sm w-20 text-center"
+                          className="input py-1.5 text-sm w-20 text-center disabled:bg-gray-100 disabled:text-gray-400 disabled:cursor-not-allowed"
+                          disabled={isLocked}
                           value={kgMap[v.key] ?? ""}
                           onChange={(e) => setAdonanForm((f) => ({ ...f, [bk]: { ...kgMap, [v.key]: e.target.value } }))} />
                         <span className="text-xs text-gray-400 shrink-0">kg</span>
@@ -444,28 +855,43 @@ export default function PackingPage() {
                     <span className="text-base font-bold text-amber-400">{formatAngka(total)} kg</span>
                   </div>
                 )}
-                <button onClick={() => submitAdonan(bk)} disabled={submitting === bk || total <= 0}
-                  className={`w-full mt-3 py-2.5 rounded-xl font-semibold text-sm text-white transition-all disabled:opacity-50 ${amber ? "bg-amber-500 hover:bg-amber-600" : "bg-blue-500 hover:bg-blue-600"}`}>
-                  {submitting === bk ? "Menyimpan & cek stok..." : `Simpan Adonan ${cfg.label}`}
-                </button>
+                {!isDone && (
+                  <div className="flex gap-2 mt-3">
+                    {isSaved && (
+                      <button onClick={() => undoSavedAdonan(bk)} disabled={busy}
+                        className="flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl font-semibold text-sm border-2 border-red-200 text-red-500 hover:bg-red-50 bg-white transition-all disabled:opacity-40 shrink-0">
+                        <RotateCcw size={13} /> Undo
+                      </button>
+                    )}
+                    <button onClick={() => submitAdonan(bk)}
+                      disabled={submitting === bk || isSaved || total <= 0}
+                      className={`flex-1 py-2.5 rounded-xl font-semibold text-sm transition-all disabled:cursor-not-allowed ${
+                        isSaved
+                          ? "bg-gray-100 text-gray-400 cursor-not-allowed"
+                          : amber
+                            ? "bg-amber-500 hover:bg-amber-600 text-white disabled:opacity-50"
+                            : "bg-blue-500 hover:bg-blue-600 text-white disabled:opacity-50"
+                      }`}>
+                      {submitting === bk ? "Menyimpan..." : isSaved ? "✓ Tersimpan" : "Simpan Adonan"}
+                    </button>
+                    <button onClick={() => moveBrandToRendam(bk)}
+                      disabled={!isSaved}
+                      className={`flex-1 py-2.5 rounded-xl font-semibold text-sm border-2 transition-all disabled:cursor-not-allowed ${
+                        isSaved
+                          ? amber
+                            ? "border-amber-400 text-amber-700 hover:bg-amber-50 bg-white"
+                            : "border-blue-400 text-blue-700 hover:bg-blue-50 bg-white"
+                          : "border-gray-200 text-gray-300 bg-white"
+                      }`}>
+                      Pindah ke Rendam →
+                    </button>
+                  </div>
+                )}
               </div>
             );
           })}
+          </div>
 
-          {/* List adonan aktif */}
-          <StageList
-            title="Adonan Aktif"
-            batches={active.filter((b) => b.status === "adonan")}
-            renderActions={(b) => (
-              <div className="flex gap-2">
-                <button onClick={() => openRendam(b)} className="btn-primary flex-1 text-sm py-2">Pindah ke Rendam</button>
-                <button onClick={() => deleteAdonan(b)} disabled={busy}
-                  className="flex items-center justify-center gap-1 px-3 text-sm py-2 rounded-xl border-2 border-red-200 text-red-600 hover:bg-red-50 transition-colors disabled:opacity-40">
-                  <Trash2 size={14} /> Hapus
-                </button>
-              </div>
-            )}
-          />
         </div>
       )}
 
@@ -476,7 +902,7 @@ export default function PackingPage() {
           batches={active.filter((b) => b.status === "bikin")}
           renderActions={(b) => (
             <div className="flex flex-col sm:flex-row gap-2">
-              <button onClick={() => toPacking(b)} disabled={busy} className="btn-primary flex-1 text-sm py-2">Pindah ke Packing &amp; Freezer</button>
+              <button onClick={() => openPacking(b)} disabled={busy} className="btn-primary flex-1 text-sm py-2">Pindah ke Packing &amp; Freezer</button>
               <button onClick={() => undoRendam(b)} disabled={busy}
                 className="flex items-center justify-center gap-1.5 flex-1 text-sm py-2 rounded-xl border-2 border-red-200 text-red-600 hover:bg-red-50 transition-colors disabled:opacity-40">
                 <ChevronLeft size={15} /> Kembali ke Adonan
@@ -493,7 +919,7 @@ export default function PackingPage() {
           batches={active.filter((b) => b.status === "packing" || b.status === "freezer")}
           renderActions={(b) => (
             <div className="flex flex-col sm:flex-row gap-2">
-              <button onClick={() => markSelesai(b)} disabled={busy} className="btn-primary flex-1 text-sm py-2">Tandai Selesai</button>
+              <button onClick={() => openInputStok(b)} disabled={busy} className="btn-primary flex-1 text-sm py-2">Input Stok</button>
               <button onClick={() => undoPacking(b)} disabled={busy}
                 className="flex items-center justify-center gap-1.5 flex-1 text-sm py-2 rounded-xl border-2 border-red-200 text-red-600 hover:bg-red-50 transition-colors disabled:opacity-40">
                 <ChevronLeft size={15} /> Kembali ke Rendam
@@ -506,21 +932,13 @@ export default function PackingPage() {
       {/* ════════ TAB: RIWAYAT ════════ */}
       {activeTab === "riwayat" && (
         <div className="space-y-3">
-          <div className="card space-y-3">
-            <div className="flex flex-wrap gap-1.5">
-              {([["hari_ini","Hari ini"],["kemarin","Kemarin"],["7hari","7 Hari"],["1bulan","1 Bulan"],["custom","Custom"]] as [RiwayatPreset,string][]).map(([k, lbl]) => (
-                <button key={k} onClick={() => setPreset(k)}
-                  className={`text-xs font-medium px-3 py-1.5 rounded-lg transition-colors ${preset === k ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>{lbl}</button>
-              ))}
-            </div>
-            {preset === "custom" && (
-              <div className="flex items-center gap-2">
-                <input type="date" className="input text-sm py-1.5 flex-1" value={customStart} onChange={(e) => setCustomStart(e.target.value)} />
-                <span className="text-gray-400 text-sm">s/d</span>
-                <input type="date" className="input text-sm py-1.5 flex-1" value={customEnd} onChange={(e) => setCustomEnd(e.target.value)} />
-              </div>
-            )}
-          </div>
+          <RiwayatFilter
+            preset={preset} onPreset={setPreset}
+            customStart={customStart} customEnd={customEnd}
+            onCustomStart={setCustomStart} onCustomEnd={setCustomEnd}
+            selectedBulan={selectedBulan} onBulan={setSelectedBulan}
+            accentColor="amber"
+          />
 
           <div className="card">
             <div className="flex items-center gap-2 mb-3">
@@ -530,25 +948,77 @@ export default function PackingPage() {
             {riwayat.length === 0 ? (
               <p className="text-gray-400 text-sm text-center py-6">Tidak ada data pada rentang ini</p>
             ) : (
-              <div className="space-y-2.5">
+              <div className="space-y-3">
                 {riwayat.map((b) => {
-                  const sku = b.produk_sku as { nama_brand: string; varian: string };
+                  const sku = b.produk_sku as { nama_brand: string; varian: string; isi_per_pack: number };
+                  const pi  = packingInputs.filter((p) => p.batch_produksi_id === b.id);
+                  const row = pi[0] ?? null;
+                  // pack5 = original dari form; pack5Final = + pack tambahan dari gabungkan
+                  const rawCarryIn  = row?.carry_in  ?? 0;
+                  const rawLebihan  = row?.lebihan   ?? 0;
+                  const totalLeb    = rawCarryIn + rawLebihan;
+                  const extraPack   = totalLeb >= 5 ? Math.floor(totalLeb / 5) : 0;
+                  const carryOverBesok = totalLeb >= 5 ? totalLeb % 5 : totalLeb;
+                  const pack5Orig   = row?.pack5  ?? 0;
+                  const pack5Final  = pack5Orig + extraPack;
+                  const totalPack10 = row?.pack10  ?? 0;
+                  const totalReject = pi.reduce((s, p) => s + p.reject, 0);
+                  const isMehana = row?.brand === "mehana";
+                  const hasPackingData = pi.length > 0;
                   return (
                     <div key={b.id} className="border border-gray-100 rounded-xl p-3">
+                      {/* Header */}
                       <div className="flex items-start justify-between mb-1">
-                        <div>
+                        <div className="flex-1 min-w-0 pr-2">
                           <p className="font-semibold text-gray-800 text-sm">{sku?.nama_brand} — {sku?.varian}</p>
                           <p className="text-xs text-gray-400">{formatTanggal(b.tanggal_produksi)}</p>
                         </div>
-                        <span className={statusClass[b.status]}>{statusLabel[b.status]}</span>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className={statusClass[b.status]}>{statusLabel[b.status]}</span>
+                          {caps.isSuperAdmin && (
+                            <button onClick={() => setDeleteConfirm(b)} disabled={busy}
+                              className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors">
+                              <Trash2 size={14} />
+                            </button>
+                          )}
+                        </div>
                       </div>
-                      <div className="flex flex-wrap gap-2 text-xs mt-2">
-                        <span className="bg-gray-50 rounded px-2 py-1"><span className="text-gray-400">Adonan</span> <b className="text-gray-700">{formatAngka(b.jumlah_pack_rencana)} kg</b></span>
+
+                      {/* Chips: semua data dalam satu baris, scroll jika overflow */}
+                      <div className="flex gap-1.5 text-xs mt-2 overflow-x-auto pb-0.5 scrollbar-hide">
+                        <span className="shrink-0 bg-gray-50 rounded px-2 py-1">
+                          <span className="text-gray-400">Adonan</span> <b className="text-gray-700">{formatAngka(b.jumlah_pack_rencana)} kg</b>
+                        </span>
                         {b.jumlah_pack_adonan != null && (
-                          <span className="bg-orange-50 rounded px-2 py-1"><span className="text-orange-400">Direndam</span> <b className="text-orange-700">{formatAngka(b.jumlah_pack_adonan)} pcs</b></span>
+                          <span className="shrink-0 bg-orange-50 rounded px-2 py-1">
+                            <span className="text-orange-400">Direndam</span> <b className="text-orange-700">{formatAngka(b.jumlah_pack_adonan)} pcs</b>
+                          </span>
+                        )}
+                        {hasPackingData && (
+                          <>
+                            <span className="shrink-0 bg-green-50 rounded px-2 py-1">
+                              <span className="text-green-600">{sku?.varian}{isMehana ? " Isi 5" : ""}</span>
+                              <span className="text-green-400 mx-1">|</span>
+                              <b className="text-green-700">{formatAngka(pack5Final)} pack</b>
+                            </span>
+                            {isMehana && totalPack10 > 0 && (
+                              <span className="shrink-0 bg-green-50 rounded px-2 py-1">
+                                <span className="text-green-600">{sku?.varian} Isi 10</span>
+                                <span className="text-green-400 mx-1">|</span>
+                                <b className="text-green-700">{formatAngka(totalPack10)} pack</b>
+                              </span>
+                            )}
+                            <span className="shrink-0 bg-red-50 rounded px-2 py-1">
+                              <span className="text-red-400">Reject</span> <b className="text-red-700">{formatAngka(totalReject)} pcs</b>
+                            </span>
+                            <span className="shrink-0 bg-amber-50 rounded px-2 py-1">
+                              <span className="text-amber-500">Lebihan</span> <b className="text-amber-700">{formatAngka(rawLebihan)} pcs</b>
+                            </span>
+                          </>
                         )}
                       </div>
-                      <p className="text-xs text-gray-400 mt-1.5">oleh {(b.users as { nama: string })?.nama} · {formatTanggalWaktu(b.created_at)}</p>
+                      <p className="text-xs text-gray-400 mt-1.5">Oleh: <span className="font-medium text-gray-500">{(b.users as { nama: string })?.nama ?? "—"}</span></p>
+
                     </div>
                   );
                 })}
@@ -558,9 +1028,87 @@ export default function PackingPage() {
         </div>
       )}
 
-      {/* ════════ MODAL: RENDAM ════════ */}
-      {rendamModal && (() => {
-        const batch = rendamModal.batch;
+      {/* ════════ TAB: LAPORAN REJECT ════════ */}
+      {activeTab === "reject" && (
+        <div className="space-y-3">
+          <RiwayatFilter
+            preset={preset} onPreset={setPreset}
+            customStart={customStart} customEnd={customEnd}
+            onCustomStart={setCustomStart} onCustomEnd={setCustomEnd}
+            selectedBulan={selectedBulan} onBulan={setSelectedBulan}
+            accentColor="red"
+          />
+
+          {(() => {
+            const rows = packingInputs.filter((p) => p.tanggal >= rStart && p.tanggal <= rEnd);
+            const totalReject = rows.reduce((s, p) => s + p.reject, 0);
+            const ordered: { brandLabel: string; varianLabel: string; total: number; count: number }[] = [];
+            (Object.keys(BRANDS) as BrandKey[]).forEach((bk) => {
+              const cfg = BRANDS[bk];
+              cfg.variants.forEach((v) => {
+                const matching = rows.filter((p) => p.brand === bk && p.varian === v.varianDB);
+                const total = matching.reduce((s, p) => s + p.reject, 0);
+                if (total > 0) ordered.push({ brandLabel: cfg.label, varianLabel: v.label, total, count: matching.length });
+              });
+            });
+            return (
+              <>
+                <div className="bg-gray-900 rounded-xl p-3 flex items-center justify-between">
+                  <span className="text-xs font-bold text-red-400 uppercase tracking-wide">Total Reject ({rows.length} input)</span>
+                  <span className="text-lg font-bold text-white">{formatAngka(totalReject)} pcs</span>
+                </div>
+
+                <div className="card">
+                  <div className="flex items-center gap-2 mb-3">
+                    <AlertTriangle size={16} className="text-red-500" />
+                    <span className="font-semibold text-gray-700">Reject per Varian</span>
+                  </div>
+                  {ordered.length === 0 ? (
+                    <p className="text-gray-400 text-sm text-center py-6">Tidak ada reject pada rentang ini</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {ordered.map((r, i) => (
+                        <div key={i} className="flex items-center justify-between border-b border-gray-50 pb-2">
+                          <div>
+                            <p className="text-sm font-medium text-gray-800">{r.varianLabel}</p>
+                            <p className="text-xs text-gray-400">{r.brandLabel} · {r.count}× input</p>
+                          </div>
+                          <span className="text-sm font-bold text-red-600">{formatAngka(r.total)} pcs</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {rows.length > 0 && (
+                  <div className="card">
+                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Detail Input</p>
+                    <div className="space-y-1.5">
+                      {rows.map((p) => {
+                        const cfg = BRANDS[p.brand as BrandKey];
+                        const vlabel = cfg?.variants.find((v) => v.varianDB === p.varian)?.label ?? p.varian;
+                        return (
+                          <div key={p.id} className="flex items-center justify-between text-xs border-b border-gray-50 pb-1.5">
+                            <div className="min-w-0 pr-2">
+                              <span className="font-medium text-gray-700">{cfg?.label} — {vlabel}</span>
+                              <span className="text-gray-400"> · {formatTanggal(p.tanggal)}</span>
+                            </div>
+                            <span className={`shrink-0 ${p.reject > 0 ? "text-red-600 font-semibold" : "text-gray-300"}`}>{formatAngka(p.reject)} pcs</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </>
+            );
+          })()}
+        </div>
+      )}
+
+      {/* ════════ MODAL: PACKING & FREEZER ════════ */}
+      {packingModal && (() => {
+        const batch = packingModal.batch;
         const cfg = findVarian(batch);
         const kg = batch.jumlah_pack_rencana;
         const standar = cfg ? Math.round(kg * cfg.pcs_per_kg) : 0;
@@ -568,14 +1116,14 @@ export default function PackingPage() {
           <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-4">
             <div className="bg-white rounded-2xl w-full max-w-md max-h-[92vh] overflow-y-auto">
               <div className="flex items-center justify-between p-4 border-b sticky top-0 bg-white">
-                <h2 className="font-bold text-gray-800">Pindah ke Rendam</h2>
-                <button onClick={() => setRendamModal(null)} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
+                <h2 className="font-bold text-gray-800">Pindah ke Packing &amp; Freezer</h2>
+                <button onClick={() => setPackingModal(null)} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
               </div>
               <div className="p-4 space-y-4">
                 <div className="bg-gray-50 rounded-xl p-3">
                   <p className="font-medium text-gray-800">{batch.produk_sku?.nama_brand} — {batch.produk_sku?.varian}</p>
                   <p className="text-sm text-gray-500 mt-1">
-                    <span className={statusClass.adonan}>Adonan</span> {" → "} <span className={statusClass.bikin}>Rendam</span>
+                    <span className={statusClass.bikin}>Rendam</span> {" → "} <span className={statusClass.packing}>Packing &amp; Freezer</span>
                   </p>
                 </div>
 
@@ -591,28 +1139,50 @@ export default function PackingPage() {
                       <span className="text-xs font-semibold text-amber-700 uppercase tracking-wide">Standar</span>
                       <span className="text-base font-bold text-amber-700">{formatAngka(standar)} pcs</span>
                     </div>
-                    <p className="text-xs text-amber-500">{cfg.pcs_per_kg} pcs/kg × {formatAngka(kg)} kg{cfg.wajibPcs ? " · WAJIB 25 pcs (65gr/pcs)" : ""}</p>
+                    <p className="text-xs text-amber-500">{cfg.pcs_per_kg} pcs/kg × {formatAngka(kg)} kg</p>
                   </div>
                 )}
 
-                <div>
+                <div className="space-y-2">
                   <label className="label">Total Jumlah Direndam (Actual)</label>
+
+                  {/* Standar — read only */}
                   <div className="flex items-center gap-2">
-                    <input type="number" min="0" placeholder="0" className="input flex-1 text-lg font-semibold"
-                      value={rendamForm.pcs} onChange={(e) => setRendamForm((f) => ({ ...f, pcs: e.target.value }))} />
-                    <span className="text-sm font-semibold text-gray-500 shrink-0">Pcs</span>
+                    <div className="input flex-1 text-lg font-semibold bg-gray-50 text-gray-400 cursor-default select-none">
+                      {standar}
+                    </div>
+                    <span className="text-sm font-semibold text-gray-400 shrink-0 w-16">Standar</span>
+                  </div>
+
+                  {/* Lebihan di luar standar */}
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number" min="0" placeholder="0"
+                      className="input flex-1 text-lg font-semibold"
+                      value={packingForm.pcs}
+                      onChange={(e) => setPackingForm((f) => ({ ...f, pcs: e.target.value }))}
+                    />
+                    <span className="text-sm font-semibold text-gray-500 shrink-0 w-16">Lebihan</span>
+                  </div>
+
+                  {/* Total */}
+                  <div className="flex items-center justify-between bg-orange-50 rounded-xl px-3 py-2.5 border border-orange-100">
+                    <span className="text-sm font-semibold text-orange-700">Total Direndam</span>
+                    <span className="text-xl font-bold text-orange-700">
+                      {standar + (parseInt(packingForm.pcs) || 0)} pcs
+                    </span>
                   </div>
                 </div>
 
                 <div>
                   <label className="label">Catatan <span className="text-gray-400 font-normal">(optional)</span></label>
                   <textarea rows={2} className="input resize-none" placeholder="Catatan tambahan..."
-                    value={rendamForm.catatan} onChange={(e) => setRendamForm((f) => ({ ...f, catatan: e.target.value }))} />
+                    value={packingForm.catatan} onChange={(e) => setPackingForm((f) => ({ ...f, catatan: e.target.value }))} />
                 </div>
 
                 <div className="flex gap-2">
-                  <button onClick={() => setRendamModal(null)} className="btn-secondary flex-1">Batal</button>
-                  <button onClick={confirmRendam} disabled={busy || !parseInt(rendamForm.pcs)}
+                  <button onClick={() => setPackingModal(null)} className="btn-secondary flex-1">Batal</button>
+                  <button onClick={confirmPacking} disabled={busy || standar <= 0}
                     className="btn-primary flex-1 flex items-center justify-center gap-2">
                     <CheckCircle size={16} /> {busy ? "Memproses..." : "Konfirmasi"}
                   </button>
@@ -623,6 +1193,293 @@ export default function PackingPage() {
         );
       })()}
 
+      {/* ════════ MODAL: INPUT STOK ════════ */}
+      {inputStokModal && (
+        <InputStokModal
+          batch={inputStokModal.batch}
+          carryIn={inputStokModal.carryIn}
+          carryFromDate={inputStokModal.carryFromDate}
+          cfg={findVarian(inputStokModal.batch)}
+          busy={busy}
+          onClose={() => setInputStokModal(null)}
+          onConfirm={confirmInputStok}
+        />
+      )}
+
+      {/* ── Modal konfirmasi hapus riwayat ── */}
+      {deleteConfirm && (() => {
+        const b = deleteConfirm;
+        const sku = b.produk_sku as { nama_brand: string; varian: string };
+        const stageLabel: Record<string, string> = { adonan: "Adonan", bikin: "Rendam", packing: "Packing & Freezer", freezer: "Packing & Freezer", selesai: "Selesai" };
+        const restoreNotes: Record<string, string> = {
+          adonan: "Stok bahan baku akan di-restore.",
+          bikin:  "Stok bahan baku & bahan rendam akan di-restore.",
+          packing: "Stok bahan baku & bahan rendam akan di-restore.",
+          freezer: "Stok bahan baku & bahan rendam akan di-restore.",
+          selesai: "Stok bahan baku, bahan rendam & stok produk jadi akan di-restore.",
+        };
+        return (
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-4">
+            <div className="bg-white rounded-2xl w-full max-w-sm p-5 space-y-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-red-100 rounded-full flex items-center justify-center shrink-0">
+                  <Trash2 size={18} className="text-red-600" />
+                </div>
+                <div>
+                  <p className="font-bold text-gray-800">Hapus Riwayat?</p>
+                  <p className="text-xs text-gray-400">Stage: {stageLabel[b.status]}</p>
+                </div>
+              </div>
+              <div className="bg-gray-50 rounded-xl p-3 space-y-1">
+                <p className="text-sm font-semibold text-gray-800">{sku?.nama_brand} — {sku?.varian}</p>
+                <p className="text-xs text-gray-500">{formatTanggal(b.tanggal_produksi)} · {formatAngka(b.jumlah_pack_rencana)} kg adonan</p>
+              </div>
+              <p className="text-sm text-amber-700 bg-amber-50 rounded-xl px-3 py-2">
+                ⚠ {restoreNotes[b.status]}
+              </p>
+              <div className="flex gap-2">
+                <button onClick={() => setDeleteConfirm(null)} className="btn-secondary flex-1">Batal</button>
+                <button
+                  onClick={() => deleteRiwayat(b)}
+                  disabled={busy}
+                  className="flex-1 py-2.5 rounded-xl bg-red-500 text-white text-sm font-semibold hover:bg-red-600 transition-colors disabled:opacity-50"
+                >
+                  {busy ? "Menghapus..." : "Hapus"}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      </>)}
+    </div>
+  );
+}
+
+// ── InputStokModal: input pack/reject/lebihan + validasi ──────
+function InputStokModal({ batch, carryIn, carryFromDate, cfg, busy, onClose, onConfirm }: {
+  batch: Batch;
+  carryIn: number;
+  carryFromDate: string | null;
+  cfg: (VarianCfg & { brandKey: BrandKey; brandLabel: string }) | null;
+  busy: boolean;
+  onClose: () => void;
+  onConfirm: (data: { pack5: number; pack5Final: number; pack10: number; reject: number; lebihan: number; catatan: string }) => void;
+}) {
+  const [pack5,   setPack5]   = useState("");
+  const [pack10,  setPack10]  = useState("");
+  const [reject,  setReject]  = useState("");
+  const [lebihan, setLebihan] = useState("");
+  const [catatan, setCatatan] = useState("");
+  const [stage,   setStage]   = useState<"input" | "akumulasi">("input");
+  const [sudahGabung, setSudahGabung] = useState(false);
+
+  const showPack10 = cfg?.brandKey === "mehana";
+  const locked     = stage === "akumulasi";
+
+  const direndam = batch.jumlah_pack_adonan ?? 0;
+  const p5  = parseInt(pack5)  || 0;
+  const p10 = showPack10 ? (parseInt(pack10) || 0) : 0;
+  const rej = parseInt(reject) || 0;
+  const leb = parseInt(lebihan) || 0;
+
+  // Stage 1: Total Check = direndam only
+  const sum     = p5 * 5 + p10 * 10 + rej + leb;
+  const selisih = direndam - sum;
+  const match   = selisih === 0 && direndam > 0;
+
+  // Stage 2: Akumulasi
+  const totalLebihan  = carryIn + leb;
+  const bisaGabung    = totalLebihan >= 5;
+  const extraPack     = Math.floor(totalLebihan / 5);
+  const carryOverBesok = sudahGabung ? totalLebihan % 5 : totalLebihan;
+  const pack5Final    = p5 + (sudahGabung ? extraPack : 0);
+
+  const inputCls = `input py-1.5 text-sm text-center ${locked ? "opacity-50 cursor-not-allowed bg-gray-100" : ""}`;
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-4">
+      <div className="bg-white rounded-2xl w-full max-w-md max-h-[92vh] overflow-y-auto">
+        <div className="flex items-center justify-between p-4 border-b sticky top-0 bg-white z-10">
+          <h2 className="font-bold text-gray-800">Input Stok — Packing &amp; Freezer</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
+        </div>
+
+        <div className="p-4 space-y-4">
+
+          {/* ── Header info ── */}
+          <div className="bg-gray-50 rounded-xl p-3 space-y-1.5">
+            <p className="font-semibold text-gray-800">{batch.produk_sku?.nama_brand} — {batch.produk_sku?.varian}</p>
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-gray-500">Total Direndam</span>
+              <span className="font-semibold text-gray-800">{formatAngka(direndam)} pcs</span>
+            </div>
+            <div className="flex items-center justify-between text-sm font-semibold border-t border-gray-200 pt-1.5">
+              <span className="text-gray-700">Total Available</span>
+              <span className="text-gray-900">{formatAngka(direndam)} pcs</span>
+            </div>
+          </div>
+
+          {/* ── TAHAP 1: Input Produksi ── */}
+          <div className="space-y-4">
+            {/* Pack inputs */}
+            <div className="space-y-2">
+              <p className="text-xs font-bold text-gray-500 uppercase tracking-wide">Pack</p>
+              <div className="flex items-center gap-2">
+                <span className={`text-sm w-24 shrink-0 ${locked ? "text-gray-400" : "text-gray-600"}`}>Isi 5 Pcs</span>
+                <input type="number" min="0" placeholder="0" className={`${inputCls} w-20`}
+                  value={pack5} onChange={(e) => setPack5(e.target.value)} disabled={locked} />
+                <span className="text-xs text-gray-400">pack</span>
+                <span className={`text-sm font-semibold ml-auto ${locked ? "text-gray-400" : "text-gray-700"}`}>= {formatAngka(p5 * 5)} pcs</span>
+              </div>
+              {showPack10 && (
+                <div className="flex items-center gap-2">
+                  <span className={`text-sm w-24 shrink-0 ${locked ? "text-gray-400" : "text-gray-600"}`}>Isi 10 Pcs</span>
+                  <input type="number" min="0" placeholder="0" className={`${inputCls} w-20`}
+                    value={pack10} onChange={(e) => setPack10(e.target.value)} disabled={locked} />
+                  <span className="text-xs text-gray-400">pack</span>
+                  <span className={`text-sm font-semibold ml-auto ${locked ? "text-gray-400" : "text-gray-700"}`}>= {formatAngka(p10 * 10)} pcs</span>
+                </div>
+              )}
+            </div>
+
+            {/* Reject & Lebihan */}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className={`label ${locked ? "text-gray-400" : ""}`}>Reject</label>
+                <div className="flex items-center gap-1.5">
+                  <input type="number" min="0" placeholder="0" className={`${inputCls} flex-1`}
+                    value={reject} onChange={(e) => setReject(e.target.value)} disabled={locked} />
+                  <span className="text-xs text-gray-400">pcs</span>
+                </div>
+              </div>
+              <div>
+                <label className={`label ${locked ? "text-gray-400" : ""}`}>Lebihan</label>
+                <div className="flex items-center gap-1.5">
+                  <input type="number" min="0" placeholder="0" className={`${inputCls} flex-1`}
+                    value={lebihan} onChange={(e) => setLebihan(e.target.value)} disabled={locked} />
+                  <span className="text-xs text-gray-400">pcs</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Catatan */}
+            <div>
+              <label className={`label ${locked ? "text-gray-400" : ""}`}>Catatan <span className="text-gray-400 font-normal">(optional)</span></label>
+              <textarea rows={2} className={`input resize-none ${locked ? "opacity-50 cursor-not-allowed bg-gray-100" : ""}`}
+                placeholder="Catatan tambahan..." value={catatan}
+                onChange={(e) => setCatatan(e.target.value)} disabled={locked} />
+            </div>
+
+            {/* Total Check */}
+            <div className={`rounded-xl p-3 border-2 ${match ? "bg-green-50 border-green-200" : "bg-red-50 border-red-200"}`}>
+              <p className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Total Check</p>
+              <p className="text-xs text-gray-600">
+                {showPack10
+                  ? `(Isi 5 × 5) + (Isi 10 × 10) + Reject + Lebihan = `
+                  : `(Isi 5 × 5) + Reject + Lebihan = `}
+                <b>{formatAngka(sum)} pcs</b>
+              </p>
+              <p className="text-xs text-gray-600">Harus sama dengan: <b>{formatAngka(direndam)} pcs</b></p>
+              <p className="mt-2 text-sm font-bold">
+                {!match
+                  ? <span className="text-red-600">❌ Belum match — {selisih > 0 ? `kurang ${formatAngka(selisih)} pcs` : `lebih ${formatAngka(-selisih)} pcs`}</span>
+                  : <span className="text-green-600">✅ Match</span>}
+              </p>
+            </div>
+
+            {/* Submit Produksi — hanya di stage 1 */}
+            {stage === "input" && (
+              <div className="flex gap-2">
+                <button onClick={onClose} className="btn-secondary flex-1">Batal</button>
+                <button onClick={() => setStage("akumulasi")} disabled={!match || busy}
+                  className="btn-primary flex-1 flex items-center justify-center gap-2">
+                  <CheckCircle size={16} /> Submit Produksi
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* ── TAHAP 2: Akumulasi Lebihan (muncul setelah submit produksi) ── */}
+          {stage === "akumulasi" && (
+            <div className="space-y-4">
+              <div className="border-t border-gray-200 pt-4">
+                <p className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-3">Akumulasi Lebihan</p>
+
+                {/* Breakdown */}
+                <div className={`rounded-xl border-2 p-3 space-y-1 text-sm ${bisaGabung && !sudahGabung ? "bg-orange-50 border-orange-200" : "bg-gray-50 border-gray-200"}`}>
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">Lebihan kemarin{carryFromDate ? ` (${formatTanggal(carryFromDate)})` : ""}</span>
+                    <span className={`font-semibold ${carryIn > 0 ? "text-amber-700" : "text-gray-400"}`}>{formatAngka(carryIn)} pcs</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">+ Lebihan hari ini</span>
+                    <span className="font-semibold text-gray-700">{formatAngka(leb)} pcs</span>
+                  </div>
+                  <div className="flex justify-between border-t border-gray-200 pt-1.5 mt-1 font-semibold">
+                    <span className="text-gray-700">Total</span>
+                    <span className={bisaGabung && !sudahGabung ? "text-orange-600" : "text-gray-900"}>{formatAngka(totalLebihan)} pcs</span>
+                  </div>
+                </div>
+
+                {/* Case: bisa gabung & belum gabung */}
+                {bisaGabung && !sudahGabung && (
+                  <div className="mt-3 space-y-2">
+                    <p className="text-sm font-semibold text-orange-700">
+                      ⚠ Lebihan bisa digabung jadi {extraPack} pack!
+                    </p>
+                    <button type="button" onClick={() => setSudahGabung(true)}
+                      className="w-full py-2.5 rounded-xl font-semibold text-sm bg-orange-500 text-white hover:bg-orange-600 transition-colors">
+                      Gabungkan Lebihan → +{extraPack} Pack
+                    </button>
+                  </div>
+                )}
+
+                {/* Case: sudah gabung */}
+                {sudahGabung && (
+                  <div className="mt-3 rounded-xl bg-green-50 border-2 border-green-200 p-3 space-y-1.5 text-sm">
+                    <p className="font-bold text-green-700 mb-1">✅ Lebihan digabungkan</p>
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">Pack tambahan</span>
+                      <span className="font-semibold text-green-700">+{extraPack} pack Isi 5</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">Carry-over besok</span>
+                      <span className="font-semibold text-gray-800">{formatAngka(carryOverBesok)} pcs</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Case: tidak perlu gabung (total < 5) */}
+                {!bisaGabung && (
+                  <div className="mt-3 rounded-xl bg-green-50 border-2 border-green-200 p-3 text-sm">
+                    <p className="text-green-700 font-semibold">
+                      {totalLebihan === 0
+                        ? "✅ Tidak ada carry-over besok"
+                        : `✅ Carry-over besok: ${formatAngka(totalLebihan)} pcs`}
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {/* Tombol Selesai — muncul jika tidak bisa gabung ATAU sudah gabung */}
+              {(!bisaGabung || sudahGabung) && (
+                <div className="flex gap-2">
+                  <button onClick={onClose} className="btn-secondary flex-1">Batal</button>
+                  <button
+                    onClick={() => onConfirm({ pack5: p5, pack5Final, pack10: p10, reject: rej, lebihan: leb, catatan })}
+                    disabled={busy}
+                    className="btn-primary flex-1 flex items-center justify-center gap-2">
+                    <CheckCircle size={16} /> {busy ? "Memproses..." : "Selesai"}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+        </div>
+      </div>
     </div>
   );
 }

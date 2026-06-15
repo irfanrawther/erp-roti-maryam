@@ -42,4 +42,11 @@
   .badge-status-selesai {
     @apply bg-green-100 text-green-800 text-xs px-2 py-0.5 rounded-full font-medium;
   }
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
 }

@@ -1,40 +1,18 @@
-import { supabase } from "./supabase";
-
-export async function hashPin(pin: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(pin);
-  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-export async function loginWithPin(pin: string) {
-  const pinHash = await hashPin(pin);
-
-  // 1. Cari user berdasarkan hash saja dulu (tanpa filter aktif)
-  //    supaya kita bisa bedakan: "hash tidak ada" vs "akun nonaktif"
-  const { data: rows, error: fetchError } = await supabase
-    .from("users")
-    .select("*")
-    .eq("pin_hash", pinHash);
-
-  if (fetchError) {
-    console.error("[loginWithPin] Supabase error:", fetchError);
-    return { user: null, error: `DB error: ${fetchError.message}` };
+// Hash & login dilakukan di server (/api/auth/login) menggunakan Node.js crypto
+// sehingga works di HTTP maupun HTTPS (crypto.subtle hanya tersedia di HTTPS)
+export async function loginWithPin(pin: string, role?: string) {
+  try {
+    const res = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pin, role }),
+    });
+    const json = await res.json() as { user?: UserSession; error?: string };
+    if (!res.ok) return { user: null, error: json.error ?? "Login gagal" };
+    return { user: json.user ?? null, error: null };
+  } catch {
+    return { user: null, error: "Tidak dapat terhubung ke server" };
   }
-
-  if (!rows || rows.length === 0) {
-    console.warn("[loginWithPin] Hash tidak ditemukan:", pinHash);
-    return { user: null, error: "PIN salah" };
-  }
-
-  const user = rows[0];
-
-  if (!user.aktif) {
-    return { user: null, error: "Akun Anda sudah dinonaktifkan" };
-  }
-
-  return { user, error: null };
 }
 
 export function saveUserSession(user: UserSession) {
@@ -64,19 +42,39 @@ export type UserSession = {
   id: string;
   nama: string;
   role: string;
+  access_scope?: string | null;
 };
 
+// Hash PIN di server (Node crypto) — works di HTTP maupun HTTPS.
+// Dipakai oleh halaman Kelola User saat membuat/mengubah PIN.
+export async function hashPin(pin: string): Promise<string> {
+  const res = await fetch(`/api/auth/hash?pin=${encodeURIComponent(pin)}`);
+  const json = (await res.json()) as { hash?: string };
+  return json.hash ?? "";
+}
+
 export function canAccessAdmin(role: string) {
-  return role === "owner" || role === "manager";
+  return role === "super_admin" || role === "owner" || role === "manager";
 }
 
 export function getRoleLabel(role: string) {
   const labels: Record<string, string> = {
-    owner: "Owner",
-    manager: "Manager",
-    spv_pagi: "SPV Pagi",
-    spv_siang: "SPV Siang",
-    staff: "Staff",
+    super_admin: "Super Admin",
+    spv: "SPV",
+    staff_produksi: "Staff Produksi",
+    staff_packing_pengiriman: "Staff Packing Pengiriman",
+    // role lama (backward-compat)
+    owner: "Super Admin",
+    manager: "Super Admin",
+    spv_pagi: "SPV",
+    spv_siang: "SPV",
+    staff: "Staff Produksi",
   };
   return labels[role] ?? role;
+}
+
+export function getScopeLabel(scope?: string | null) {
+  if (scope === "adonan_rendam") return "Adonan & Rendam";
+  if (scope === "packing") return "Packing & Freezer";
+  return "";
 }

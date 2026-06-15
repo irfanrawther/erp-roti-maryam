@@ -1,7 +1,9 @@
 "use client";
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { getUserSession } from "@/lib/auth";
+import { getCapabilities, homeRoute } from "@/lib/permissions";
 import { formatAngka, formatTanggal } from "@/lib/utils";
 import { Package, ChefHat, Truck, Snowflake, X, AlertTriangle } from "lucide-react";
 
@@ -41,6 +43,8 @@ interface PengirimanHariIni {
 
 export default function DashboardPage() {
   const user = getUserSession();
+  const router = useRouter();
+  const caps = getCapabilities(user);
   const today = new Date().toISOString().split("T")[0];
 
   const [bahanKritis, setBahanKritis] = useState<StokBahan[]>([]);
@@ -51,7 +55,13 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [showModalBahan, setShowModalBahan] = useState(false);
 
+  // Route guard — hanya Super Admin yang punya akses Dashboard
   useEffect(() => {
+    if (user && !caps.dashboard) router.replace(homeRoute(user));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (user && !caps.dashboard) return;
     fetchAll();
 
     const channel = supabase
@@ -76,15 +86,19 @@ export default function DashboardPage() {
       setBahanKritis(bahanRes.data.filter((b) => b.stok_saat_ini <= b.stok_minimum));
     }
     if (produkRes.data) {
-      const URUTAN: Record<string, number> = {
-        "Original": 1, "Melted Choco": 2, "Grated Cheese": 3, "Whole Wheat": 4,
-        "Cokelat": 2, "Keju": 3,
-      };
-      const BRAND_URUTAN: Record<string, number> = { "cane": 1, "mehana": 2 };
+      const CANE_ORD = ["Original", "Melted Choco", "Grated Cheese", "Whole Wheat"];
+      const MEHANA_ORD = ["Original", "Cokelat", "Keju"];
       const sorted = [...produkRes.data].sort((a, b) => {
-        const brandDiff = (BRAND_URUTAN[a.brand as string] ?? 9) - (BRAND_URUTAN[b.brand as string] ?? 9);
-        if (brandDiff !== 0) return brandDiff;
-        return (URUTAN[a.varian] ?? 9) - (URUTAN[b.varian] ?? 9);
+        const ab = (a.brand as string), bb = (b.brand as string);
+        if (ab !== bb) return ab === "cane" ? -1 : 1;
+        const ord = ab === "cane" ? CANE_ORD : MEHANA_ORD;
+        // Mehana: group by isi_per_pack (5 dulu, 10 kemudian); Cane: skip
+        if (ab === "mehana") {
+          const packDiff = (a.isi_per_pack as number) - (b.isi_per_pack as number);
+          if (packDiff !== 0) return packDiff;
+        }
+        const ai = ord.indexOf(a.varian as string), bi = ord.indexOf(b.varian as string);
+        return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
       });
       setStokProduk(sorted);
     }
@@ -203,24 +217,59 @@ export default function DashboardPage() {
           )}
         </div>
 
-        {/* Stok Produk Jadi */}
+        {/* Stock Roti Cane */}
         <div className="card">
           <h2 className="font-bold text-gray-800 mb-3 flex items-center gap-2">
             <Snowflake size={16} className="text-indigo-500" />
-            Stok Produk Jadi
+            Stock Roti Cane
           </h2>
-          <div className="space-y-2 max-h-64 overflow-y-auto">
-            {stokProduk.map((p) => (
-              <div key={p.id} className="flex items-center justify-between py-2 border-b border-gray-50">
-                <div>
-                  <p className="text-sm font-medium text-gray-800">{p.varian}</p>
-                  <p className="text-xs text-gray-400">{p.nama_brand} • {p.isi_per_pack} pcs/pack</p>
+          <div className="space-y-4">
+            {(["cane", "mehana"] as const).map((brand) => {
+              const brandLabel = brand === "cane" ? "Cane RawtheR" : "Mehana Boga Utama";
+              const CANE_ORDER = ["Original", "Melted Choco", "Grated Cheese", "Whole Wheat"];
+              const MEHANA_ORDER = ["Original", "Cokelat", "Keju"];
+              const varianOrder = brand === "cane" ? CANE_ORDER : MEHANA_ORDER;
+              const items = stokProduk
+                .filter((p) => p.brand === brand)
+                .sort((a, b) => {
+                  // Mehana: isi_per_pack=5 group dulu, lalu isi_per_pack=10
+                  // Cane: semua 1 pack size, jangan sort by isi_per_pack
+                  if (brand === "mehana" && a.isi_per_pack !== b.isi_per_pack) return a.isi_per_pack - b.isi_per_pack;
+                  const ai = varianOrder.indexOf(a.varian);
+                  const bi = varianOrder.indexOf(b.varian);
+                  return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+                });
+              if (items.length === 0) return null;
+              const renderRow = (p: StokProduk) => (
+                <div key={p.id} className="flex items-center justify-between py-1.5 border-b border-gray-50 last:border-0">
+                  <p className="text-sm text-gray-700">
+                    {p.varian}
+                    {brand === "mehana" && <span className="text-gray-400"> Isi {p.isi_per_pack} Pcs</span>}
+                  </p>
+                  <span className={`text-sm font-bold tabular-nums ${p.stok_saat_ini === 0 ? "text-gray-400" : "text-gray-800"}`}>
+                    {formatAngka(p.stok_saat_ini)} pack
+                  </span>
                 </div>
-                <span className={`text-sm font-bold ${p.stok_saat_ini === 0 ? "text-red-500" : "text-gray-800"}`}>
-                  {formatAngka(p.stok_saat_ini)} pack
-                </span>
-              </div>
-            ))}
+              );
+              return (
+                <div key={brand}>
+                  <p className={`text-xs font-bold uppercase tracking-wider mb-1.5 ${brand === "cane" ? "text-amber-600" : "text-blue-600"}`}>
+                    {brandLabel}
+                  </p>
+                  {brand === "cane" ? (
+                    <div className="space-y-1">{items.map(renderRow)}</div>
+                  ) : (
+                    <>
+                      <p className="text-xs font-semibold text-gray-400 mb-1">Isi 5</p>
+                      <div className="space-y-1">{items.filter((p) => p.isi_per_pack === 5).map(renderRow)}</div>
+                      <div className="border-t border-gray-100 my-2" />
+                      <p className="text-xs font-semibold text-gray-400 mb-1">Isi 10</p>
+                      <div className="space-y-1">{items.filter((p) => p.isi_per_pack === 10).map(renderRow)}</div>
+                    </>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>

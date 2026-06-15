@@ -2,7 +2,8 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
-import { getUserSession, canAccessAdmin, hashPin, getRoleLabel } from "@/lib/auth";
+import { getUserSession, canAccessAdmin, hashPin, getRoleLabel, getScopeLabel } from "@/lib/auth";
+import { homeRoute, ROLE_OPTIONS, SCOPE_OPTIONS } from "@/lib/permissions";
 import { formatTanggalWaktu } from "@/lib/utils";
 import { Plus, X, Users, ShieldAlert, Pencil } from "lucide-react";
 
@@ -10,11 +11,10 @@ interface User {
   id: string;
   nama: string;
   role: string;
+  access_scope: string | null;
   aktif: boolean;
   created_at: string;
 }
-
-const ROLES = ["owner", "manager", "spv_pagi", "spv_siang", "staff"];
 
 export default function AdminUsersPage() {
   const router = useRouter();
@@ -23,72 +23,77 @@ export default function AdminUsersPage() {
   const [showForm, setShowForm] = useState(false);
   const [editUser, setEditUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(false);
-  const [pinError, setPinError] = useState("");
+  const [formError, setFormError] = useState("");
 
-  const [form, setForm] = useState({ nama: "", pin: "", pin_confirm: "", role: "staff" });
+  const [form, setForm] = useState({ nama: "", pin: "", pin_confirm: "", role: "spv", access_scope: "adonan_rendam" });
 
   useEffect(() => {
     if (!currentUser || !canAccessAdmin(currentUser.role)) {
-      router.replace("/dashboard");
+      router.replace(homeRoute(currentUser));
       return;
     }
     fetchUsers();
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function fetchUsers() {
-    const { data } = await supabase.from("users").select("id, nama, role, aktif, created_at").order("nama");
-    if (data) setUsers(data);
+    const { data } = await supabase.from("users").select("id, nama, role, access_scope, aktif, created_at").order("nama");
+    if (data) setUsers(data as User[]);
   }
 
   function openCreate() {
     setEditUser(null);
-    setForm({ nama: "", pin: "", pin_confirm: "", role: "staff" });
-    setPinError("");
+    setForm({ nama: "", pin: "", pin_confirm: "", role: "spv", access_scope: "adonan_rendam" });
+    setFormError("");
     setShowForm(true);
   }
 
   function openEdit(u: User) {
     setEditUser(u);
-    setForm({ nama: u.nama, pin: "", pin_confirm: "", role: u.role });
-    setPinError("");
+    setForm({ nama: u.nama, pin: "", pin_confirm: "", role: u.role, access_scope: u.access_scope ?? "adonan_rendam" });
+    setFormError("");
     setShowForm(true);
   }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setPinError("");
+    setFormError("");
 
-    if (!editUser) {
-      // Create: PIN wajib
+    // Validasi PIN
+    const pinRequired = !editUser;
+    if (pinRequired || form.pin) {
       if (form.pin.length !== 6 || !/^\d{6}$/.test(form.pin)) {
-        setPinError("PIN harus 6 digit angka");
+        setFormError("PIN harus 6 digit angka");
         return;
       }
       if (form.pin !== form.pin_confirm) {
-        setPinError("Konfirmasi PIN tidak cocok");
-        return;
-      }
-    } else if (form.pin) {
-      // Edit: PIN opsional, jika diisi harus valid
-      if (form.pin.length !== 6 || !/^\d{6}$/.test(form.pin)) {
-        setPinError("PIN harus 6 digit angka");
-        return;
-      }
-      if (form.pin !== form.pin_confirm) {
-        setPinError("Konfirmasi PIN tidak cocok");
+        setFormError("Konfirmasi PIN tidak cocok");
         return;
       }
     }
 
     setLoading(true);
 
-    if (!editUser) {
+    // Validasi PIN unik (jika PIN diisi)
+    if (form.pin) {
       const pinHash = await hashPin(form.pin);
-      await supabase.from("users").insert({ nama: form.nama, pin_hash: pinHash, role: form.role });
-    } else {
-      const updateData: Record<string, string> = { nama: form.nama, role: form.role };
-      if (form.pin) updateData.pin_hash = await hashPin(form.pin);
-      await supabase.from("users").update(updateData).eq("id", editUser.id);
+      const { data: clash } = await supabase.from("users").select("id, nama").eq("pin_hash", pinHash);
+      const conflict = (clash as { id: string; nama: string }[] | null)?.find((c) => c.id !== editUser?.id);
+      if (conflict) {
+        setLoading(false);
+        setFormError(`PIN sudah dipakai oleh ${conflict.nama}. Gunakan PIN lain.`);
+        return;
+      }
+
+      const scope = form.role === "spv" ? form.access_scope : null;
+      if (!editUser) {
+        await supabase.from("users").insert({ nama: form.nama, pin_hash: pinHash, role: form.role, access_scope: scope });
+      } else {
+        await supabase.from("users").update({ nama: form.nama, role: form.role, access_scope: scope, pin_hash: pinHash }).eq("id", editUser.id);
+      }
+    } else if (editUser) {
+      // Edit tanpa ubah PIN
+      const scope = form.role === "spv" ? form.access_scope : null;
+      await supabase.from("users").update({ nama: form.nama, role: form.role, access_scope: scope }).eq("id", editUser.id);
     }
 
     setLoading(false);
@@ -135,7 +140,12 @@ export default function AdminUsersPage() {
                 </div>
                 <div>
                   <p className="font-medium text-sm text-gray-800">{u.nama}</p>
-                  <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">{getRoleLabel(u.role)}</span>
+                  <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
+                    <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">{getRoleLabel(u.role)}</span>
+                    {getScopeLabel(u.access_scope) && (
+                      <span className="text-xs bg-amber-50 text-amber-700 px-2 py-0.5 rounded-full">{getScopeLabel(u.access_scope)}</span>
+                    )}
+                  </div>
                   <p className="text-xs text-gray-400 mt-0.5">{formatTanggalWaktu(u.created_at)}</p>
                 </div>
               </div>
@@ -173,18 +183,29 @@ export default function AdminUsersPage() {
               <div>
                 <label className="label">Role *</label>
                 <select className="input" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
-                  {ROLES.map((r) => (
-                    <option key={r} value={r}>{getRoleLabel(r)}</option>
+                  {ROLE_OPTIONS.map((r) => (
+                    <option key={r.value} value={r.value}>{r.label}</option>
                   ))}
                 </select>
               </div>
+
+              {/* Scope khusus SPV */}
+              {form.role === "spv" && (
+                <div>
+                  <label className="label">Akses SPV *</label>
+                  <select className="input" value={form.access_scope} onChange={(e) => setForm({ ...form, access_scope: e.target.value })}>
+                    {SCOPE_OPTIONS.map((s) => (
+                      <option key={s.value} value={s.value}>{s.label}</option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-gray-400 mt-1">Menentukan tab Produksi yang bisa diakses SPV ini.</p>
+                </div>
+              )}
+
               <div>
                 <label className="label">PIN 6 Digit {editUser && "(kosongkan jika tidak diubah)"}</label>
                 <input
-                  type="tel"
-                  inputMode="numeric"
-                  maxLength={6}
-                  pattern="\d{6}"
+                  type="tel" inputMode="numeric" maxLength={6} pattern="\d{6}"
                   className="input tracking-widest text-center text-lg font-bold"
                   required={!editUser}
                   value={form.pin}
@@ -195,9 +216,7 @@ export default function AdminUsersPage() {
               <div>
                 <label className="label">Konfirmasi PIN {editUser && "(isi jika PIN diubah)"}</label>
                 <input
-                  type="tel"
-                  inputMode="numeric"
-                  maxLength={6}
+                  type="tel" inputMode="numeric" maxLength={6}
                   className="input tracking-widest text-center text-lg font-bold"
                   required={!editUser || !!form.pin}
                   value={form.pin_confirm}
@@ -205,7 +224,7 @@ export default function AdminUsersPage() {
                   placeholder="••••••"
                 />
               </div>
-              {pinError && <p className="text-red-500 text-sm">{pinError}</p>}
+              {formError && <p className="text-red-500 text-sm">{formError}</p>}
               <div className="flex gap-2 pt-2">
                 <button type="button" onClick={() => setShowForm(false)} className="btn-secondary flex-1">Batal</button>
                 <button type="submit" disabled={loading} className="btn-primary flex-1">{loading ? "Menyimpan..." : "Simpan"}</button>
