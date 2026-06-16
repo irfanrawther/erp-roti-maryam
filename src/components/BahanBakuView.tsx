@@ -335,7 +335,7 @@ export default function BahanBakuView() {
                           <p className={`text-sm font-bold ${masuk ? "text-green-600" : "text-red-500"}`}>
                             {masuk ? "+" : "−"} {formatAngka(r.jumlah)} {r.satuan} — {r.bahan_baku?.nama}
                           </p>
-                          <p className="text-xs text-gray-500">{formatTanggal(r.tanggal)} · oleh {r.users?.nama}</p>
+                          <p className="text-xs text-gray-500">{formatTanggal(r.tanggal)} · Oleh: <span className="font-medium text-gray-600">{r.users?.nama ?? "—"}</span></p>
                           <p className="text-xs text-gray-300">{formatTanggalWaktu(r.created_at)}</p>
                         </div>
                         <span className={`text-xs px-2 py-0.5 rounded-full font-medium shrink-0 ml-3 ${masuk ? "bg-green-50 text-green-600" : "bg-red-50 text-red-500"}`}>
@@ -423,7 +423,7 @@ export default function BahanBakuView() {
                         dari <span className="font-medium">{r.label}</span>
                         {r.tanggal ? `, ${formatTanggal(r.tanggal)}` : ""}
                       </p>
-                      <p className="text-xs text-gray-400">oleh {r.namaUser} · {formatTanggalWaktu(r.created_at)}</p>
+                      <p className="text-xs text-gray-400">Oleh: <span className="font-medium text-gray-500">{r.namaUser || "—"}</span> · {formatTanggalWaktu(r.created_at)}</p>
                     </div>
                   ))}
             </div>
