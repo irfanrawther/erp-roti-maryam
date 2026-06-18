@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { getUserSession } from "@/lib/auth";
 import { formatAngka, formatTanggalWaktu, formatTanggal } from "@/lib/utils";
-import { Plus, Minus, X, History, Check, FlaskConical, ChevronLeft, ChevronRight, Calendar } from "lucide-react";
+import { Plus, Minus, X, History, Check, FlaskConical, ChevronLeft, ChevronRight, Calendar, SlidersHorizontal, Trash2, AlertCircle, CheckCircle2 } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────
 interface BahanBaku {
@@ -35,6 +35,18 @@ interface RiwayatPemakaian {
 }
 interface ProsesBikinRow {
   id: string; jumlah: number; satuan: string; keterangan: string; created_at: string;
+  bahan_baku: { nama: string };
+  users: { nama: string };
+}
+interface AdjustmentEntry {
+  id: string;
+  tipe: "sisa" | "over";
+  jumlah_adjustment: number;
+  satuan: string;
+  catatan: string | null;
+  jumlah_sebelum: number;
+  riwayat_id: string | null;
+  created_at: string;
   bahan_baku: { nama: string };
   users: { nama: string };
 }
@@ -126,7 +138,7 @@ function computeRange(preset: DatePreset, now: Date, customStart: string, custom
   }
 }
 
-type ActiveTab = "stok" | "riwayat" | "pemakaian";
+type ActiveTab = "stok" | "riwayat" | "pemakaian" | "adjustment";
 
 // ── BahanBakuView ─────────────────────────────────────────────
 // Konten penuh halaman Bahan Baku (sub-tabs + panel), tanpa wrapper
@@ -142,6 +154,17 @@ export default function BahanBakuView() {
   const [activeTab,        setActiveTab]        = useState<ActiveTab>("stok");
   const [filterRiwayatBahan,   setFilterRiwayatBahan]   = useState("");
   const [filterPemakaianBahan, setFilterPemakaianBahan] = useState("");
+
+  // Adjustment tab state
+  const [adjustments,  setAdjustments]  = useState<AdjustmentEntry[]>([]);
+  const [adjBahanId,   setAdjBahanId]   = useState("");
+  const [adjTipe,      setAdjTipe]      = useState<"sisa" | "over">("sisa");
+  const [adjJumlah,    setAdjJumlah]    = useState("");
+  const [adjSatuan,    setAdjSatuan]    = useState("");
+  const [adjCatatan,   setAdjCatatan]   = useState("");
+  const [adjLoading,   setAdjLoading]   = useState(false);
+  const [adjError,     setAdjError]     = useState("");
+  const [adjSuccess,   setAdjSuccess]   = useState("");
 
   // Date filter state
   const [preset,      setPreset]      = useState<DatePreset>("today");
@@ -162,12 +185,13 @@ export default function BahanBakuView() {
       .on("postgres_changes", { event:"*", schema:"public", table:"penerimaan_bahan_baku" }, fetchData)
       .on("postgres_changes", { event:"*", schema:"public", table:"bahan_baku" }, fetchData)
       .on("postgres_changes", { event:"*", schema:"public", table:"penggunaan_bahan" }, fetchData)
+      .on("postgres_changes", { event:"*", schema:"public", table:"adjustment_bahan_baku" }, fetchData)
       .subscribe();
     return () => { supabase.removeChannel(ch); };
   }, []);
 
   async function fetchData() {
-    const [bahanRes, riwayatRes, pemakaianRes, prosesBikinRes] = await Promise.all([
+    const [bahanRes, riwayatRes, pemakaianRes, prosesBikinRes, adjRes] = await Promise.all([
       supabase.from("bahan_baku").select("id,nama,satuan,stok_saat_ini,stok_minimum").eq("aktif", true),
       // Riwayat Penerimaan/Pengurangan: ambil semua, lalu exclude entri
       // produksi di sisi client (NULL-safe — filter .not(..like..) di PostgREST
@@ -187,11 +211,16 @@ export default function BahanBakuView() {
         .select("id,jumlah,satuan,keterangan,created_at,bahan_baku:bahan_baku_id(nama),users:created_by(nama)")
         .like("keterangan","proses_bikin::%")
         .order("created_at", { ascending: false }).limit(500),
+      // Adjustment history
+      supabase.from("adjustment_bahan_baku")
+        .select("id,tipe,jumlah_adjustment,satuan,catatan,jumlah_sebelum,riwayat_id,created_at,bahan_baku:bahan_baku_id(nama),users:created_by(nama)")
+        .order("created_at", { ascending: false }).limit(300),
     ]);
     if (bahanRes.data)       setBahanList(sortBahan(bahanRes.data));
     if (riwayatRes.data)     setRiwayat(riwayatRes.data as unknown as Riwayat[]);
     if (pemakaianRes.data)   setRiwayatPemakaian(pemakaianRes.data as unknown as RiwayatPemakaian[]);
     if (prosesBikinRes.data) setRiwayatProsesBikin(prosesBikinRes.data as unknown as ProsesBikinRow[]);
+    if (adjRes.data)         setAdjustments(adjRes.data as unknown as AdjustmentEntry[]);
   }
 
   async function submitTransaksi(bahanId: string, tipe: "masuk" | "keluar", jumlah: number, satuan: string): Promise<boolean> {
@@ -203,6 +232,92 @@ export default function BahanBakuView() {
     });
     if (!error) fetchData();
     return !error;
+  }
+
+  async function handleSaveAdjustment(e: React.FormEvent) {
+    e.preventDefault();
+    if (!user || !adjBahanId || !adjJumlah || !adjSatuan) return;
+    setAdjLoading(true);
+    setAdjError("");
+
+    const adj = parseFloat(adjJumlah);
+    if (adj <= 0) {
+      setAdjError("Jumlah harus lebih dari 0");
+      setAdjLoading(false);
+      return;
+    }
+
+    // Cari entri proses_bikin terakhir untuk bahan ini
+    const { data: lastEntry } = await supabase
+      .from("penerimaan_bahan_baku")
+      .select("id, jumlah, satuan, keterangan")
+      .eq("bahan_baku_id", adjBahanId)
+      .like("keterangan", "proses_bikin::%")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .single();
+
+    if (!lastEntry) {
+      setAdjError("Tidak ada riwayat pemakaian (Rendam) untuk bahan ini.");
+      setAdjLoading(false);
+      return;
+    }
+
+    const newJumlah = adjTipe === "sisa"
+      ? lastEntry.jumlah - adj
+      : lastEntry.jumlah + adj;
+
+    if (newJumlah <= 0) {
+      setAdjError(`Adjustment melebihi jumlah pemakaian terakhir (${lastEntry.jumlah} ${lastEntry.satuan}).`);
+      setAdjLoading(false);
+      return;
+    }
+
+    // Edit baris pemakaian (UPDATE trigger sinkronisasi stok)
+    const adjNote = ` | ${adjTipe === "sisa" ? "Sisa" : "Over"} ${adj}${adjSatuan} - Adj: ${user.nama}`;
+    const { error: updateErr } = await supabase
+      .from("penerimaan_bahan_baku")
+      .update({ jumlah: newJumlah, keterangan: lastEntry.keterangan + adjNote })
+      .eq("id", lastEntry.id);
+
+    if (updateErr) {
+      setAdjError("Gagal update riwayat: " + updateErr.message);
+      setAdjLoading(false);
+      return;
+    }
+
+    // Catat di tabel adjustment
+    await supabase.from("adjustment_bahan_baku").insert({
+      bahan_baku_id: adjBahanId,
+      tipe: adjTipe,
+      jumlah_adjustment: adj,
+      satuan: adjSatuan,
+      catatan: adjCatatan || null,
+      jumlah_sebelum: lastEntry.jumlah,
+      riwayat_id: lastEntry.id,
+      created_by: user.id,
+    });
+
+    setAdjJumlah(""); setAdjCatatan(""); setAdjSatuan("");
+    setAdjSuccess("Adjustment disimpan! Stok dan riwayat pemakaian diperbarui.");
+    setTimeout(() => setAdjSuccess(""), 4000);
+    setAdjLoading(false);
+    fetchData();
+  }
+
+  async function handleDeleteAdjustment(adj: AdjustmentEntry) {
+    if (!adj.riwayat_id) {
+      await supabase.from("adjustment_bahan_baku").delete().eq("id", adj.id);
+      fetchData();
+      return;
+    }
+    // Restore jumlah asli sebelum adjustment (UPDATE trigger sinkronisasi stok)
+    await supabase
+      .from("penerimaan_bahan_baku")
+      .update({ jumlah: adj.jumlah_sebelum })
+      .eq("id", adj.riwayat_id);
+    await supabase.from("adjustment_bahan_baku").delete().eq("id", adj.id);
+    fetchData();
   }
 
   // ── Derived filtered lists (recomputed every second for real-time presets) ──
@@ -242,7 +357,8 @@ export default function BahanBakuView() {
     ...riwayatProsesBikin.map((r): PemakaianEntry => {
       let label = "Proses Bikin";
       try {
-        const json = JSON.parse(r.keterangan.replace("proses_bikin::", ""));
+        const jsonStr = r.keterangan.replace("proses_bikin::", "").split(" | ")[0];
+        const json = JSON.parse(jsonStr);
         const brandLabels = PROSES_BIKIN_LABEL[json.brandKey] ?? {};
         label = brandLabels[json.varianKey] ?? `Proses Bikin ${json.varianKey ?? ""}`;
       } catch {}
@@ -264,6 +380,8 @@ export default function BahanBakuView() {
     (!filterPemakaianBahan || r.namaBahan.toLowerCase().includes(filterPemakaianBahan.toLowerCase()))
   );
 
+  const adjustmentFiltered = adjustments.filter((r) => inRange(r.created_at));
+
   function handlePreset(p: DatePreset) {
     setPreset(p);
     if (p !== "custom") {
@@ -273,9 +391,10 @@ export default function BahanBakuView() {
   }
 
   const TABS: { key: ActiveTab; label: string }[] = [
-    { key: "stok",      label: "Stok Saat Ini" },
-    { key: "riwayat",   label: "Riwayat Penerimaan/Pengurangan" },
-    { key: "pemakaian", label: "Riwayat Pemakaian" },
+    { key: "stok",       label: "Stok Saat Ini" },
+    { key: "riwayat",    label: "Riwayat" },
+    { key: "pemakaian",  label: "Pemakaian" },
+    { key: "adjustment", label: "Adjustment" },
   ];
 
   // Human-readable range label
@@ -439,6 +558,188 @@ export default function BahanBakuView() {
                       <p className="text-xs text-gray-400">Oleh: <span className="font-medium text-gray-500">{r.namaUser || "—"}</span> · {formatTanggalWaktu(r.created_at)}</p>
                     </div>
                   ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Tab: Adjustment ── */}
+      {activeTab === "adjustment" && (
+        <div className="space-y-3">
+          <DateRangeFilter
+            preset={preset} onPreset={handlePreset} now={now}
+            customStart={customStart} customEnd={customEnd}
+            onCustomStart={setCustomStart} onCustomEnd={setCustomEnd}
+            rangeLabel={rangeLabel()}
+          />
+
+          {/* Form input adjustment */}
+          <div className="card space-y-3">
+            <div className="flex items-center gap-2 mb-1">
+              <SlidersHorizontal size={15} className="text-amber-500" />
+              <span className="font-semibold text-gray-700 text-sm">Input Adjustment</span>
+            </div>
+
+            <form onSubmit={handleSaveAdjustment} className="space-y-3">
+              {/* Pilih Bahan */}
+              <div>
+                <label className="label">Pilih Bahan Baku</label>
+                <select required className="input" value={adjBahanId} onChange={(e) => setAdjBahanId(e.target.value)}>
+                  <option value="">-- Pilih bahan --</option>
+                  {bahanList.map((b) => (
+                    <option key={b.id} value={b.id}>{b.nama}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Tipe Adjustment */}
+              <div>
+                <label className="label">Tipe Adjustment</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setAdjTipe("sisa")}
+                    className={`py-2.5 px-3 rounded-xl border-2 text-sm font-semibold transition-all ${
+                      adjTipe === "sisa"
+                        ? "border-green-500 bg-green-50 text-green-700"
+                        : "border-gray-200 bg-white text-gray-500 hover:border-green-300"
+                    }`}
+                  >
+                    <span className="block text-lg mb-0.5">↑</span>
+                    Sisa / Waste
+                    <span className="block text-[10px] font-normal mt-0.5 opacity-70">Pakai lebih sedikit → stok naik</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAdjTipe("over")}
+                    className={`py-2.5 px-3 rounded-xl border-2 text-sm font-semibold transition-all ${
+                      adjTipe === "over"
+                        ? "border-red-500 bg-red-50 text-red-700"
+                        : "border-gray-200 bg-white text-gray-500 hover:border-red-300"
+                    }`}
+                  >
+                    <span className="block text-lg mb-0.5">↓</span>
+                    Over
+                    <span className="block text-[10px] font-normal mt-0.5 opacity-70">Pakai lebih banyak → stok turun</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Jumlah + Satuan */}
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="label">Jumlah</label>
+                  <input
+                    type="number" step="0.01" min="0.01" required
+                    className="input text-center"
+                    placeholder="0"
+                    value={adjJumlah}
+                    onChange={(e) => setAdjJumlah(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="label">Satuan</label>
+                  <select required className="input" value={adjSatuan} onChange={(e) => setAdjSatuan(e.target.value)}>
+                    <option value="">Pilih</option>
+                    {SATUAN_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              {/* Catatan */}
+              <div>
+                <label className="label">Catatan (opsional)</label>
+                <textarea
+                  className="input resize-none"
+                  rows={2}
+                  placeholder="Mis: sisa rendam batch pagi..."
+                  value={adjCatatan}
+                  onChange={(e) => setAdjCatatan(e.target.value)}
+                />
+              </div>
+
+              {/* Info box */}
+              {adjBahanId && adjJumlah && adjSatuan && (
+                <div className={`rounded-xl p-3 text-xs ${adjTipe === "sisa" ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"}`}>
+                  {adjTipe === "sisa"
+                    ? `Sisa ${adjJumlah} ${adjSatuan} → riwayat pemakaian berkurang ${adjJumlah} ${adjSatuan}, stok naik ${adjJumlah} ${adjSatuan}`
+                    : `Over ${adjJumlah} ${adjSatuan} → riwayat pemakaian bertambah ${adjJumlah} ${adjSatuan}, stok turun ${adjJumlah} ${adjSatuan}`}
+                </div>
+              )}
+
+              {adjError && (
+                <div className="flex items-center gap-2 bg-red-50 text-red-600 rounded-xl p-3 text-sm">
+                  <AlertCircle size={15} className="shrink-0" />
+                  {adjError}
+                </div>
+              )}
+              {adjSuccess && (
+                <div className="flex items-center gap-2 bg-green-50 text-green-700 rounded-xl p-3 text-sm">
+                  <CheckCircle2 size={15} className="shrink-0" />
+                  {adjSuccess}
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={adjLoading || !adjBahanId || !adjJumlah || !adjSatuan}
+                className="btn-primary w-full disabled:opacity-40"
+              >
+                {adjLoading ? "Menyimpan..." : "Simpan Adjustment"}
+              </button>
+            </form>
+          </div>
+
+          {/* Riwayat Adjustment */}
+          <div className="card">
+            <div className="flex items-center gap-2 mb-3">
+              <History size={14} className="text-gray-400" />
+              <span className="text-sm font-medium text-gray-600">
+                Riwayat Adjustment ({adjustmentFiltered.length} data)
+              </span>
+            </div>
+            <div className="space-y-2">
+              {adjustmentFiltered.length === 0
+                ? <p className="text-gray-400 text-sm text-center py-4">Belum ada adjustment dalam rentang ini</p>
+                : adjustmentFiltered.map((a) => {
+                    const isSisa = a.tipe === "sisa";
+                    return (
+                      <div key={a.id} className={`rounded-xl border p-3 ${isSisa ? "border-green-100 bg-green-50/40" : "border-red-100 bg-red-50/40"}`}>
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${isSisa ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>
+                                {isSisa ? "↑ Sisa" : "↓ Over"}
+                              </span>
+                              <span className="text-sm font-semibold text-gray-800">
+                                {formatAngka(a.jumlah_adjustment)} {a.satuan}
+                              </span>
+                              <span className="text-sm text-gray-600">— {a.bahan_baku?.nama}</span>
+                            </div>
+                            <p className="text-xs text-gray-500 mt-1">
+                              Sebelum: <span className="font-medium">{formatAngka(a.jumlah_sebelum)} {a.satuan}</span>
+                              {" → "}
+                              Sesudah: <span className="font-medium">
+                                {formatAngka(isSisa ? a.jumlah_sebelum - a.jumlah_adjustment : a.jumlah_sebelum + a.jumlah_adjustment)} {a.satuan}
+                              </span>
+                            </p>
+                            {a.catatan && <p className="text-xs text-gray-400 mt-0.5 italic">&ldquo;{a.catatan}&rdquo;</p>}
+                            <p className="text-xs text-gray-400 mt-0.5">
+                              Oleh: <span className="font-medium text-gray-500">{a.users?.nama ?? "—"}</span> · {formatTanggalWaktu(a.created_at)}
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteAdjustment(a)}
+                            className="p-1.5 text-gray-300 hover:text-red-400 hover:bg-red-50 rounded-lg shrink-0 transition-colors"
+                            title="Hapus & kembalikan perubahan"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
             </div>
           </div>
         </div>
