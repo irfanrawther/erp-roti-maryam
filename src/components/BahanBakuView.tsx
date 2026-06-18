@@ -58,7 +58,7 @@ const PROSES_BIKIN_LABEL: Record<string, Record<string, string>> = {
   mehana: { original:"Mehana Original", cokelat:"Mehana Cokelat", keju:"Mehana Keju" },
 };
 
-const SATUAN_OPTIONS = ["Kg", "Liter", "Pcs"];
+const SATUAN_OPTIONS = ["ml", "gr", "kg", "liter", "pcs"];
 const URUTAN_BAHAN = [
   "Terigu","Minyak","Garam","Gula","Air",
   "Margarine Menara","Mesis Innova","Keju Calf",

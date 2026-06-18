@@ -44,8 +44,8 @@ const BAHAN_MEHANA: string[] = [
   "Terigu", "Garam", "Gula", "Air",
   "Minyak Resep", "Minyak Rendam",
 ];
-const SATUAN_CANE   = ["gr", "ml", "L", "Kg", "Pcs"];
-const SATUAN_MEHANA = ["gr", "ml", "L", "Kg"];
+const SATUAN_CANE   = ["ml", "gr", "kg", "liter", "pcs"];
+const SATUAN_MEHANA = ["ml", "gr", "kg", "liter"];
 
 const CANE_GROUPS = [
   { key: "original",      label: "Original",      bahan: BAHAN_CANE_REGULAR, matchVarian: (v: string) => v === "Original" },
