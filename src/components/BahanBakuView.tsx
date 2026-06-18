@@ -12,8 +12,20 @@ interface BahanBaku {
 }
 interface Riwayat {
   id: string; tipe: "masuk" | "keluar"; jumlah: number; satuan: string;
-  tanggal: string; created_at: string;
+  tanggal: string; created_at: string; keterangan: string | null;
   bahan_baku: { nama: string }; users: { nama: string };
+}
+
+// Entri otomatis dari produksi (bukan penyesuaian stok manual).
+// Dipakai untuk memisahkan tab "Riwayat Penerimaan/Pengurangan" (manual)
+// dari "Riwayat Pemakaian". NULL keterangan = entri manual.
+function isProduksiEntry(keterangan: string | null): boolean {
+  if (!keterangan) return false;
+  return (
+    keterangan.startsWith("Produksi batch") ||
+    keterangan.startsWith("Restore") ||
+    keterangan.startsWith("proses_bikin::")
+  );
 }
 interface RiwayatPemakaian {
   id: string; jumlah_digunakan: number; satuan: string; created_at: string;
@@ -157,12 +169,11 @@ export default function BahanBakuView() {
   async function fetchData() {
     const [bahanRes, riwayatRes, pemakaianRes, prosesBikinRes] = await Promise.all([
       supabase.from("bahan_baku").select("id,nama,satuan,stok_saat_ini,stok_minimum").eq("aktif", true),
-      // Riwayat Penerimaan/Pengurangan: exclude semua activity produksi
+      // Riwayat Penerimaan/Pengurangan: ambil semua, lalu exclude entri
+      // produksi di sisi client (NULL-safe — filter .not(..like..) di PostgREST
+      // membuang baris keterangan NULL, yaitu entri manual).
       supabase.from("penerimaan_bahan_baku")
         .select("id,tipe,jumlah,satuan,tanggal,created_at,keterangan,bahan_baku:bahan_baku_id(nama),users:created_by(nama)")
-        .not("keterangan","like","Produksi batch%")
-        .not("keterangan","like","Restore dari%")
-        .not("keterangan","like","proses_bikin::%")
         .order("created_at", { ascending: false }).limit(500),
       // Riwayat Pemakaian sumber 1: Produksi Adonan (penggunaan_bahan)
       supabase.from("penggunaan_bahan")
@@ -188,6 +199,7 @@ export default function BahanBakuView() {
     const { error } = await supabase.from("penerimaan_bahan_baku").insert({
       bahan_baku_id: bahanId, jumlah, satuan, tipe,
       tanggal: localDateStr(new Date()), created_by: user.id,
+      keterangan: tipe === "masuk" ? "Tambah stok manual" : "Kurang stok manual",
     });
     if (!error) fetchData();
     return !error;
@@ -202,6 +214,7 @@ export default function BahanBakuView() {
   }
 
   const riwayatFiltered = riwayat.filter((r) =>
+    !isProduksiEntry(r.keterangan) &&   // sembunyikan entri otomatis produksi
     inRange(r.created_at) &&
     (!filterRiwayatBahan || r.bahan_baku?.nama?.toLowerCase().includes(filterRiwayatBahan.toLowerCase()))
   );
