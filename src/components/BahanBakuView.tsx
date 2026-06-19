@@ -584,7 +584,7 @@ export default function BahanBakuView() {
               {/* Pilih Bahan */}
               <div>
                 <label className="label">Pilih Bahan Baku</label>
-                <select required className="input" value={adjBahanId} onChange={(e) => setAdjBahanId(e.target.value)}>
+                <select required className="input" value={adjBahanId} onChange={(e) => { setAdjBahanId(e.target.value); setAdjSatuan(""); }}>
                   <option value="">-- Pilih bahan --</option>
                   {bahanList.map((b) => (
                     <option key={b.id} value={b.id}>{b.nama}</option>
@@ -606,7 +606,7 @@ export default function BahanBakuView() {
                     }`}
                   >
                     <span className="block text-lg mb-0.5">↑</span>
-                    Sisa / Waste
+                    Sisa
                     <span className="block text-[10px] font-normal mt-0.5 opacity-70">Pakai lebih sedikit → stok naik</span>
                   </button>
                   <button
