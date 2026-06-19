@@ -200,7 +200,7 @@ export default function BahanBakuView() {
     if (!user) return false;
     const { error } = await supabase.from("penerimaan_bahan_baku").insert({
       bahan_baku_id: bahanId, jumlah, satuan, tipe,
-      tanggal: localDateStr(new Date()), created_by: user.id,
+      tanggal: new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" }), created_by: user.id,
       keterangan: tipe === "masuk" ? "Tambah stok manual" : "Kurang stok manual",
     });
     if (!error) fetchData();
@@ -406,20 +406,6 @@ export default function BahanBakuView() {
     { key: "adjustment", label: "Adjustment" },
   ];
 
-  // Human-readable range label
-  function rangeLabel() {
-    const fmt = (dt: string) => {
-      const d = new Date(dt);
-      const pad = (n: number) => String(n).padStart(2, "0");
-      return `${pad(d.getDate())} ${["Jan","Feb","Mar","Apr","Mei","Jun","Jul","Agu","Sep","Okt","Nov","Des"][d.getMonth()]} ${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-    };
-    if (preset === "yesterday") {
-      const yest = addDays(now, -1);
-      return `${localDateStr(yest)} 00:00:00 s/d 23:59:59`;
-    }
-    if (preset === "custom") return `${customStart} 00:00:00 s/d ${customEnd} 23:59:59`;
-    return `${fmt(start)} s/d ${fmt(end)}`;
-  }
 
   return (
     <div className="space-y-4">
