@@ -3,7 +3,8 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { getUserSession } from "@/lib/auth";
 import { formatAngka, formatTanggalWaktu, formatTanggal } from "@/lib/utils";
-import { Plus, Minus, X, History, Check, FlaskConical, ChevronLeft, ChevronRight, Calendar, SlidersHorizontal, Trash2, AlertCircle, CheckCircle2, RotateCcw } from "lucide-react";
+import { Plus, Minus, X, History, Check, FlaskConical, ChevronLeft, ChevronRight, Calendar, SlidersHorizontal, Trash2, AlertCircle, CheckCircle2, RotateCcw, TrendingDown, TrendingUp } from "lucide-react";
+import { RiwayatFilter, getRiwayatRange, type RiwayatPreset } from "@/components/RiwayatFilter";
 
 // ── Types ─────────────────────────────────────────────────────
 interface BahanBaku {
@@ -13,6 +14,7 @@ interface BahanBaku {
 interface Riwayat {
   id: string; tipe: "masuk" | "keluar"; jumlah: number; satuan: string;
   tanggal: string; created_at: string; keterangan: string | null;
+  bahan_baku_id: string;
   bahan_baku: { nama: string }; users: { nama: string };
 }
 
@@ -170,8 +172,17 @@ export default function BahanBakuView() {
   const [riwayatPemakaian,  setRiwayatPemakaian]  = useState<RiwayatPemakaian[]>([]);
   const [riwayatProsesBikin,setRiwayatProsesBikin] = useState<ProsesBikinRow[]>([]);
   const [activeTab,        setActiveTab]        = useState<ActiveTab>("stok");
-  const [filterRiwayatBahan,   setFilterRiwayatBahan]   = useState("");
   const [filterPemakaianBahan, setFilterPemakaianBahan] = useState("");
+
+  // Riwayat tab — filter state (pakai RiwayatFilter dengan Pilih Bulan)
+  const [rPreset,       setRPreset]       = useState<RiwayatPreset>("hari_ini");
+  const [rCustomStart,  setRCustomStart]  = useState("");
+  const [rCustomEnd,    setRCustomEnd]    = useState("");
+  const [rSelectedBulan, setRSelectedBulan] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  });
+  const [rBahanId, setRBahanId] = useState(""); // "" = semua bahan
 
   // Adjustment tab state
   const [adjustments,  setAdjustments]  = useState<AdjustmentEntry[]>([]);
@@ -215,7 +226,7 @@ export default function BahanBakuView() {
       // produksi di sisi client (NULL-safe — filter .not(..like..) di PostgREST
       // membuang baris keterangan NULL, yaitu entri manual).
       supabase.from("penerimaan_bahan_baku")
-        .select("id,tipe,jumlah,satuan,tanggal,created_at,keterangan,bahan_baku:bahan_baku_id(nama),users:created_by(nama)")
+        .select("id,tipe,jumlah,satuan,tanggal,created_at,keterangan,bahan_baku_id,bahan_baku:bahan_baku_id(nama),users:created_by(nama)")
         .order("created_at", { ascending: false }).limit(500),
       // Riwayat Pemakaian sumber 1: Produksi Adonan (penggunaan_bahan)
       supabase.from("penggunaan_bahan")
@@ -353,19 +364,26 @@ export default function BahanBakuView() {
     fetchData();
   }
 
-  // ── Derived filtered lists (recomputed every second for real-time presets) ──
+  // ── Derived filtered lists ──────────────────────────────────
+  // Untuk pemakaian & adjustment: pakai datetime comparison (existing)
   const { start, end } = computeRange(preset, now, customStart, customEnd);
-
   function inRange(createdAt: string) {
     const localTs = utcToLocal(createdAt);
     return localTs >= start && localTs <= end;
   }
 
-  const riwayatFiltered = riwayat.filter((r) =>
-    !isProduksiEntry(r.keterangan) &&   // sembunyikan entri otomatis produksi
-    inRange(r.created_at) &&
-    (!filterRiwayatBahan || r.bahan_baku?.nama?.toLowerCase().includes(filterRiwayatBahan.toLowerCase()))
-  );
+  // Untuk riwayat: pakai date-only comparison dengan WIB timezone (via getRiwayatRange)
+  function toWIBDate(utcStr: string): string {
+    return new Date(utcStr).toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" });
+  }
+  const rRange = getRiwayatRange(rPreset, rCustomStart, rCustomEnd, rSelectedBulan);
+  const riwayatFiltered = riwayat.filter((r) => {
+    if (isProduksiEntry(r.keterangan)) return false;
+    const d = toWIBDate(r.created_at);
+    if (d < rRange.start || d > rRange.end) return false;
+    if (rBahanId && r.bahan_baku_id !== rBahanId) return false;
+    return true;
+  });
 
   // ── Merge Produksi Adonan + Proses Bikin → unified PemakaianEntry ──
   const allPemakaian: PemakaianEntry[] = [
@@ -428,7 +446,11 @@ export default function BahanBakuView() {
     setPreset("today");
     setCustomStart(localDateStr(new Date()));
     setCustomEnd(localDateStr(new Date()));
-    setFilterRiwayatBahan("");
+    // Riwayat tab filter
+    setRPreset("hari_ini");
+    setRCustomStart("");
+    setRCustomEnd("");
+    setRBahanId("");
     setFilterPemakaianBahan("");
     setAdjBahanId("");
     setAdjTipe("sisa");
@@ -493,18 +515,66 @@ export default function BahanBakuView() {
       {/* ── Tab: Riwayat Penerimaan/Pengurangan ── */}
       {activeTab === "riwayat" && (
         <div className="space-y-3">
-          <DateRangeFilter
-            preset={preset} onPreset={handlePreset} now={now}
-            customStart={customStart} customEnd={customEnd}
-            onCustomStart={setCustomStart} onCustomEnd={setCustomEnd}
-            rangeLabel={rangeLabel()}
+          {/* Filter: date range (RiwayatFilter) + bahan dropdown */}
+          <RiwayatFilter
+            preset={rPreset} onPreset={setRPreset}
+            customStart={rCustomStart} customEnd={rCustomEnd}
+            onCustomStart={setRCustomStart} onCustomEnd={setRCustomEnd}
+            selectedBulan={rSelectedBulan} onBulan={setRSelectedBulan}
           />
           <div className="card">
-            <div className="flex items-center gap-2 mb-3">
-              <label className="text-xs text-gray-500 shrink-0">Cari bahan:</label>
-              <input className="input text-sm py-1.5 flex-1" placeholder="Nama bahan..."
-                value={filterRiwayatBahan} onChange={(e) => setFilterRiwayatBahan(e.target.value)} />
+            <div className="flex items-center gap-2">
+              <label className="text-xs text-gray-500 shrink-0">Bahan Baku:</label>
+              <select className="input text-sm py-1.5 flex-1" value={rBahanId} onChange={(e) => setRBahanId(e.target.value)}>
+                <option value="">Semua Bahan</option>
+                {bahanList.map((b) => <option key={b.id} value={b.id}>{b.nama}</option>)}
+              </select>
             </div>
+          </div>
+
+          {/* Summary card */}
+          {riwayatFiltered.length > 0 && (() => {
+            const byBahan: Record<string, { masuk: number; keluar: number; satuan: string }> = {};
+            for (const r of riwayatFiltered) {
+              const nm = r.bahan_baku?.nama ?? "?";
+              if (!byBahan[nm]) byBahan[nm] = { masuk: 0, keluar: 0, satuan: r.satuan };
+              if (r.tipe === "masuk") byBahan[nm].masuk += r.jumlah;
+              else byBahan[nm].keluar += r.jumlah;
+            }
+            const sorted = Object.entries(byBahan).sort((a, b) => {
+              const ia = URUTAN_BAHAN.indexOf(a[0]), ib = URUTAN_BAHAN.indexOf(b[0]);
+              return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+            });
+            return (
+              <div className="bg-gray-900 rounded-xl p-3 space-y-1.5">
+                <p className="text-xs font-bold text-amber-400 uppercase tracking-wide mb-2">
+                  ═ Ringkasan Penerimaan & Pengurangan
+                </p>
+                {sorted.map(([nama, { masuk, keluar, satuan }]) => (
+                  <div key={nama} className="space-y-0.5">
+                    <p className="text-xs font-semibold text-gray-300">{nama}</p>
+                    <div className="flex gap-4 pl-2">
+                      {masuk > 0 && (
+                        <div className="flex items-center gap-1">
+                          <TrendingUp size={10} className="text-green-400" />
+                          <span className="text-xs text-green-400">{formatAngka(masuk)} {satuan}</span>
+                        </div>
+                      )}
+                      {keluar > 0 && (
+                        <div className="flex items-center gap-1">
+                          <TrendingDown size={10} className="text-red-400" />
+                          <span className="text-xs text-red-400">{formatAngka(keluar)} {satuan}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
+
+          {/* Riwayat list */}
+          <div className="card">
             <div className="flex items-center gap-2 mb-3">
               <History size={14} className="text-gray-400" />
               <span className="text-sm font-medium text-gray-600">
@@ -522,11 +592,13 @@ export default function BahanBakuView() {
                           <p className={`text-sm font-bold ${masuk ? "text-green-600" : "text-red-500"}`}>
                             {masuk ? "+" : "−"} {formatAngka(r.jumlah)} {r.satuan} — {r.bahan_baku?.nama}
                           </p>
-                          <p className="text-xs text-gray-500">{formatTanggal(r.tanggal)} · Oleh: <span className="font-medium text-gray-600">{r.users?.nama ?? "—"}</span></p>
+                          <p className="text-xs text-gray-500">
+                            {formatTanggal(r.tanggal)} · Oleh: <span className="font-medium text-gray-600">{r.users?.nama ?? "—"}</span>
+                          </p>
                           <p className="text-xs text-gray-300">{formatTanggalWaktu(r.created_at)}</p>
                         </div>
                         <span className={`text-xs px-2 py-0.5 rounded-full font-medium shrink-0 ml-3 ${masuk ? "bg-green-50 text-green-600" : "bg-red-50 text-red-500"}`}>
-                          {masuk ? "Masuk" : "Keluar"}
+                          {masuk ? "Penerimaan" : "Pengurangan"}
                         </span>
                       </div>
                     );
