@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { getUserSession } from "@/lib/auth";
 import { formatAngka, formatTanggalWaktu, formatTanggal } from "@/lib/utils";
-import { Plus, Minus, X, History, Check, FlaskConical, ChevronLeft, ChevronRight, Calendar, SlidersHorizontal, Trash2, AlertCircle, CheckCircle2, RotateCcw, TrendingDown, TrendingUp } from "lucide-react";
+import { Plus, Minus, X, History, Check, FlaskConical, SlidersHorizontal, Trash2, AlertCircle, CheckCircle2, RotateCcw, TrendingDown, TrendingUp } from "lucide-react";
 import { RiwayatFilter, getRiwayatRange, type RiwayatPreset } from "@/components/RiwayatFilter";
 
 // ── Types ─────────────────────────────────────────────────────
@@ -86,59 +86,6 @@ function sortBahan<T extends { nama: string }>(list: T[]): T[] {
   });
 }
 
-// ── Datetime helpers (local timezone) ────────────────────────
-// Format a Date → "YYYY-MM-DDTHH:MM:SS" in LOCAL timezone
-function localDT(d: Date): string {
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-}
-
-// Start of a given local date (00:00:00)
-function startOfDay(d: Date): Date {
-  const r = new Date(d); r.setHours(0, 0, 0, 0); return r;
-}
-// End of a given local date (23:59:59)
-function endOfDay(d: Date): Date {
-  const r = new Date(d); r.setHours(23, 59, 59, 999); return r;
-}
-// Offset a date by N days
-function addDays(d: Date, n: number): Date {
-  const r = new Date(d); r.setDate(r.getDate() + n); return r;
-}
-
-// Convert a UTC ISO string from Supabase → local "YYYY-MM-DDTHH:MM:SS"
-function utcToLocal(utcStr: string): string {
-  return localDT(new Date(utcStr));
-}
-
-// "YYYY-MM-DD" from a local Date
-function localDateStr(d: Date): string {
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
-}
-
-type DatePreset = "today" | "yesterday" | "7days" | "30days" | "custom";
-
-// Compute start/end local datetime strings for each preset (needs "now")
-function computeRange(preset: DatePreset, now: Date, customStart: string, customEnd: string): { start: string; end: string } {
-  switch (preset) {
-    case "today":
-      return { start: localDT(startOfDay(now)), end: localDT(now) };
-    case "yesterday": {
-      const yest = addDays(now, -1);
-      return { start: localDT(startOfDay(yest)), end: localDT(endOfDay(yest)) };
-    }
-    case "7days":
-      return { start: localDT(startOfDay(addDays(now, -6))), end: localDT(now) };
-    case "30days":
-      return { start: localDT(startOfDay(addDays(now, -29))), end: localDT(now) };
-    case "custom":
-      return {
-        start: customStart ? `${customStart}T00:00:00` : localDT(startOfDay(now)),
-        end:   customEnd   ? `${customEnd}T23:59:59`   : localDT(endOfDay(now)),
-      };
-  }
-}
 
 type ActiveTab = "stok" | "riwayat" | "pemakaian" | "adjustment";
 
@@ -195,17 +142,14 @@ export default function BahanBakuView() {
   const [adjError,     setAdjError]     = useState("");
   const [adjSuccess,   setAdjSuccess]   = useState("");
 
-  // Date filter state
-  const [preset,      setPreset]      = useState<DatePreset>("today");
-  const [customStart, setCustomStart] = useState(localDateStr(new Date()));
-  const [customEnd,   setCustomEnd]   = useState(localDateStr(new Date()));
-
-  // Real-time clock — ticks every second
-  const [now, setNow] = useState(new Date());
-  useEffect(() => {
-    const id = setInterval(() => setNow(new Date()), 1000);
-    return () => clearInterval(id);
-  }, []);
+  // Date filter state — shared by pemakaian & adjustment tabs
+  const [preset,        setPreset]        = useState<RiwayatPreset>("hari_ini");
+  const [customStart,   setCustomStart]   = useState("");
+  const [customEnd,     setCustomEnd]     = useState("");
+  const [selectedBulan, setSelectedBulan] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  });
 
   // ── Fetch ────────────────────────────────────────────────
   useEffect(() => {
@@ -365,17 +309,12 @@ export default function BahanBakuView() {
   }
 
   // ── Derived filtered lists ──────────────────────────────────
-  // Untuk pemakaian & adjustment: pakai datetime comparison (existing)
-  const { start, end } = computeRange(preset, now, customStart, customEnd);
-  function inRange(createdAt: string) {
-    const localTs = utcToLocal(createdAt);
-    return localTs >= start && localTs <= end;
-  }
-
-  // Untuk riwayat: pakai date-only comparison dengan WIB timezone (via getRiwayatRange)
+  // Date-only comparison via WIB timezone (used by all 3 filter tabs)
   function toWIBDate(utcStr: string): string {
     return new Date(utcStr).toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" });
   }
+
+  // Riwayat tab
   const rRange = getRiwayatRange(rPreset, rCustomStart, rCustomEnd, rSelectedBulan);
   const riwayatFiltered = riwayat.filter((r) => {
     if (isProduksiEntry(r.keterangan)) return false;
@@ -384,6 +323,9 @@ export default function BahanBakuView() {
     if (rBahanId && r.bahan_baku_id !== rBahanId) return false;
     return true;
   });
+
+  // Pemakaian & Adjustment tabs
+  const paRange = getRiwayatRange(preset, customStart, customEnd, selectedBulan);
 
   // ── Merge Produksi Adonan + Proses Bikin → unified PemakaianEntry ──
   const allPemakaian: PemakaianEntry[] = [
@@ -426,26 +368,22 @@ export default function BahanBakuView() {
     }),
   ].sort((a, b) => b.created_at.localeCompare(a.created_at)); // terbaru di atas
 
-  const pemakaianFiltered = allPemakaian.filter((r) =>
-    inRange(r.created_at) &&
-    (!filterPemakaianBahan || r.namaBahan.toLowerCase().includes(filterPemakaianBahan.toLowerCase()))
-  );
+  const pemakaianFiltered = allPemakaian.filter((r) => {
+    const d = toWIBDate(r.created_at);
+    if (d < paRange.start || d > paRange.end) return false;
+    if (filterPemakaianBahan && !r.namaBahan.toLowerCase().includes(filterPemakaianBahan.toLowerCase())) return false;
+    return true;
+  });
 
-  const adjustmentFiltered = adjustments.filter((r) => inRange(r.created_at));
-
-  function handlePreset(p: DatePreset) {
-    setPreset(p);
-    if (p !== "custom") {
-      setCustomStart(localDateStr(new Date()));
-      setCustomEnd(localDateStr(new Date()));
-    }
-  }
+  const adjustmentFiltered = adjustments.filter((r) => {
+    const d = toWIBDate(r.created_at);
+    return d >= paRange.start && d <= paRange.end;
+  });
 
   function handleReset() {
     setActiveTab("stok");
-    setPreset("today");
-    setCustomStart(localDateStr(new Date()));
-    setCustomEnd(localDateStr(new Date()));
+    setPreset("hari_ini");
+    setCustomStart(""); setCustomEnd("");
     // Riwayat tab filter
     setRPreset("hari_ini");
     setRCustomStart("");
@@ -611,11 +549,11 @@ export default function BahanBakuView() {
       {/* ── Tab: Riwayat Pemakaian ── */}
       {activeTab === "pemakaian" && (
         <div className="space-y-3">
-          <DateRangeFilter
-            preset={preset} onPreset={handlePreset} now={now}
+          <RiwayatFilter
+            preset={preset} onPreset={setPreset}
             customStart={customStart} customEnd={customEnd}
             onCustomStart={setCustomStart} onCustomEnd={setCustomEnd}
-            rangeLabel={rangeLabel()}
+            selectedBulan={selectedBulan} onBulan={setSelectedBulan}
           />
           {/* Grand Total panel — gabungan Produksi + Proses Bikin */}
           {pemakaianFiltered.length > 0 && (() => {
@@ -693,11 +631,11 @@ export default function BahanBakuView() {
       {/* ── Tab: Adjustment ── */}
       {activeTab === "adjustment" && (
         <div className="space-y-3">
-          <DateRangeFilter
-            preset={preset} onPreset={handlePreset} now={now}
+          <RiwayatFilter
+            preset={preset} onPreset={setPreset}
             customStart={customStart} customEnd={customEnd}
             onCustomStart={setCustomStart} onCustomEnd={setCustomEnd}
-            rangeLabel={rangeLabel()}
+            selectedBulan={selectedBulan} onBulan={setSelectedBulan}
           />
 
           {/* Form input adjustment */}
@@ -881,136 +819,6 @@ export default function BahanBakuView() {
   );
 }
 
-// ── DateRangeFilter ───────────────────────────────────────────
-const PRESET_OPTS: { key: DatePreset; label: string }[] = [
-  { key: "today",     label: "Hari ini" },
-  { key: "yesterday", label: "Kemarin" },
-  { key: "7days",     label: "7 Hari" },
-  { key: "30days",    label: "1 Bulan" },
-  { key: "custom",    label: "Custom" },
-];
-
-function DateRangeFilter({
-  preset, onPreset, now,
-  customStart, customEnd, onCustomStart, onCustomEnd,
-  rangeLabel,
-}: {
-  preset: DatePreset; onPreset: (p: DatePreset) => void; now: Date;
-  customStart: string; customEnd: string;
-  onCustomStart: (v: string) => void; onCustomEnd: (v: string) => void;
-  rangeLabel: string;
-}) {
-  return (
-    <div className="card space-y-3">
-      {/* Preset chips */}
-      <div className="flex items-center gap-1.5 flex-wrap">
-        <Calendar size={14} className="text-gray-400 shrink-0" />
-        {PRESET_OPTS.map((opt) => (
-          <button key={opt.key} onClick={() => onPreset(opt.key)}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-              preset === opt.key
-                ? "bg-amber-500 text-white"
-                : "bg-gray-100 text-gray-600 hover:bg-amber-100 hover:text-amber-700"
-            }`}>
-            {opt.label}
-          </button>
-        ))}
-      </div>
-
-      {/* Active range info */}
-      <div className="flex items-center gap-1.5">
-        <span className={`text-xs font-medium ${preset === "today" || preset === "7days" || preset === "30days" ? "text-amber-600" : "text-gray-500"}`}>
-          {preset === "today" || preset === "7days" || preset === "30days"
-            ? "⏱ " + rangeLabel
-            : rangeLabel}
-        </span>
-      </div>
-
-      {/* Custom range — dua kalender berdampingan */}
-      {preset === "custom" && (
-        <div className="grid grid-cols-2 gap-3 pt-2 border-t border-gray-100">
-          <div>
-            <p className="text-xs font-semibold text-gray-500 mb-1.5">Tanggal Mulai</p>
-            <MiniCalendar value={customStart} onChange={onCustomStart} maxDate={customEnd} />
-          </div>
-          <div>
-            <p className="text-xs font-semibold text-gray-500 mb-1.5">Tanggal Akhir</p>
-            <MiniCalendar value={customEnd} onChange={onCustomEnd} minDate={customStart} />
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── MiniCalendar ─────────────────────────────────────────────
-const HARI_MINI  = ["S","S","R","K","J","S","M"];
-const NAMA_BULAN_ID = ["Januari","Februari","Maret","April","Mei","Juni","Juli","Agustus","September","Oktober","November","Desember"];
-
-function MiniCalendar({ value, onChange, minDate, maxDate }: {
-  value: string; onChange: (v: string) => void;
-  minDate?: string; maxDate?: string;
-}) {
-  const initDate = value ? new Date(value + "T00:00:00") : new Date();
-  const [viewYear,  setViewYear]  = useState(initDate.getFullYear());
-  const [viewMonth, setViewMonth] = useState(initDate.getMonth());
-
-  const selected = value ? new Date(value + "T00:00:00") : null;
-
-  function prevMonth() { if (viewMonth === 0) { setViewMonth(11); setViewYear(y => y-1); } else setViewMonth(m => m-1); }
-  function nextMonth() { if (viewMonth === 11) { setViewMonth(0); setViewYear(y => y+1); } else setViewMonth(m => m+1); }
-
-  const firstOffset = (new Date(viewYear, viewMonth, 1).getDay() + 6) % 7;
-  const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
-  const cells: (number | null)[] = [...Array(firstOffset).fill(null), ...Array.from({length: daysInMonth}, (_, i) => i+1)];
-
-  function toDateStr(day: number) {
-    return `${viewYear}-${String(viewMonth+1).padStart(2,"0")}-${String(day).padStart(2,"0")}`;
-  }
-  function isSelected(day: number) {
-    return selected !== null && selected.getDate() === day && selected.getMonth() === viewMonth && selected.getFullYear() === viewYear;
-  }
-  function isToday(day: number) { return toDateStr(day) === localDateStr(new Date()); }
-  function isDisabled(day: number) {
-    const s = toDateStr(day);
-    return (!!minDate && s < minDate) || (!!maxDate && s > maxDate);
-  }
-
-  return (
-    <div className="bg-gray-50 rounded-xl border border-gray-200 p-2.5 select-none">
-      <div className="flex items-center justify-between mb-2">
-        <button type="button" onClick={prevMonth} className="p-1 rounded-lg hover:bg-gray-200 text-gray-400 transition-colors">
-          <ChevronLeft size={14} />
-        </button>
-        <span className="text-xs font-bold text-gray-700">
-          {NAMA_BULAN_ID[viewMonth].slice(0,3)} {viewYear}
-        </span>
-        <button type="button" onClick={nextMonth} className="p-1 rounded-lg hover:bg-gray-200 text-gray-400 transition-colors">
-          <ChevronRight size={14} />
-        </button>
-      </div>
-      <div className="grid grid-cols-7 mb-0.5">
-        {HARI_MINI.map((h, i) => (
-          <p key={i} className="text-center text-[10px] font-semibold text-gray-400 py-0.5">{h}</p>
-        ))}
-      </div>
-      <div className="grid grid-cols-7 gap-y-0.5">
-        {cells.map((day, i) =>
-          day === null ? <div key={`e-${i}`} /> : (
-            <button key={day} type="button"
-              disabled={isDisabled(day)}
-              onClick={() => onChange(toDateStr(day))}
-              className={`text-center text-[11px] py-1 rounded-md font-medium transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
-                isSelected(day) ? "bg-amber-500 text-white" :
-                isToday(day)    ? "bg-amber-100 text-amber-700" :
-                "hover:bg-white text-gray-700"
-              }`}>{day}</button>
-          )
-        )}
-      </div>
-    </div>
-  );
-}
 
 // ── Stok awal referensi (nilai reset terakhir migration 020) ──
 const STOK_AWAL: Record<string, number> = {
