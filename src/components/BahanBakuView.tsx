@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { getUserSession } from "@/lib/auth";
 import { formatAngka, formatTanggalWaktu, formatTanggal } from "@/lib/utils";
-import { Plus, Minus, X, History, Check, FlaskConical, ChevronLeft, ChevronRight, Calendar, SlidersHorizontal, Trash2, AlertCircle, CheckCircle2 } from "lucide-react";
+import { Plus, Minus, X, History, Check, FlaskConical, ChevronLeft, ChevronRight, Calendar, SlidersHorizontal, Trash2, AlertCircle, CheckCircle2, RotateCcw } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────
 interface BahanBaku {
@@ -390,6 +390,22 @@ export default function BahanBakuView() {
     }
   }
 
+  function handleReset() {
+    setActiveTab("stok");
+    setPreset("today");
+    setCustomStart(localDateStr(new Date()));
+    setCustomEnd(localDateStr(new Date()));
+    setFilterRiwayatBahan("");
+    setFilterPemakaianBahan("");
+    setAdjBahanId("");
+    setAdjTipe("sisa");
+    setAdjJumlah("");
+    setAdjSatuan("");
+    setAdjCatatan("");
+    setAdjError("");
+    setAdjSuccess("");
+  }
+
   const TABS: { key: ActiveTab; label: string }[] = [
     { key: "stok",       label: "Stok Saat Ini" },
     { key: "riwayat",    label: "Riwayat" },
@@ -414,16 +430,22 @@ export default function BahanBakuView() {
 
   return (
     <div className="space-y-4">
-      {/* Tabs */}
-      <div className="flex bg-white rounded-xl border border-gray-100 p-1 gap-1">
-        {TABS.map((tab) => (
-          <button key={tab.key} onClick={() => setActiveTab(tab.key)}
-            className={`flex-1 py-2 rounded-lg text-xs font-medium transition-colors ${
-              activeTab === tab.key ? "bg-amber-500 text-white" : "text-gray-600 hover:bg-gray-50"
-            }`}>
-            {tab.label}
-          </button>
-        ))}
+      {/* Tabs + Reset button */}
+      <div className="flex items-center gap-2">
+        <div className="flex bg-white rounded-xl border border-gray-100 p-1 gap-1 flex-1">
+          {TABS.map((tab) => (
+            <button key={tab.key} onClick={() => setActiveTab(tab.key)}
+              className={`flex-1 py-2 rounded-lg text-xs font-medium transition-colors ${
+                activeTab === tab.key ? "bg-amber-500 text-white" : "text-gray-600 hover:bg-gray-50"
+              }`}>
+              {tab.label}
+            </button>
+          ))}
+        </div>
+        <button type="button" onClick={handleReset}
+          className="flex items-center gap-1 text-xs font-semibold px-2.5 py-2 rounded-lg bg-red-100 text-red-600 hover:bg-red-200 transition-colors shrink-0">
+          <RotateCcw size={11} /> Reset
+        </button>
       </div>
 
       {/* ── Tab: Stok ── */}
