@@ -382,6 +382,7 @@ export default function BahanBakuView() {
   });
 
   function handleReset() {
+    if (!confirm("Reset semua filter dan form input?\nData di database tidak akan dihapus.")) return;
     // Pemakaian & Adjustment filter
     setPreset("hari_ini");
     setCustomStart(""); setCustomEnd("");
