@@ -119,6 +119,7 @@ export default function BahanBakuView() {
   const [riwayatPemakaian,  setRiwayatPemakaian]  = useState<RiwayatPemakaian[]>([]);
   const [riwayatProsesBikin,setRiwayatProsesBikin] = useState<ProsesBikinRow[]>([]);
   const [activeTab,        setActiveTab]        = useState<ActiveTab>("stok");
+  const [resetKey,         setResetKey]         = useState(0);
   const [filterPemakaianBahan, setFilterPemakaianBahan] = useState("");
 
   // Riwayat tab — filter state (pakai RiwayatFilter dengan Pilih Bulan)
@@ -401,6 +402,8 @@ export default function BahanBakuView() {
     setAdjCatatan("");
     setAdjError("");
     setAdjSuccess("");
+    // Remount semua BahanCard (reset local state input form)
+    setResetKey(k => k + 1);
     // Kembali ke tab Stok & refresh data
     setActiveTab("stok");
     fetchData();
@@ -438,7 +441,7 @@ export default function BahanBakuView() {
       {activeTab === "stok" && (
         <div className="card">
           <div className="space-y-2">
-            {bahanList.map((b) => <BahanCard key={b.id} bahan={b} onSubmit={submitTransaksi} />)}
+            {bahanList.map((b) => <BahanCard key={`${b.id}-${resetKey}`} bahan={b} onSubmit={submitTransaksi} />)}
           </div>
         </div>
       )}
