@@ -381,15 +381,19 @@ export default function BahanBakuView() {
   });
 
   function handleReset() {
-    setActiveTab("stok");
+    // Pemakaian & Adjustment filter
     setPreset("hari_ini");
     setCustomStart(""); setCustomEnd("");
-    // Riwayat tab filter
+    const thisMonth = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`; })();
+    setSelectedBulan(thisMonth);
+    // Riwayat filter
     setRPreset("hari_ini");
-    setRCustomStart("");
-    setRCustomEnd("");
+    setRCustomStart(""); setRCustomEnd("");
+    setRSelectedBulan(thisMonth);
     setRBahanId("");
+    // Pemakaian search
     setFilterPemakaianBahan("");
+    // Adjustment form
     setAdjBahanId("");
     setAdjTipe("sisa");
     setAdjJumlah("");
@@ -397,6 +401,9 @@ export default function BahanBakuView() {
     setAdjCatatan("");
     setAdjError("");
     setAdjSuccess("");
+    // Kembali ke tab Stok & refresh data
+    setActiveTab("stok");
+    fetchData();
   }
 
   const TABS: { key: ActiveTab; label: string }[] = [
