@@ -140,6 +140,24 @@ function computeRange(preset: DatePreset, now: Date, customStart: string, custom
 
 type ActiveTab = "stok" | "riwayat" | "pemakaian" | "adjustment";
 
+// Konversi satuan ke base unit (kg / liter / pcs) untuk perbandingan lintas satuan.
+// gr→kg, ml→liter, selainnya tetap.
+type BaseUnit = "kg" | "liter" | "pcs" | "unknown";
+function toBase(value: number, satuan: string): { value: number; base: BaseUnit } {
+  switch (satuan.toLowerCase()) {
+    case "gr":    return { value: value / 1000, base: "kg" };
+    case "kg":    return { value,               base: "kg" };
+    case "ml":    return { value: value / 1000, base: "liter" };
+    case "liter": return { value,               base: "liter" };
+    case "pcs":   return { value,               base: "pcs" };
+    default:      return { value,               base: "unknown" };
+  }
+}
+// Apakah dua satuan kompatibel (bisa dibandingkan / dijumlahkan)?
+function unitCompatible(a: string, b: string): boolean {
+  return toBase(0, a).base === toBase(0, b).base;
+}
+
 // ── BahanBakuView ─────────────────────────────────────────────
 // Konten penuh halaman Bahan Baku (sub-tabs + panel), tanpa wrapper
 // halaman/judul — dipakai standalone di route /bahan-baku dan
@@ -263,15 +281,30 @@ export default function BahanBakuView() {
       return;
     }
 
-    const newJumlah = adjTipe === "sisa"
-      ? lastEntry.jumlah - adj
-      : lastEntry.jumlah + adj;
-
-    if (newJumlah <= 0) {
-      setAdjError(`Adjustment melebihi jumlah pemakaian terakhir (${lastEntry.jumlah} ${lastEntry.satuan}).`);
+    // Konversi adj ke satuan yang sama dengan lastEntry (mis. gr→kg)
+    if (!unitCompatible(adjSatuan, lastEntry.satuan)) {
+      setAdjError(`Satuan tidak kompatibel: ${adjSatuan} vs ${lastEntry.satuan} (bahan ini tercatat dalam ${lastEntry.satuan}).`);
       setAdjLoading(false);
       return;
     }
+    const adjInBase  = toBase(adj, adjSatuan).value;
+    const lastInBase = toBase(lastEntry.jumlah, lastEntry.satuan).value;
+
+    const newBase = adjTipe === "sisa" ? lastInBase - adjInBase : lastInBase + adjInBase;
+    if (newBase <= 0) {
+      setAdjError(`Adjustment melebihi jumlah pemakaian terakhir (${lastEntry.jumlah} ${lastEntry.satuan} = ${lastInBase.toFixed(4)} base unit).`);
+      setAdjLoading(false);
+      return;
+    }
+
+    // Simpan kembali dalam satuan asli lastEntry
+    const baseToLastUnit = (v: number) => {
+      const s = lastEntry.satuan.toLowerCase();
+      if (s === "gr") return v * 1000;
+      if (s === "ml") return v * 1000;
+      return v;
+    };
+    const newJumlah = baseToLastUnit(newBase);
 
     // Edit baris pemakaian (UPDATE trigger sinkronisasi stok)
     const adjNote = ` | ${adjTipe === "sisa" ? "Sisa" : "Over"} ${adj}${adjSatuan} - Adj: ${user.nama}`;
@@ -680,14 +713,20 @@ export default function BahanBakuView() {
                 />
               </div>
 
-              {/* Info box */}
-              {adjBahanId && adjJumlah && adjSatuan && (
-                <div className={`rounded-xl p-3 text-xs ${adjTipe === "sisa" ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"}`}>
-                  {adjTipe === "sisa"
-                    ? `Sisa ${adjJumlah} ${adjSatuan} → riwayat pemakaian berkurang ${adjJumlah} ${adjSatuan}, stok naik ${adjJumlah} ${adjSatuan}`
-                    : `Over ${adjJumlah} ${adjSatuan} → riwayat pemakaian bertambah ${adjJumlah} ${adjSatuan}, stok turun ${adjJumlah} ${adjSatuan}`}
-                </div>
-              )}
+              {/* Info box — tampilkan juga ekuivalen satuan base */}
+              {adjBahanId && adjJumlah && adjSatuan && (() => {
+                const adjVal = parseFloat(adjJumlah) || 0;
+                const { value: adjBase, base } = toBase(adjVal, adjSatuan);
+                const showEq = (adjSatuan.toLowerCase() === "gr" || adjSatuan.toLowerCase() === "ml") && adjVal > 0;
+                const eqLabel = showEq ? ` (= ${adjBase.toFixed(4).replace(/\.?0+$/, "")} ${base})` : "";
+                return (
+                  <div className={`rounded-xl p-3 text-xs ${adjTipe === "sisa" ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"}`}>
+                    {adjTipe === "sisa"
+                      ? `Sisa ${adjJumlah} ${adjSatuan}${eqLabel} → pemakaian berkurang, stok naik`
+                      : `Over ${adjJumlah} ${adjSatuan}${eqLabel} → pemakaian bertambah, stok turun`}
+                  </div>
+                );
+              })()}
 
               {adjError && (
                 <div className="flex items-center gap-2 bg-red-50 text-red-600 rounded-xl p-3 text-sm">
