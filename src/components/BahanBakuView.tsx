@@ -1,9 +1,10 @@
 "use client";
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { supabase } from "@/lib/supabase";
-import { getUserSession } from "@/lib/auth";
+import { getUserSession, canAccessAdmin } from "@/lib/auth";
 import { formatAngka, formatTanggalWaktu, formatTanggal } from "@/lib/utils";
-import { Plus, Minus, X, History, Check, FlaskConical, SlidersHorizontal, Trash2, AlertCircle, CheckCircle2, RotateCcw, TrendingDown, TrendingUp } from "lucide-react";
+import { Plus, Minus, X, History, Check, FlaskConical, SlidersHorizontal, Trash2, AlertCircle, CheckCircle2, RotateCcw, TrendingDown, TrendingUp, Pencil } from "lucide-react";
 import { RiwayatFilter, getRiwayatRange, type RiwayatPreset } from "@/components/RiwayatFilter";
 
 // ── Types ─────────────────────────────────────────────────────
@@ -21,22 +22,27 @@ interface Riwayat {
 // Entri otomatis dari produksi (bukan penyesuaian stok manual).
 // Dipakai untuk memisahkan tab "Riwayat Penerimaan/Pengurangan" (manual)
 // dari "Riwayat Pemakaian". NULL keterangan = entri manual.
-function isProduksiEntry(keterangan: string | null): boolean {
+// Keterangan yang bersifat internal/otomatis — disembunyikan dari tab Riwayat.
+// Riwayat hanya menampilkan penerimaan manual dari supplier / stok koreksi.
+function isInternalEntry(keterangan: string | null): boolean {
   if (!keterangan) return false;
   return (
     keterangan.startsWith("Produksi batch") ||
     keterangan.startsWith("Restore") ||
-    keterangan.startsWith("proses_bikin::")
+    keterangan.startsWith("proses_bikin::") ||
+    keterangan.startsWith("Sisa dari") ||
+    keterangan.startsWith("Over dari") ||
+    keterangan.startsWith("Batal adj")
   );
 }
 interface RiwayatPemakaian {
-  id: string; jumlah_digunakan: number; satuan: string; created_at: string;
+  id: string; bahan_baku_id: string; jumlah_digunakan: number; satuan: string; created_at: string;
   bahan_baku: { nama: string };
   batch_produksi: { tanggal_produksi: string; produk_sku: { nama_brand: string; varian: string }; };
   users: { nama: string };
 }
 interface ProsesBikinRow {
-  id: string; jumlah: number; satuan: string; keterangan: string; created_at: string;
+  id: string; bahan_baku_id: string; jumlah: number; satuan: string; keterangan: string; created_at: string;
   bahan_baku: { nama: string };
   users: { nama: string };
 }
@@ -57,11 +63,12 @@ interface AdjustmentEntry {
 interface PemakaianEntry {
   id: string;
   sumber: "produksi" | "proses_bikin";
+  bahanId: string;
   namaBahan: string;
   jumlah: number;
   satuan: string;
   created_at: string;
-  label: string;       // e.g. "Cane Original" atau "Produksi Batch"
+  label: string;
   tanggal?: string;
   namaUser: string;
 }
@@ -87,7 +94,7 @@ function sortBahan<T extends { nama: string }>(list: T[]): T[] {
 }
 
 
-type ActiveTab = "stok" | "riwayat" | "pemakaian" | "adjustment";
+type ActiveTab = "stok" | "riwayat" | "pemakaian";
 
 // Konversi satuan ke base unit (kg / liter / pcs) untuk perbandingan lintas satuan.
 // gr→kg, ml→liter, selainnya tetap.
@@ -107,12 +114,29 @@ function unitCompatible(a: string, b: string): boolean {
   return toBase(0, a).base === toBase(0, b).base;
 }
 
+// ── Stok default (baseline) per bahan baku ─────────────────────
+const STOK_AWAL: Record<string, number> = {
+  "Terigu":              500,
+  "Minyak":              500,
+  "Garam":                25,
+  "Gula":                 50,
+  "Air":                 190,
+  "Margarine Menara":    100,
+  "Mesis Innova":        100,
+  "Keju Calf":            32,
+  "Margarine Blue Band":  50,
+  "Mesis Tulip":          50,
+  "Keju Kraft Martabak":  16,
+  "Baking Powder":         1,
+  "Telur":               225,
+  "Tepung Gandum":         5,
+  "Butter Hollmann":       1,
+};
+
 // ── BahanBakuView ─────────────────────────────────────────────
-// Konten penuh halaman Bahan Baku (sub-tabs + panel), tanpa wrapper
-// halaman/judul — dipakai standalone di route /bahan-baku dan
-// sebagai tab di dalam halaman Packing & Freezer.
 export default function BahanBakuView() {
-  const user = getUserSession();
+  const [user, setUser] = useState<ReturnType<typeof getUserSession>>(null);
+  useEffect(() => { setUser(getUserSession()); }, []);
 
   const [bahanList,        setBahanList]        = useState<BahanBaku[]>([]);
   const [riwayat,           setRiwayat]           = useState<Riwayat[]>([]);
@@ -120,6 +144,10 @@ export default function BahanBakuView() {
   const [riwayatProsesBikin,setRiwayatProsesBikin] = useState<ProsesBikinRow[]>([]);
   const [activeTab,        setActiveTab]        = useState<ActiveTab>("stok");
   const [resetKey,         setResetKey]         = useState(0);
+  const [showResetModal,   setShowResetModal]   = useState(false);
+  const [showResyncModal,  setShowResyncModal]  = useState(false);
+  const [resyncLoading,    setResyncLoading]    = useState(false);
+  const [resyncResult,     setResyncResult]     = useState<string | null>(null);
   const [filterPemakaianBahan, setFilterPemakaianBahan] = useState("");
 
   // Riwayat tab — filter state (pakai RiwayatFilter dengan Pilih Bulan)
@@ -132,16 +160,16 @@ export default function BahanBakuView() {
   });
   const [rBahanId, setRBahanId] = useState(""); // "" = semua bahan
 
-  // Adjustment tab state
+  // Adjustment inline (per-row in Riwayat tab)
   const [adjustments,  setAdjustments]  = useState<AdjustmentEntry[]>([]);
-  const [adjBahanId,   setAdjBahanId]   = useState("");
+  const [editRowId,    setEditRowId]    = useState<string | null>(null);
   const [adjTipe,      setAdjTipe]      = useState<"sisa" | "over">("sisa");
   const [adjJumlah,    setAdjJumlah]    = useState("");
   const [adjSatuan,    setAdjSatuan]    = useState("");
   const [adjCatatan,   setAdjCatatan]   = useState("");
   const [adjLoading,   setAdjLoading]   = useState(false);
   const [adjError,     setAdjError]     = useState("");
-  const [adjSuccess,   setAdjSuccess]   = useState("");
+  const [adjSuccess,   setAdjSuccess]   = useState<string | null>(null);
 
   // Date filter state — shared by pemakaian & adjustment tabs
   const [preset,        setPreset]        = useState<RiwayatPreset>("hari_ini");
@@ -175,14 +203,14 @@ export default function BahanBakuView() {
         .order("created_at", { ascending: false }).limit(500),
       // Riwayat Pemakaian sumber 1: Produksi Adonan (penggunaan_bahan)
       supabase.from("penggunaan_bahan")
-        .select(`id,jumlah_digunakan,satuan,created_at,
+        .select(`id,bahan_baku_id,jumlah_digunakan,satuan,created_at,
           bahan_baku:bahan_baku_id(nama),
           batch_produksi:batch_produksi_id(tanggal_produksi,produk_sku:produk_sku_id(nama_brand,varian)),
           users:created_by(nama)`)
         .order("created_at", { ascending: false }).limit(500),
       // Riwayat Pemakaian sumber 2: Proses Bikin (penerimaan_bahan_baku tipe keluar proses_bikin)
       supabase.from("penerimaan_bahan_baku")
-        .select("id,jumlah,satuan,keterangan,created_at,bahan_baku:bahan_baku_id(nama),users:created_by(nama)")
+        .select("id,bahan_baku_id,jumlah,satuan,keterangan,created_at,bahan_baku:bahan_baku_id(nama),users:created_by(nama)")
         .like("keterangan","proses_bikin::%")
         .order("created_at", { ascending: false }).limit(500),
       // Adjustment history
@@ -208,89 +236,177 @@ export default function BahanBakuView() {
     return !error;
   }
 
-  async function handleSaveAdjustment(e: React.FormEvent) {
-    e.preventDefault();
-    if (!user || !adjBahanId || !adjJumlah || !adjSatuan) return;
+  async function setStokLangsung(bahanId: string, nilai: number): Promise<boolean> {
+    const { error } = await supabase.from("bahan_baku").update({ stok_saat_ini: nilai }).eq("id", bahanId);
+    if (!error) fetchData();
+    return !error;
+  }
+
+  function openEditPemakaian(entry: PemakaianEntry) {
+    setEditRowId(entry.id);
+    setAdjTipe("sisa");
+    setAdjJumlah("");
+    // Default ke "gr" atau "ml" agar user bisa input angka kecil yang intuitif.
+    // Entry disimpan dalam Kg/Liter (sudah base), jadi default "gr"/"ml" lebih mudah.
+    const eBase = entry.satuan.toLowerCase();
+    const defaultSatuan =
+      eBase === "kg" || eBase === "gr"       ? "gr"
+      : eBase === "liter" || eBase === "ml"  ? "ml"
+      : eBase;
+    setAdjSatuan(defaultSatuan);
+    setAdjCatatan("");
+    setAdjError("");
+    setAdjSuccess(null);
+  }
+
+  async function handleSaveAdjForRow(row: Riwayat) {
+    if (!user || !adjJumlah || !adjSatuan) return;
     setAdjLoading(true);
     setAdjError("");
 
     const adj = parseFloat(adjJumlah);
-    if (adj <= 0) {
+    if (adj <= 0) { setAdjError("Jumlah harus lebih dari 0"); setAdjLoading(false); return; }
+
+    if (!unitCompatible(adjSatuan, row.satuan)) {
+      setAdjError(`Satuan tidak kompatibel: ${adjSatuan} vs ${row.satuan}.`);
+      setAdjLoading(false);
+      return;
+    }
+
+    const adjInBase  = toBase(adj, adjSatuan).value;
+    const rowInBase  = toBase(row.jumlah, row.satuan).value;
+    const newBase    = adjTipe === "sisa" ? rowInBase - adjInBase : rowInBase + adjInBase;
+    if (newBase <= 0) {
+      setAdjError(`Adjustment melebihi jumlah entry (${row.jumlah} ${row.satuan}).`);
+      setAdjLoading(false);
+      return;
+    }
+
+    // Konversi balik ke satuan asli row
+    const baseToRowUnit = (v: number) => {
+      const s = row.satuan.toLowerCase();
+      return (s === "gr" || s === "ml") ? v * 1000 : v;
+    };
+    const newJumlah = baseToRowUnit(newBase);
+    const adjNote   = ` | ${adjTipe === "sisa" ? "Sisa" : "Over"} ${adj}${adjSatuan} - Adj: ${user.nama}`;
+
+    const { error: updateErr } = await supabase
+      .from("penerimaan_bahan_baku")
+      .update({ jumlah: newJumlah, keterangan: (row.keterangan ?? "") + adjNote })
+      .eq("id", row.id);
+    if (updateErr) { setAdjError("Gagal update: " + updateErr.message); setAdjLoading(false); return; }
+
+    await supabase.from("adjustment_bahan_baku").insert({
+      bahan_baku_id: row.bahan_baku_id,
+      tipe: adjTipe,
+      jumlah_adjustment: adj,
+      satuan: adjSatuan,
+      catatan: adjCatatan || null,
+      jumlah_sebelum: row.jumlah,
+      riwayat_id: row.id,
+      created_by: user.id,
+    });
+
+    setAdjSuccess("Tersimpan!");
+    setAdjLoading(false);
+    setEditRowId(null);
+    fetchData();
+  }
+
+  // Hitung preview adjustment sebelum/sesudah simpan — juga dipanggil dari render.
+  function calcPemakaianAdj(entry: PemakaianEntry, adj: number, sat: string, tipe: "sisa" | "over") {
+    if (!adj || adj <= 0 || !sat || !unitCompatible(sat, entry.satuan)) return null;
+    const adjBase   = toBase(adj, sat);
+    const entryBase = toBase(entry.jumlah, entry.satuan);
+    const newBase   = tipe === "sisa" ? entryBase.value - adjBase.value : entryBase.value + adjBase.value;
+    if (tipe === "sisa" && newBase <= 0) return null;
+    // Konversi balik ke satuan asli entry — bulatkan 6 desimal untuk hindari floating point noise
+    const s = entry.satuan.toLowerCase();
+    const newJumlah = parseFloat(((s === "gr" || s === "ml") ? newBase * 1000 : newBase).toFixed(6));
+    const insertJumlah = parseFloat(adjBase.value.toFixed(6));
+    const insertSatuan = adjBase.base !== "unknown" ? adjBase.base : sat;
+    return { newJumlah, insertJumlah, insertSatuan };
+  }
+
+  async function handleSaveAdjForPemakaian(entry: PemakaianEntry) {
+    if (!user || !adjJumlah || !adjSatuan) return;
+    setAdjLoading(true);
+    setAdjError("");
+
+    const adj = parseFloat(adjJumlah);
+    if (isNaN(adj) || adj <= 0) {
       setAdjError("Jumlah harus lebih dari 0");
       setAdjLoading(false);
       return;
     }
 
-    // Cari entri proses_bikin terakhir untuk bahan ini
-    const { data: lastEntry } = await supabase
-      .from("penerimaan_bahan_baku")
-      .select("id, jumlah, satuan, keterangan")
-      .eq("bahan_baku_id", adjBahanId)
-      .like("keterangan", "proses_bikin::%")
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .single();
-
-    if (!lastEntry) {
-      setAdjError("Tidak ada riwayat pemakaian (Rendam) untuk bahan ini.");
+    if (!unitCompatible(adjSatuan, entry.satuan)) {
+      setAdjError(`Satuan tidak kompatibel: ${adjSatuan} vs ${entry.satuan}. Gunakan satuan yang sama jenis (gr/kg atau ml/liter).`);
       setAdjLoading(false);
       return;
     }
 
-    // Konversi adj ke satuan yang sama dengan lastEntry (mis. gr→kg)
-    if (!unitCompatible(adjSatuan, lastEntry.satuan)) {
-      setAdjError(`Satuan tidak kompatibel: ${adjSatuan} vs ${lastEntry.satuan} (bahan ini tercatat dalam ${lastEntry.satuan}).`);
-      setAdjLoading(false);
-      return;
-    }
-    const adjInBase  = toBase(adj, adjSatuan).value;
-    const lastInBase = toBase(lastEntry.jumlah, lastEntry.satuan).value;
-
-    const newBase = adjTipe === "sisa" ? lastInBase - adjInBase : lastInBase + adjInBase;
-    if (newBase <= 0) {
-      setAdjError(`Adjustment melebihi jumlah pemakaian terakhir (${lastEntry.jumlah} ${lastEntry.satuan} = ${lastInBase.toFixed(4)} base unit).`);
+    const calc = calcPemakaianAdj(entry, adj, adjSatuan, adjTipe);
+    if (!calc) {
+      setAdjError(adjTipe === "sisa"
+        ? `Jumlah sisa (${adj} ${adjSatuan}) melebihi atau sama dengan total pemakaian (${entry.jumlah} ${entry.satuan}).`
+        : "Nilai tidak valid.");
       setAdjLoading(false);
       return;
     }
 
-    // Simpan kembali dalam satuan asli lastEntry
-    const baseToLastUnit = (v: number) => {
-      const s = lastEntry.satuan.toLowerCase();
-      if (s === "gr") return v * 1000;
-      if (s === "ml") return v * 1000;
-      return v;
-    };
-    const newJumlah = baseToLastUnit(newBase);
+    const { newJumlah, insertJumlah, insertSatuan } = calc;
+    const actualId = entry.id.replace(/^(prod|pb)-/, "");
 
-    // Edit baris pemakaian (UPDATE trigger sinkronisasi stok)
-    const adjNote = ` | ${adjTipe === "sisa" ? "Sisa" : "Over"} ${adj}${adjSatuan} - Adj: ${user.nama}`;
-    const { error: updateErr } = await supabase
-      .from("penerimaan_bahan_baku")
-      .update({ jumlah: newJumlah, keterangan: lastEntry.keterangan + adjNote })
-      .eq("id", lastEntry.id);
-
-    if (updateErr) {
-      setAdjError("Gagal update riwayat: " + updateErr.message);
-      setAdjLoading(false);
-      return;
-    }
-
-    // Catat di tabel adjustment
-    await supabase.from("adjustment_bahan_baku").insert({
-      bahan_baku_id: adjBahanId,
-      tipe: adjTipe,
-      jumlah_adjustment: adj,
-      satuan: adjSatuan,
-      catatan: adjCatatan || null,
-      jumlah_sebelum: lastEntry.jumlah,
-      riwayat_id: lastEntry.id,
-      created_by: user.id,
+    // RPC atomic: staleness check (row lock) + UPDATE source + INSERT kompensasi stok
+    // dalam satu DB transaction — menjamin stok SELALU sinkron dengan pemakaian.
+    const { data: rpcResult, error: rpcError } = await supabase.rpc("apply_pemakaian_adj", {
+      p_sumber:          entry.sumber,
+      p_source_id:       actualId,
+      p_expected_jumlah: entry.jumlah,
+      p_new_jumlah:      newJumlah,
+      p_bahan_baku_id:   entry.bahanId,
+      p_adj_jumlah:      insertJumlah,
+      p_adj_satuan:      insertSatuan,
+      p_adj_tipe:        adjTipe,
+      p_keterangan:      `${adjTipe === "sisa" ? "Sisa" : "Over"} dari ${entry.label} | Adj: ${user.nama}`,
+      p_user_id:         user.id,
     });
 
-    setAdjJumlah(""); setAdjCatatan(""); setAdjSatuan("");
-    setAdjSuccess("Adjustment disimpan! Stok dan riwayat pemakaian diperbarui.");
-    setTimeout(() => setAdjSuccess(""), 4000);
+    if (rpcError) {
+      setAdjError("Gagal menyimpan: " + rpcError.message);
+      setAdjLoading(false);
+      return;
+    }
+
+    const result = rpcResult as { ok: boolean; code?: string; message?: string; current_jumlah?: number; prev_jumlah?: number };
+    if (!result.ok) {
+      if (result.code === "STALE") {
+        setAdjError(
+          `${result.message} (nilai terbaru: ${result.current_jumlah} ${entry.satuan})`
+        );
+      } else {
+        setAdjError(result.message ?? "Gagal menyimpan.");
+      }
+      setAdjLoading(false);
+      return;
+    }
+
+    // Audit trail: INSERT ke adjustment_bahan_baku dari client (butuh RLS auth context)
+    await supabase.from("adjustment_bahan_baku").insert({
+      bahan_baku_id:     entry.bahanId,
+      tipe:              adjTipe,
+      jumlah_adjustment: adj,
+      satuan:            adjSatuan,
+      catatan:           adjCatatan || null,
+      jumlah_sebelum:    result.prev_jumlah ?? entry.jumlah,
+      riwayat_id:        actualId,
+      created_by:        user.id,
+    });
+
+    setAdjSuccess(`Tersimpan! Pemakaian: ${entry.jumlah} → ${newJumlah} ${entry.satuan}`);
     setAdjLoading(false);
+    setEditRowId(null);
     fetchData();
   }
 
@@ -318,7 +434,7 @@ export default function BahanBakuView() {
   // Riwayat tab
   const rRange = getRiwayatRange(rPreset, rCustomStart, rCustomEnd, rSelectedBulan);
   const riwayatFiltered = riwayat.filter((r) => {
-    if (isProduksiEntry(r.keterangan)) return false;
+    if (isInternalEntry(r.keterangan)) return false;
     const d = toWIBDate(r.created_at);
     if (d < rRange.start || d > rRange.end) return false;
     if (rBahanId && r.bahan_baku_id !== rBahanId) return false;
@@ -338,6 +454,7 @@ export default function BahanBakuView() {
       return {
         id:         `prod-${r.id}`,
         sumber:     "produksi",
+        bahanId:    r.bahan_baku_id,
         namaBahan:  r.bahan_baku?.nama ?? "?",
         jumlah:     r.jumlah_digunakan,
         satuan:     r.satuan,
@@ -359,6 +476,7 @@ export default function BahanBakuView() {
       return {
         id:         `pb-${r.id}`,
         sumber:     "proses_bikin",
+        bahanId:    r.bahan_baku_id,
         namaBahan:  r.bahan_baku?.nama ?? "?",
         jumlah:     r.jumlah,
         satuan:     r.satuan,
@@ -376,45 +494,57 @@ export default function BahanBakuView() {
     return true;
   });
 
-  const adjustmentFiltered = adjustments.filter((r) => {
-    const d = toWIBDate(r.created_at);
-    return d >= paRange.start && d <= paRange.end;
-  });
 
-  function handleReset() {
-    if (!confirm("Reset semua filter dan form input?\nData di database tidak akan dihapus.")) return;
-    // Pemakaian & Adjustment filter
-    setPreset("hari_ini");
-    setCustomStart(""); setCustomEnd("");
+  async function doReset() {
+    setShowResetModal(false);
+    // Hapus semua riwayat penerimaan & pengurangan
+    await supabase.from("penerimaan_bahan_baku").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+    // Hapus semua adjustment
+    await supabase.from("adjustment_bahan_baku").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+    // Reset stok setiap bahan ke nilai default (STOK_AWAL)
+    for (const bahan of bahanList) {
+      const defaultStok = STOK_AWAL[bahan.nama];
+      if (defaultStok !== undefined) {
+        await supabase
+          .from("bahan_baku")
+          .update({ stok_saat_ini: defaultStok })
+          .eq("id", bahan.id);
+      }
+    }
+    // Reset UI state
     const thisMonth = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`; })();
-    setSelectedBulan(thisMonth);
-    // Riwayat filter
-    setRPreset("hari_ini");
-    setRCustomStart(""); setRCustomEnd("");
-    setRSelectedBulan(thisMonth);
+    setPreset("hari_ini"); setCustomStart(""); setCustomEnd(""); setSelectedBulan(thisMonth);
+    setRPreset("hari_ini"); setRCustomStart(""); setRCustomEnd(""); setRSelectedBulan(thisMonth);
     setRBahanId("");
-    // Pemakaian search
     setFilterPemakaianBahan("");
-    // Adjustment form
-    setAdjBahanId("");
-    setAdjTipe("sisa");
-    setAdjJumlah("");
-    setAdjSatuan("");
-    setAdjCatatan("");
-    setAdjError("");
-    setAdjSuccess("");
-    // Remount semua BahanCard (reset local state input form)
+    setEditRowId(null); setAdjTipe("sisa"); setAdjJumlah(""); setAdjSatuan(""); setAdjCatatan(""); setAdjError(""); setAdjSuccess(null);
     setResetKey(k => k + 1);
-    // Kembali ke tab Stok & refresh data
     setActiveTab("stok");
     fetchData();
   }
 
+  async function doResync() {
+    setResyncLoading(true);
+    setResyncResult(null);
+    const { data, error } = await supabase.rpc("resync_stok_bahan");
+    if (error) {
+      setResyncResult("Gagal: " + error.message);
+    } else {
+      const r = data as { ok: boolean; updated?: number; message?: string };
+      if (r.ok) {
+        setResyncResult(`Stok berhasil disinkronkan (${r.updated ?? 0} bahan diperbarui).`);
+        fetchData();
+      } else {
+        setResyncResult("Gagal: " + (r.message ?? "unknown error"));
+      }
+    }
+    setResyncLoading(false);
+  }
+
   const TABS: { key: ActiveTab; label: string }[] = [
-    { key: "stok",       label: "Stok Saat Ini" },
-    { key: "riwayat",    label: "Riwayat" },
-    { key: "pemakaian",  label: "Pemakaian" },
-    { key: "adjustment", label: "Adjustment" },
+    { key: "stok",      label: "Stok Saat Ini" },
+    { key: "riwayat",   label: "Riwayat" },
+    { key: "pemakaian", label: "Pemakaian" },
   ];
 
 
@@ -432,7 +562,13 @@ export default function BahanBakuView() {
             </button>
           ))}
         </div>
-        <button type="button" onClick={handleReset}
+        {canAccessAdmin(user?.role ?? "") && (
+          <button type="button" onClick={() => { setShowResyncModal(true); setResyncResult(null); }}
+            className="flex items-center gap-1 text-xs font-semibold px-2.5 py-2 rounded-lg bg-blue-100 text-blue-600 hover:bg-blue-200 transition-colors shrink-0">
+            <CheckCircle2 size={11} /> Sinkron
+          </button>
+        )}
+        <button type="button" onClick={() => setShowResetModal(true)}
           className="flex items-center gap-1 text-xs font-semibold px-2.5 py-2 rounded-lg bg-red-100 text-red-600 hover:bg-red-200 transition-colors shrink-0">
           <RotateCcw size={11} /> Reset
         </button>
@@ -442,7 +578,16 @@ export default function BahanBakuView() {
       {activeTab === "stok" && (
         <div className="card">
           <div className="space-y-2">
-            {bahanList.map((b) => <BahanCard key={`${b.id}-${resetKey}`} bahan={b} onSubmit={submitTransaksi} />)}
+            {bahanList.map((b) => (
+              <BahanCard
+                key={`${b.id}-${resetKey}`}
+                bahan={b}
+                onSubmit={submitTransaksi}
+                isSuperAdmin={canAccessAdmin(user?.role ?? "")}
+                onDirectSet={setStokLangsung}
+                canKurangi={user?.role !== "staff_produksi"}
+              />
+            ))}
           </div>
         </div>
       )}
@@ -521,20 +666,39 @@ export default function BahanBakuView() {
                 ? <p className="text-gray-400 text-sm text-center py-4">Tidak ada data dalam rentang ini</p>
                 : riwayatFiltered.map((r) => {
                     const masuk = r.tipe === "masuk";
+                    const rowAdjs = adjustments.filter((a) => a.riwayat_id === r.id);
                     return (
-                      <div key={r.id} className="flex items-start justify-between border-b border-gray-50 pb-2.5">
-                        <div>
-                          <p className={`text-sm font-bold ${masuk ? "text-green-600" : "text-red-500"}`}>
-                            {masuk ? "+" : "−"} {formatAngka(r.jumlah)} {r.satuan} — {r.bahan_baku?.nama}
-                          </p>
-                          <p className="text-xs text-gray-500">
-                            {formatTanggal(r.tanggal)} · Oleh: <span className="font-medium text-gray-600">{r.users?.nama ?? "—"}</span>
-                          </p>
-                          <p className="text-xs text-gray-300">{formatTanggalWaktu(r.created_at)}</p>
+                      <div key={r.id} className="border-b border-gray-50 pb-2.5 last:border-0 last:pb-0">
+                        {/* Row utama */}
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex-1 min-w-0">
+                            <p className={`text-sm font-bold ${masuk ? "text-green-600" : "text-red-500"}`}>
+                              {masuk ? "+" : "−"} {formatAngka(r.jumlah)} {r.satuan} — {r.bahan_baku?.nama}
+                            </p>
+                            <p className="text-xs text-gray-500">
+                              {formatTanggal(r.tanggal)} · Oleh: <span className="font-medium text-gray-600">{r.users?.nama ?? "—"}</span>
+                            </p>
+                            <p className="text-xs text-gray-300">{formatTanggalWaktu(r.created_at)}</p>
+                            {rowAdjs.length > 0 && (
+                              <div className="mt-1 space-y-0.5">
+                                {rowAdjs.map((a) => (
+                                  <div key={a.id} className="flex items-center gap-1.5">
+                                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold ${a.tipe === "sisa" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>
+                                      {a.tipe === "sisa" ? "↑ Sisa" : "↓ Over"} {formatAngka(a.jumlah_adjustment)} {a.satuan}
+                                    </span>
+                                    <button type="button" onClick={() => handleDeleteAdjustment(a)}
+                                      className="text-gray-300 hover:text-red-400 transition-colors" title="Hapus adjustment">
+                                      <Trash2 size={11} />
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium shrink-0 ${masuk ? "bg-green-50 text-green-600" : "bg-red-50 text-red-500"}`}>
+                            {masuk ? "Penerimaan" : "Pengurangan"}
+                          </span>
                         </div>
-                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium shrink-0 ml-3 ${masuk ? "bg-green-50 text-green-600" : "bg-red-50 text-red-500"}`}>
-                          {masuk ? "Penerimaan" : "Pengurangan"}
-                        </span>
                       </div>
                     );
                   })}
@@ -599,212 +763,119 @@ export default function BahanBakuView() {
             <div className="space-y-2.5">
               {pemakaianFiltered.length === 0
                 ? <p className="text-gray-400 text-sm text-center py-4">Tidak ada data dalam rentang ini</p>
-                : pemakaianFiltered.map((r) => (
-                    <div key={r.id} className="border-b border-gray-50 pb-2.5">
-                      <div className="flex items-start justify-between gap-2">
-                        <p className="text-sm font-bold text-red-500">
-                          − {formatAngka(r.jumlah)} {r.satuan} — {r.namaBahan}
-                        </p>
-                        <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0 ${
-                          r.sumber === "produksi"
-                            ? "bg-amber-50 text-amber-600"
-                            : "bg-blue-50 text-blue-600"
-                        }`}>
-                          {r.sumber === "produksi" ? "Produksi" : "Proses Bikin"}
-                        </span>
-                      </div>
-                      <p className="text-xs text-gray-600 mt-0.5">
-                        dari <span className="font-medium">{r.label}</span>
-                        {r.tanggal ? `, ${formatTanggal(r.tanggal)}` : ""}
-                      </p>
-                      <p className="text-xs text-gray-400">Oleh: <span className="font-medium text-gray-500">{r.namaUser || "—"}</span> · {formatTanggalWaktu(r.created_at)}</p>
-                    </div>
-                  ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Tab: Adjustment ── */}
-      {activeTab === "adjustment" && (
-        <div className="space-y-3">
-          <RiwayatFilter
-            preset={preset} onPreset={setPreset}
-            customStart={customStart} customEnd={customEnd}
-            onCustomStart={setCustomStart} onCustomEnd={setCustomEnd}
-            selectedBulan={selectedBulan} onBulan={setSelectedBulan}
-          />
-
-          {/* Form input adjustment */}
-          <div className="card space-y-3">
-            <div className="flex items-center gap-2 mb-1">
-              <SlidersHorizontal size={15} className="text-amber-500" />
-              <span className="font-semibold text-gray-700 text-sm">Input Adjustment</span>
-            </div>
-
-            <form onSubmit={handleSaveAdjustment} className="space-y-3">
-              {/* Pilih Bahan */}
-              <div>
-                <label className="label">Pilih Bahan Baku</label>
-                <select required className="input" value={adjBahanId} onChange={(e) => { setAdjBahanId(e.target.value); setAdjSatuan(""); }}>
-                  <option value="">-- Pilih bahan --</option>
-                  {bahanList.map((b) => (
-                    <option key={b.id} value={b.id}>{b.nama}</option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Tipe Adjustment */}
-              <div>
-                <label className="label">Tipe Adjustment</label>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setAdjTipe("sisa")}
-                    className={`py-2.5 px-3 rounded-xl border-2 text-sm font-semibold transition-all ${
-                      adjTipe === "sisa"
-                        ? "border-green-500 bg-green-50 text-green-700"
-                        : "border-gray-200 bg-white text-gray-500 hover:border-green-300"
-                    }`}
-                  >
-                    <span className="block text-lg mb-0.5">↑</span>
-                    Sisa
-                    <span className="block text-[10px] font-normal mt-0.5 opacity-70">Pakai lebih sedikit → stok naik</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setAdjTipe("over")}
-                    className={`py-2.5 px-3 rounded-xl border-2 text-sm font-semibold transition-all ${
-                      adjTipe === "over"
-                        ? "border-red-500 bg-red-50 text-red-700"
-                        : "border-gray-200 bg-white text-gray-500 hover:border-red-300"
-                    }`}
-                  >
-                    <span className="block text-lg mb-0.5">↓</span>
-                    Over
-                    <span className="block text-[10px] font-normal mt-0.5 opacity-70">Pakai lebih banyak → stok turun</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* Jumlah + Satuan */}
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="label">Jumlah</label>
-                  <input
-                    type="number" step="0.01" min="0.01" required
-                    className="input text-center"
-                    placeholder="0"
-                    value={adjJumlah}
-                    onChange={(e) => setAdjJumlah(e.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className="label">Satuan</label>
-                  <select required className="input" value={adjSatuan} onChange={(e) => setAdjSatuan(e.target.value)}>
-                    <option value="">Pilih</option>
-                    {SATUAN_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
-                  </select>
-                </div>
-              </div>
-
-              {/* Catatan */}
-              <div>
-                <label className="label">Catatan (opsional)</label>
-                <textarea
-                  className="input resize-none"
-                  rows={2}
-                  placeholder="Mis: sisa rendam batch pagi..."
-                  value={adjCatatan}
-                  onChange={(e) => setAdjCatatan(e.target.value)}
-                />
-              </div>
-
-              {/* Info box — tampilkan juga ekuivalen satuan base */}
-              {adjBahanId && adjJumlah && adjSatuan && (() => {
-                const adjVal = parseFloat(adjJumlah) || 0;
-                const { value: adjBase, base } = toBase(adjVal, adjSatuan);
-                const showEq = (adjSatuan.toLowerCase() === "gr" || adjSatuan.toLowerCase() === "ml") && adjVal > 0;
-                const eqLabel = showEq ? ` (= ${adjBase.toFixed(4).replace(/\.?0+$/, "")} ${base})` : "";
-                return (
-                  <div className={`rounded-xl p-3 text-xs ${adjTipe === "sisa" ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"}`}>
-                    {adjTipe === "sisa"
-                      ? `Sisa ${adjJumlah} ${adjSatuan}${eqLabel} → pemakaian berkurang, stok naik`
-                      : `Over ${adjJumlah} ${adjSatuan}${eqLabel} → pemakaian bertambah, stok turun`}
-                  </div>
-                );
-              })()}
-
-              {adjError && (
-                <div className="flex items-center gap-2 bg-red-50 text-red-600 rounded-xl p-3 text-sm">
-                  <AlertCircle size={15} className="shrink-0" />
-                  {adjError}
-                </div>
-              )}
-              {adjSuccess && (
-                <div className="flex items-center gap-2 bg-green-50 text-green-700 rounded-xl p-3 text-sm">
-                  <CheckCircle2 size={15} className="shrink-0" />
-                  {adjSuccess}
-                </div>
-              )}
-
-              <button
-                type="submit"
-                disabled={adjLoading || !adjBahanId || !adjJumlah || !adjSatuan}
-                className="btn-primary w-full disabled:opacity-40"
-              >
-                {adjLoading ? "Menyimpan..." : "Simpan Adjustment"}
-              </button>
-            </form>
-          </div>
-
-          {/* Riwayat Adjustment */}
-          <div className="card">
-            <div className="flex items-center gap-2 mb-3">
-              <History size={14} className="text-gray-400" />
-              <span className="text-sm font-medium text-gray-600">
-                Riwayat Adjustment ({adjustmentFiltered.length} data)
-              </span>
-            </div>
-            <div className="space-y-2">
-              {adjustmentFiltered.length === 0
-                ? <p className="text-gray-400 text-sm text-center py-4">Belum ada adjustment dalam rentang ini</p>
-                : adjustmentFiltered.map((a) => {
-                    const isSisa = a.tipe === "sisa";
+                : pemakaianFiltered.map((r) => {
+                    const isEditing = editRowId === r.id;
+                    const actualId  = r.id.replace(/^(prod|pb)-/, "");
+                    const rowAdjs   = adjustments.filter((a) => a.riwayat_id === actualId);
                     return (
-                      <div key={a.id} className={`rounded-xl border p-3 ${isSisa ? "border-green-100 bg-green-50/40" : "border-red-100 bg-red-50/40"}`}>
+                      <div key={r.id} className="border-b border-gray-50 pb-2.5 last:border-0 last:pb-0">
                         <div className="flex items-start justify-between gap-2">
                           <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-1.5 flex-wrap">
-                              <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${isSisa ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>
-                                {isSisa ? "↑ Sisa" : "↓ Over"}
-                              </span>
-                              <span className="text-sm font-semibold text-gray-800">
-                                {formatAngka(a.jumlah_adjustment)} {a.satuan}
-                              </span>
-                              <span className="text-sm text-gray-600">— {a.bahan_baku?.nama}</span>
-                            </div>
-                            <p className="text-xs text-gray-500 mt-1">
-                              Sebelum: <span className="font-medium">{formatAngka(a.jumlah_sebelum)} {a.satuan}</span>
-                              {" → "}
-                              Sesudah: <span className="font-medium">
-                                {formatAngka(isSisa ? a.jumlah_sebelum - a.jumlah_adjustment : a.jumlah_sebelum + a.jumlah_adjustment)} {a.satuan}
-                              </span>
+                            <p className="text-sm font-bold text-red-500">
+                              − {formatAngka(r.jumlah)} {r.satuan} — {r.namaBahan}
                             </p>
-                            {a.catatan && <p className="text-xs text-gray-400 mt-0.5 italic">&ldquo;{a.catatan}&rdquo;</p>}
-                            <p className="text-xs text-gray-400 mt-0.5">
-                              Oleh: <span className="font-medium text-gray-500">{a.users?.nama ?? "—"}</span> · {formatTanggalWaktu(a.created_at)}
+                            <p className="text-xs text-gray-600 mt-0.5">
+                              dari <span className="font-medium">{r.label}</span>
+                              {r.tanggal ? `, ${formatTanggal(r.tanggal)}` : ""}
                             </p>
+                            <p className="text-xs text-gray-400">Oleh: <span className="font-medium text-gray-500">{r.namaUser || "—"}</span> · {formatTanggalWaktu(r.created_at)}</p>
+                            {rowAdjs.length > 0 && (
+                              <div className="mt-1 space-y-0.5">
+                                {rowAdjs.map((a) => (
+                                  <div key={a.id} className="flex items-center gap-1.5 flex-wrap">
+                                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold ${a.tipe === "sisa" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>
+                                      {a.tipe === "sisa" ? "↑ Sisa" : "↓ Over"} {formatAngka(a.jumlah_adjustment)} {a.satuan}
+                                    </span>
+                                    <span className="text-[10px] text-gray-400">
+                                      oleh <span className="font-medium text-gray-500">{a.users?.nama ?? "—"}</span> · {formatTanggalWaktu(a.created_at)}
+                                    </span>
+                                    {a.catatan && <span className="text-[10px] text-gray-400 italic">"{a.catatan}"</span>}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
                           </div>
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteAdjustment(a)}
-                            className="p-1.5 text-gray-300 hover:text-red-400 hover:bg-red-50 rounded-lg shrink-0 transition-colors"
-                            title="Hapus & kembalikan perubahan"
-                          >
-                            <Trash2 size={14} />
-                          </button>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
+                              r.sumber === "produksi" ? "bg-amber-50 text-amber-600" : "bg-blue-50 text-blue-600"
+                            }`}>
+                              {r.sumber === "produksi" ? "Produksi" : "Proses Bikin"}
+                            </span>
+                            <button type="button"
+                              onClick={() => isEditing ? setEditRowId(null) : openEditPemakaian(r)}
+                              className={`p-1.5 rounded-lg transition-colors ${isEditing ? "bg-amber-100 text-amber-600" : "text-gray-300 hover:text-amber-500 hover:bg-amber-50"}`}
+                              title="Edit Sisa/Over">
+                              <SlidersHorizontal size={13} />
+                            </button>
+                          </div>
                         </div>
+
+                        {isEditing && (() => {
+                          const adjNum = parseFloat(adjJumlah);
+                          const preview = !isNaN(adjNum) && adjNum > 0 && adjSatuan
+                            ? calcPemakaianAdj(r, adjNum, adjSatuan, adjTipe)
+                            : null;
+                          const satIncompat = adjSatuan && !unitCompatible(adjSatuan, r.satuan);
+                          return (
+                            <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 p-3 space-y-2">
+                              <div className="flex items-center justify-between">
+                                <p className="text-xs font-semibold text-amber-700">Adjustment: {r.namaBahan}</p>
+                                <p className="text-xs text-gray-500">Pemakaian saat ini: <span className="font-bold text-gray-700">{formatAngka(r.jumlah)} {r.satuan}</span></p>
+                              </div>
+                              <div className="flex gap-2">
+                                <button type="button" onClick={() => setAdjTipe("sisa")}
+                                  className={`flex-1 py-1.5 rounded-lg text-xs font-semibold border-2 transition-all ${adjTipe === "sisa" ? "border-green-500 bg-green-50 text-green-700" : "border-gray-200 bg-white text-gray-500"}`}>
+                                  ↑ Sisa (kembalikan ke stok)
+                                </button>
+                                <button type="button" onClick={() => setAdjTipe("over")}
+                                  className={`flex-1 py-1.5 rounded-lg text-xs font-semibold border-2 transition-all ${adjTipe === "over" ? "border-red-500 bg-red-50 text-red-700" : "border-gray-200 bg-white text-gray-500"}`}>
+                                  ↓ Over (kurangi stok lagi)
+                                </button>
+                              </div>
+                              <div className="flex gap-2">
+                                <input type="number" step="0.01" min="0.01" placeholder="Jumlah"
+                                  className="input text-sm py-1.5 flex-1 text-center"
+                                  value={adjJumlah} onChange={(e) => setAdjJumlah(e.target.value)} />
+                                <select className="input text-sm py-1.5 w-24"
+                                  value={adjSatuan} onChange={(e) => setAdjSatuan(e.target.value)}>
+                                  <option value="">Satuan</option>
+                                  {SATUAN_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
+                                </select>
+                              </div>
+                              {/* Live preview */}
+                              {adjJumlah && adjSatuan && (
+                                satIncompat
+                                  ? <p className="text-xs text-red-500 bg-red-50 rounded px-2 py-1">Satuan {adjSatuan} tidak kompatibel dengan {r.satuan}</p>
+                                  : preview
+                                    ? <p className="text-xs bg-white rounded px-2 py-1 border border-amber-200">
+                                        Pemakaian: <span className="font-bold text-gray-700">{formatAngka(r.jumlah)} {r.satuan}</span>
+                                        {" → "}
+                                        <span className={`font-bold ${adjTipe === "sisa" ? "text-green-600" : "text-red-600"}`}>{formatAngka(preview.newJumlah)} {r.satuan}</span>
+                                        <span className="text-gray-400 ml-1">
+                                          ({adjTipe === "sisa" ? "stok +" : "stok −"}{formatAngka(preview.insertJumlah)} {preview.insertSatuan})
+                                        </span>
+                                      </p>
+                                    : <p className="text-xs text-red-500 bg-red-50 rounded px-2 py-1">Jumlah sisa melebihi pemakaian saat ini</p>
+                              )}
+                              <input type="text" placeholder="Catatan (opsional)"
+                                className="input text-sm py-1.5 w-full"
+                                value={adjCatatan} onChange={(e) => setAdjCatatan(e.target.value)} />
+                              {adjError && <p className="text-xs text-red-600 bg-red-50 rounded-lg px-2 py-1 whitespace-pre-wrap">{adjError}</p>}
+                              <div className="flex gap-2">
+                                <button type="button" onClick={() => setEditRowId(null)}
+                                  className="flex-1 py-1.5 rounded-lg text-xs font-medium border border-gray-200 text-gray-500 hover:bg-gray-50">
+                                  Batal
+                                </button>
+                                <button type="button"
+                                  disabled={adjLoading || !adjJumlah || !adjSatuan || !preview}
+                                  onClick={() => handleSaveAdjForPemakaian(r)}
+                                  className="flex-1 py-1.5 rounded-lg text-xs font-semibold bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-40">
+                                  {adjLoading ? "Menyimpan..." : "Simpan"}
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </div>
                     );
                   })}
@@ -812,43 +883,102 @@ export default function BahanBakuView() {
           </div>
         </div>
       )}
+
+      {/* ── Sinkronkan Stok Modal ── */}
+      {showResyncModal && typeof document !== "undefined" && createPortal(
+        <div className="fixed inset-0 bg-black/40 z-[9999] flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl w-full max-w-xs shadow-xl p-5 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center shrink-0">
+                <CheckCircle2 size={18} className="text-blue-500" />
+              </div>
+              <div>
+                <p className="font-bold text-gray-800 text-sm">Sinkronkan Stok?</p>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  Hitung ulang stok setiap bahan dari semua riwayat penerimaan (masuk − keluar) + stok awal.
+                  Berguna untuk memperbaiki data yang tidak sinkron akibat bug lama.
+                </p>
+              </div>
+            </div>
+            {resyncResult && (
+              <p className={`text-xs px-3 py-2 rounded-lg ${resyncResult.startsWith("Gagal") ? "bg-red-50 text-red-600" : "bg-green-50 text-green-700"}`}>
+                {resyncResult}
+              </p>
+            )}
+            <div className="flex gap-2">
+              <button type="button" onClick={() => setShowResyncModal(false)}
+                className="flex-1 py-2 rounded-xl border border-gray-200 text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors">
+                {resyncResult ? "Tutup" : "Batal"}
+              </button>
+              {!resyncResult && (
+                <button type="button" onClick={doResync} disabled={resyncLoading}
+                  className="flex-1 py-2 rounded-xl bg-blue-500 text-white text-sm font-semibold hover:bg-blue-600 transition-colors disabled:opacity-60">
+                  {resyncLoading ? "Memproses..." : "Ya, Sinkronkan"}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* ── Konfirmasi Reset Modal ── */}
+      {showResetModal && typeof document !== "undefined" && createPortal(
+        <div className="fixed inset-0 bg-black/40 z-[9999] flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl w-full max-w-xs shadow-xl p-5 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-red-100 rounded-full flex items-center justify-center shrink-0">
+                <RotateCcw size={18} className="text-red-500" />
+              </div>
+              <div>
+                <p className="font-bold text-gray-800 text-sm">Reset Stok Bahan Baku?</p>
+                <p className="text-xs text-gray-500 mt-0.5">Stok dikembalikan ke nilai awal. Semua riwayat & adjustment akan dihapus permanen.</p>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button type="button" onClick={() => setShowResetModal(false)}
+                className="flex-1 py-2 rounded-xl border border-gray-200 text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors">
+                Batal
+              </button>
+              <button type="button" onClick={doReset}
+                className="flex-1 py-2 rounded-xl bg-red-500 text-white text-sm font-semibold hover:bg-red-600 transition-colors">
+                Ya, Reset
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   );
 }
 
 
-// ── Stok awal referensi (nilai reset terakhir migration 020) ──
-const STOK_AWAL: Record<string, number> = {
-  "Terigu":              500,
-  "Minyak":              500,
-  "Garam":                25,
-  "Gula":                 50,
-  "Air":                 190,
-  "Margarine Menara":    100,
-  "Mesis Innova":        100,
-  "Keju Calf":            32,
-  "Margarine Blue Band":  50,
-  "Mesis Tulip":          50,
-  "Keju Kraft Martabak":  16,
-  "Baking Powder":         1,
-  "Telur":               225,
-  "Tepung Gandum":         5,
-  "Butter Hollmann":       1,
-};
-
 // ── BahanCard ────────────────────────────────────────────────
-function BahanCard({ bahan, onSubmit }: {
+function BahanCard({ bahan, onSubmit, isSuperAdmin, onDirectSet, canKurangi }: {
   bahan: BahanBaku;
   onSubmit: (id: string, tipe: "masuk" | "keluar", jumlah: number, satuan: string) => Promise<boolean>;
+  isSuperAdmin: boolean;
+  onDirectSet: (id: string, nilai: number) => Promise<boolean>;
+  canKurangi: boolean;
 }) {
   const kritis = bahan.stok_saat_ini <= bahan.stok_minimum;
-  const [mode,    setMode]    = useState<"masuk" | "keluar" | null>(null);
-  const [jumlah,  setJumlah]  = useState("");
-  const [satuan,  setSatuan]  = useState("");
-  const [loading, setLoading] = useState(false);
+  const [mode,        setMode]        = useState<"masuk" | "keluar" | null>(null);
+  const [jumlah,      setJumlah]      = useState("");
+  const [satuan,      setSatuan]      = useState("");
+  const [loading,     setLoading]     = useState(false);
+  const [editingStok, setEditingStok] = useState(false);
+  const [stokInput,   setStokInput]   = useState("");
+  const [stokLoading, setStokLoading] = useState(false);
 
-  function openForm(tipe: "masuk" | "keluar") { setMode(tipe); setJumlah(""); setSatuan(""); }
+  function openForm(tipe: "masuk" | "keluar") { setMode(tipe); setJumlah(""); setSatuan(""); setEditingStok(false); }
   function closeForm() { setMode(null); setJumlah(""); setSatuan(""); }
+
+  function openEditStok() {
+    setEditingStok(true);
+    setStokInput(String(bahan.stok_saat_ini));
+    setMode(null);
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -859,9 +989,19 @@ function BahanCard({ bahan, onSubmit }: {
     if (ok) closeForm();
   }
 
+  async function handleSaveStok(e: React.FormEvent) {
+    e.preventDefault();
+    const nilai = parseFloat(stokInput);
+    if (isNaN(nilai) || nilai < 0) return;
+    setStokLoading(true);
+    const ok = await onDirectSet(bahan.id, nilai);
+    setStokLoading(false);
+    if (ok) setEditingStok(false);
+  }
+
   const stokAwal    = STOK_AWAL[bahan.nama] ?? null;
   const pengurangan = stokAwal !== null ? stokAwal - bahan.stok_saat_ini : 0;
-  const adaPengurangan = stokAwal !== null && pengurangan > 0.0005; // threshold supaya 0.000 tidak tampil
+  const adaPengurangan = stokAwal !== null && pengurangan > 0.0005;
 
   return (
     <div className={`rounded-xl border p-3 transition-all ${kritis ? "bg-red-50 border-red-200" : "border-gray-100"}`}>
@@ -872,31 +1012,61 @@ function BahanCard({ bahan, onSubmit }: {
           {kritis && <p className="text-xs text-red-500 font-medium mt-0.5">⚠ Stok kritis!</p>}
         </div>
         <div className="text-right ml-3 shrink-0">
-          {/* Stok real */}
-          <p className={`font-bold text-xl leading-none ${kritis ? "text-red-600" : "text-gray-800"}`}>
-            {formatAngka(bahan.stok_saat_ini)}
-            <span className="text-sm font-normal text-gray-400 ml-1">{bahan.satuan}</span>
-          </p>
-          {/* Pengurangan — hanya tampil jika ada pemakaian */}
-          {adaPengurangan && (
-            <p className="text-xs mt-0.5 flex items-center justify-end gap-0.5">
-              <span style={{ color: "#EF4444" }} className="font-bold text-sm">↓</span>
-              <span style={{ color: "#EF4444" }} className="font-semibold">
-                {formatAngka(pengurangan)} {bahan.satuan}
-              </span>
-            </p>
+          {editingStok ? (
+            <form onSubmit={handleSaveStok} className="flex items-center gap-1.5">
+              <input
+                type="number" step="0.001" min="0" autoFocus
+                value={stokInput} onChange={(e) => setStokInput(e.target.value)}
+                className="input py-1 text-sm w-24 text-center font-bold"
+              />
+              <span className="text-xs text-gray-400">{bahan.satuan}</span>
+              <button type="submit" disabled={stokLoading || stokInput === ""}
+                className="flex items-center justify-center w-7 h-7 rounded-lg bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-40 shrink-0">
+                {stokLoading ? <span className="text-[10px]">…</span> : <Check size={12} />}
+              </button>
+              <button type="button" onClick={() => setEditingStok(false)}
+                className="flex items-center justify-center w-7 h-7 rounded-lg bg-gray-100 text-gray-500 hover:bg-gray-200 shrink-0">
+                <X size={12} />
+              </button>
+            </form>
+          ) : (
+            <div className="flex items-center gap-1.5 justify-end">
+              <div>
+                <p className={`font-bold text-xl leading-none ${kritis ? "text-red-600" : "text-gray-800"}`}>
+                  {formatAngka(bahan.stok_saat_ini)}
+                  <span className="text-sm font-normal text-gray-400 ml-1">{bahan.satuan}</span>
+                </p>
+                {adaPengurangan && (
+                  <p className="text-xs mt-0.5 flex items-center justify-end gap-0.5">
+                    <span style={{ color: "#EF4444" }} className="font-bold text-sm">↓</span>
+                    <span style={{ color: "#EF4444" }} className="font-semibold">
+                      {formatAngka(pengurangan)} {bahan.satuan}
+                    </span>
+                  </p>
+                )}
+              </div>
+              {isSuperAdmin && (
+                <button type="button" onClick={openEditStok}
+                  className="p-1 rounded-lg text-gray-300 hover:text-amber-500 hover:bg-amber-50 transition-colors shrink-0 self-start mt-0.5"
+                  title="Set stok langsung (tanpa riwayat)">
+                  <Pencil size={12} />
+                </button>
+              )}
+            </div>
           )}
         </div>
       </div>
 
-      {!mode && (
+      {!mode && !editingStok && (
         <div className="flex gap-2 mt-2.5">
           <button onClick={() => openForm("masuk")} className="flex items-center gap-1 text-xs font-semibold px-2.5 py-1.5 rounded-lg bg-green-100 text-green-700 hover:bg-green-200 transition-colors">
             <Plus size={12} /> Tambah
           </button>
-          <button onClick={() => openForm("keluar")} className="flex items-center gap-1 text-xs font-semibold px-2.5 py-1.5 rounded-lg bg-red-100 text-red-600 hover:bg-red-200 transition-colors">
-            <Minus size={12} /> Kurangi
-          </button>
+          {canKurangi && (
+            <button onClick={() => openForm("keluar")} className="flex items-center gap-1 text-xs font-semibold px-2.5 py-1.5 rounded-lg bg-red-100 text-red-600 hover:bg-red-200 transition-colors">
+              <Minus size={12} /> Kurangi
+            </button>
+          )}
         </div>
       )}
 

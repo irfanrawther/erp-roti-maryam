@@ -63,6 +63,7 @@ export function getRoleLabel(role: string) {
     spv: "SPV",
     staff_produksi: "Staff Produksi",
     staff_packing_pengiriman: "Staff Packing Pengiriman",
+    pic: "PIC",
     // role lama (backward-compat)
     owner: "Super Admin",
     manager: "Super Admin",

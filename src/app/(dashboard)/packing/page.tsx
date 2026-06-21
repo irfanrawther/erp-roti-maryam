@@ -44,11 +44,20 @@ interface PackingInput {
   pack5: number;
   pack10: number;
   reject: number;
+  reject_lain: number;
+  alasan_reject_lain: string | null;
   lebihan: number;
   catatan: string | null;
   created_at: string;
   users?: { nama: string };
 }
+
+const ALASAN_REJECT_LAIN = [
+  { key: "basi",        label: "Basi" },
+  { key: "hilang",      label: "Hilang" },
+  { key: "salah_resep", label: "Salah Resep" },
+  { key: "lainnya",     label: "Lainnya" },
+];
 
 // ── Brand + varian config (gabungan resep adonan + rendam) ────
 interface RendamBahan { nama: string; gr: number; }   // gram per kg adonan
@@ -127,24 +136,27 @@ function toBaseUnit(jumlah: number, satuan: string): { jumlah: number; satuan: s
 }
 
 export default function PackingPage() {
-  const user = getUserSession();
   const router = useRouter();
-  const caps = getCapabilities(user);
+  const [user, setUser] = useState<ReturnType<typeof getUserSession>>(null);
+  const [mounted, setMounted] = useState(false);
   const today = localDateStr(new Date());
 
-  // Tab awal sesuai capability:
-  // - bisa Alur Produksi → topTab 'packing', sub-tab pertama yang diizinkan
-  // - hanya Bahan Baku   → topTab 'bahan'
-  const initTopTab: "bahan" | "packing" = caps.produksiFlow ? "packing" : "bahan";
-  const initActiveTab: Stage | "riwayat" | "reject" =
-    caps.adonan ? "adonan" : caps.rendam ? "bikin" : caps.packingFreezer ? "packing" : "adonan";
-
-  // Route guard — kalau tidak punya akses Produksi sama sekali, tendang ke home role
   useEffect(() => {
-    if (user && !caps.bahanBaku && !caps.produksiFlow) {
-      router.replace(homeRoute(user));
+    const u = getUserSession();
+    setUser(u);
+    setMounted(true);
+    const caps = getCapabilities(u);
+    // Route guard
+    if (u && !caps.bahanBaku && !caps.produksiFlow) {
+      router.replace(homeRoute(u));
     }
+    // Set tabs berdasarkan capability setelah mount
+    if (caps.produksiFlow) setTopTab("packing");
+    if (!caps.adonan && caps.rendam) setActiveTab("bikin");
+    else if (!caps.adonan && !caps.rendam && caps.packingFreezer) setActiveTab("packing");
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const caps = getCapabilities(user);
 
   // Tick setiap 60 detik → paksa re-render agar filter tanggal selalu real-time
   const [, setTick] = useState(0);
@@ -156,8 +168,8 @@ export default function PackingPage() {
   const [skuList,     setSkuList]     = useState<ProdukSku[]>([]);
   const [bahanMap,    setBahanMap]    = useState<Record<string, string>>({});
   const [allBatches,  setAllBatches]  = useState<Batch[]>([]);
-  const [topTab,      setTopTab]      = useState<"bahan" | "packing">(initTopTab);
-  const [activeTab,   setActiveTab]   = useState<Stage | "riwayat" | "reject">(initActiveTab);
+  const [topTab,      setTopTab]      = useState<"bahan" | "packing">("bahan");
+  const [activeTab,   setActiveTab]   = useState<Stage | "riwayat" | "reject">("adonan");
   const [busy,        setBusy]        = useState(false);
 
   // Input Stok (Packing & Freezer)
@@ -175,6 +187,7 @@ export default function PackingPage() {
   const [toast,        setToast]        = useState<string | null>(null);
 
   // Riwayat filter
+  const [rejectView,    setRejectView]    = useState<"semua" | "reject" | "lain">("semua");
   const [preset,        setPreset]        = useState<RiwayatPreset>("hari_ini");
   const [customStart,   setCustomStart]   = useState(() => wibDateStr());
   const [customEnd,     setCustomEnd]     = useState(() => wibDateStr());
@@ -208,7 +221,7 @@ export default function PackingPage() {
         .select("id, produk_sku_id, tanggal_produksi, status, jumlah_pack_rencana, jumlah_pack_adonan, jumlah_pack_packing, jumlah_pack_freezer, catatan_reject, status_updated_at, created_at, produk_sku:produk_sku_id(nama_brand, varian, isi_per_pack), users:created_by(nama)")
         .order("created_at", { ascending: false }).limit(300),
       supabase.from("packing_input")
-        .select("id, batch_produksi_id, produk_sku_id, brand, varian, tanggal, total_direndam, carry_in, total_available, pack5, pack10, reject, lebihan, catatan, created_at, users:created_by(nama)")
+        .select("id, batch_produksi_id, produk_sku_id, brand, varian, tanggal, total_direndam, carry_in, total_available, pack5, pack10, reject, reject_lain, alasan_reject_lain, lebihan, catatan, created_at, users:created_by(nama)")
         .order("created_at", { ascending: false }).limit(500),
     ]);
     if (packingRes.data) setPackingInputs(packingRes.data as unknown as PackingInput[]);
@@ -516,7 +529,7 @@ export default function PackingPage() {
     setInputStokModal({ batch, carryIn: pcs, carryFromDate: date });
   }
 
-  async function confirmInputStok(data: { pack5: number; pack5Final: number; pack10: number; reject: number; lebihan: number; catatan: string }) {
+  async function confirmInputStok(data: { pack5: number; pack5Final: number; pack10: number; reject: number; rejectLain: number; alasanRejectLain: string; lebihan: number; catatan: string }) {
     if (!user || !inputStokModal) return;
     const { batch, carryIn } = inputStokModal;
     const cfg = findVarian(batch);
@@ -531,8 +544,9 @@ export default function PackingPage() {
         batch_produksi_id: batch.id, produk_sku_id: batch.produk_sku_id,
         brand: cfg.brandKey, varian: cfg.varianDB, tanggal: batch.tanggal_produksi,
         total_direndam: direndam, carry_in: carryIn, total_available: direndam,
-        pack5: data.pack5, pack10: data.pack10, reject: data.reject, lebihan: data.lebihan,
-        catatan: data.catatan || null, created_by: user.id,
+        pack5: data.pack5, pack10: data.pack10, reject: data.reject,
+        reject_lain: data.rejectLain, alasan_reject_lain: data.rejectLain > 0 ? (data.alasanRejectLain || null) : null,
+        lebihan: data.lebihan, catatan: data.catatan || null, created_by: user.id,
       });
       if (insertErr) throw new Error(insertErr.message);
 
@@ -549,6 +563,7 @@ export default function PackingPage() {
       // 3. batch → selesai
       const { error: updateErr } = await supabase.from("batch_produksi").update({
         status: "selesai", jumlah_pack_packing: packPcs, jumlah_reject: data.reject,
+        jumlah_reject_lain: data.rejectLain,
         catatan_reject: data.catatan || null, updated_by: user.id, status_updated_at: new Date().toISOString(),
       }).eq("id", batch.id);
       if (updateErr) throw new Error(updateErr.message);
@@ -702,8 +717,9 @@ export default function PackingPage() {
       )}
 
       {/* Top-level tab switcher: Bahan Baku | Alur Produksi.
-          Hanya ditampilkan kalau user punya akses ke KEDUA bagian. */}
-      {caps.bahanBaku && caps.produksiFlow && (
+          Hanya ditampilkan kalau user punya akses ke KEDUA bagian.
+          Guard mounted agar server/client HTML identik (tidak ada mismatch hydration). */}
+      {mounted && caps.bahanBaku && caps.produksiFlow && (
         <div className="flex bg-white rounded-xl border border-gray-100 p-1 gap-1">
           <button onClick={() => setTopTab("bahan")}
             className={`flex-1 py-2 rounded-lg text-xs font-medium transition-colors ${
@@ -720,9 +736,9 @@ export default function PackingPage() {
         </div>
       )}
 
-      {topTab === "bahan" && caps.bahanBaku && <BahanBakuView />}
+      {topTab === "bahan" && mounted && caps.bahanBaku && <BahanBakuView />}
 
-      {topTab === "packing" && caps.produksiFlow && (<>
+      {topTab === "packing" && mounted && caps.produksiFlow && (<>
 
       {/* Header + counter */}
       <div className="flex items-center justify-between flex-wrap gap-2">
@@ -1039,47 +1055,114 @@ export default function PackingPage() {
             accentColor="red"
           />
 
+          {/* Toggle view */}
+          <div className="flex bg-white rounded-xl border border-gray-100 p-1 gap-1">
+            {([["semua","Semua"],["reject","Reject"],["lain","Basi / Hilang / dll"]] as const).map(([key, lbl]) => (
+              <button key={key} onClick={() => setRejectView(key)}
+                className={`flex-1 py-1.5 rounded-lg text-xs font-medium transition-colors ${rejectView === key ? "bg-red-600 text-white" : "text-gray-500 hover:bg-gray-50"}`}>
+                {lbl}
+              </button>
+            ))}
+          </div>
+
           {(() => {
             const rows = packingInputs.filter((p) => p.tanggal >= rStart && p.tanggal <= rEnd);
             const totalReject = rows.reduce((s, p) => s + p.reject, 0);
-            const ordered: { brandLabel: string; varianLabel: string; total: number; count: number }[] = [];
+            const totalLain   = rows.reduce((s, p) => s + (p.reject_lain ?? 0), 0);
+            const totalSemua  = totalReject + totalLain;
+
+            // Per-varian summary
+            const ordered: { brandLabel: string; varianLabel: string; reject: number; lain: number; count: number }[] = [];
             (Object.keys(BRANDS) as BrandKey[]).forEach((bk) => {
               const cfg = BRANDS[bk];
               cfg.variants.forEach((v) => {
                 const matching = rows.filter((p) => p.brand === bk && p.varian === v.varianDB);
-                const total = matching.reduce((s, p) => s + p.reject, 0);
-                if (total > 0) ordered.push({ brandLabel: cfg.label, varianLabel: v.label, total, count: matching.length });
+                const rej  = matching.reduce((s, p) => s + p.reject, 0);
+                const lain = matching.reduce((s, p) => s + (p.reject_lain ?? 0), 0);
+                if (rej + lain > 0) ordered.push({ brandLabel: cfg.label, varianLabel: v.label, reject: rej, lain, count: matching.length });
               });
             });
+
+            // Alasan breakdown (untuk view "lain")
+            const alasanGroup: Record<string, number> = {};
+            rows.forEach((p) => {
+              if ((p.reject_lain ?? 0) > 0 && p.alasan_reject_lain) {
+                alasanGroup[p.alasan_reject_lain] = (alasanGroup[p.alasan_reject_lain] ?? 0) + (p.reject_lain ?? 0);
+              }
+            });
+
+            const displayTotal = rejectView === "semua" ? totalSemua : rejectView === "reject" ? totalReject : totalLain;
+
             return (
               <>
-                <div className="bg-gray-900 rounded-xl p-3 flex items-center justify-between">
-                  <span className="text-xs font-bold text-red-400 uppercase tracking-wide">Total Reject ({rows.length} input)</span>
-                  <span className="text-lg font-bold text-white">{formatAngka(totalReject)} pcs</span>
-                </div>
-
-                <div className="card">
-                  <div className="flex items-center gap-2 mb-3">
-                    <AlertTriangle size={16} className="text-red-500" />
-                    <span className="font-semibold text-gray-700">Reject per Varian</span>
+                {/* Summary card */}
+                <div className="bg-gray-900 rounded-xl p-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-red-400 uppercase tracking-wide">
+                      {rejectView === "semua" ? "Total Semua Reject" : rejectView === "reject" ? "Total Reject (Packing)" : "Total Basi/Hilang/dll"}
+                    </span>
+                    <span className="text-lg font-bold text-white">{formatAngka(displayTotal)} pcs</span>
                   </div>
-                  {ordered.length === 0 ? (
-                    <p className="text-gray-400 text-sm text-center py-6">Tidak ada reject pada rentang ini</p>
-                  ) : (
-                    <div className="space-y-2">
-                      {ordered.map((r, i) => (
-                        <div key={i} className="flex items-center justify-between border-b border-gray-50 pb-2">
-                          <div>
-                            <p className="text-sm font-medium text-gray-800">{r.varianLabel}</p>
-                            <p className="text-xs text-gray-400">{r.brandLabel} · {r.count}× input</p>
-                          </div>
-                          <span className="text-sm font-bold text-red-600">{formatAngka(r.total)} pcs</span>
-                        </div>
-                      ))}
+                  {rejectView === "semua" && (
+                    <div className="flex gap-4 mt-2 text-xs text-gray-400">
+                      <span>Reject packing: <b className="text-red-300">{formatAngka(totalReject)}</b></span>
+                      <span>Basi/Hilang/dll: <b className="text-orange-300">{formatAngka(totalLain)}</b></span>
                     </div>
                   )}
                 </div>
 
+                {/* Per-varian */}
+                <div className="card">
+                  <div className="flex items-center gap-2 mb-3">
+                    <AlertTriangle size={16} className="text-red-500" />
+                    <span className="font-semibold text-gray-700">
+                      {rejectView === "lain" ? "Basi/Hilang/dll per Alasan" : "Reject per Varian"}
+                    </span>
+                  </div>
+
+                  {rejectView === "lain" ? (
+                    Object.keys(alasanGroup).length === 0 ? (
+                      <p className="text-gray-400 text-sm text-center py-6">Tidak ada data pada rentang ini</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {ALASAN_REJECT_LAIN.map((a) => {
+                          const total = alasanGroup[a.key] ?? 0;
+                          if (!total) return null;
+                          return (
+                            <div key={a.key} className="flex items-center justify-between border-b border-gray-50 pb-2">
+                              <p className="text-sm font-medium text-gray-800">{a.label}</p>
+                              <span className="text-sm font-bold text-orange-600">{formatAngka(total)} pcs</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )
+                  ) : ordered.length === 0 ? (
+                    <p className="text-gray-400 text-sm text-center py-6">Tidak ada data pada rentang ini</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {ordered.map((r, i) => {
+                        const val = rejectView === "reject" ? r.reject : r.reject + r.lain;
+                        if (val === 0) return null;
+                        return (
+                          <div key={i} className="flex items-center justify-between border-b border-gray-50 pb-2">
+                            <div>
+                              <p className="text-sm font-medium text-gray-800">{r.varianLabel}</p>
+                              <p className="text-xs text-gray-400">{r.brandLabel} · {r.count}× input
+                                {rejectView === "semua" && r.reject > 0 && r.lain > 0 && (
+                                  <span> · reject: {r.reject} + basi/dll: {r.lain}</span>
+                                )}
+                              </p>
+                            </div>
+                            <span className="text-sm font-bold text-red-600">{formatAngka(val)} pcs</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Detail input */}
                 {rows.length > 0 && (
                   <div className="card">
                     <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Detail Input</p>
@@ -1087,13 +1170,27 @@ export default function PackingPage() {
                       {rows.map((p) => {
                         const cfg = BRANDS[p.brand as BrandKey];
                         const vlabel = cfg?.variants.find((v) => v.varianDB === p.varian)?.label ?? p.varian;
+                        const rej  = p.reject ?? 0;
+                        const lain = p.reject_lain ?? 0;
+                        const alasan = p.alasan_reject_lain ? ALASAN_REJECT_LAIN.find((a) => a.key === p.alasan_reject_lain)?.label : null;
+                        const showRow = rejectView === "semua" ? (rej + lain > 0) : rejectView === "reject" ? rej > 0 : lain > 0;
+                        if (!showRow) return null;
                         return (
-                          <div key={p.id} className="flex items-center justify-between text-xs border-b border-gray-50 pb-1.5">
-                            <div className="min-w-0 pr-2">
-                              <span className="font-medium text-gray-700">{cfg?.label} — {vlabel}</span>
-                              <span className="text-gray-400"> · {formatTanggal(p.tanggal)}</span>
+                          <div key={p.id} className="border-b border-gray-50 pb-1.5 text-xs">
+                            <div className="flex items-center justify-between">
+                              <div className="min-w-0 pr-2">
+                                <span className="font-medium text-gray-700">{cfg?.label} — {vlabel}</span>
+                                <span className="text-gray-400"> · {formatTanggal(p.tanggal)}</span>
+                              </div>
+                              <div className="shrink-0 text-right">
+                                {(rejectView === "semua" || rejectView === "reject") && rej > 0 && (
+                                  <span className="text-red-600 font-semibold block">Reject: {formatAngka(rej)} pcs</span>
+                                )}
+                                {(rejectView === "semua" || rejectView === "lain") && lain > 0 && (
+                                  <span className="text-orange-600 font-semibold block">{alasan ?? "Basi/dll"}: {formatAngka(lain)} pcs</span>
+                                )}
+                              </div>
                             </div>
-                            <span className={`shrink-0 ${p.reject > 0 ? "text-red-600 font-semibold" : "text-gray-300"}`}>{formatAngka(p.reject)} pcs</span>
                           </div>
                         );
                       })}
@@ -1265,27 +1362,30 @@ function InputStokModal({ batch, carryIn, carryFromDate, cfg, busy, onClose, onC
   cfg: (VarianCfg & { brandKey: BrandKey; brandLabel: string }) | null;
   busy: boolean;
   onClose: () => void;
-  onConfirm: (data: { pack5: number; pack5Final: number; pack10: number; reject: number; lebihan: number; catatan: string }) => void;
+  onConfirm: (data: { pack5: number; pack5Final: number; pack10: number; reject: number; rejectLain: number; alasanRejectLain: string; lebihan: number; catatan: string }) => void;
 }) {
-  const [pack5,   setPack5]   = useState("");
-  const [pack10,  setPack10]  = useState("");
-  const [reject,  setReject]  = useState("");
-  const [lebihan, setLebihan] = useState("");
-  const [catatan, setCatatan] = useState("");
-  const [stage,   setStage]   = useState<"input" | "akumulasi">("input");
-  const [sudahGabung, setSudahGabung] = useState(false);
+  const [pack5,            setPack5]            = useState("");
+  const [pack10,           setPack10]           = useState("");
+  const [reject,           setReject]           = useState("");
+  const [rejectLain,       setRejectLain]       = useState("");
+  const [alasanRejectLain, setAlasanRejectLain] = useState("basi");
+  const [lebihan,          setLebihan]          = useState("");
+  const [catatan,          setCatatan]          = useState("");
+  const [stage,            setStage]            = useState<"input" | "akumulasi">("input");
+  const [sudahGabung,      setSudahGabung]      = useState(false);
 
   const showPack10 = cfg?.brandKey === "mehana";
   const locked     = stage === "akumulasi";
 
   const direndam = batch.jumlah_pack_adonan ?? 0;
-  const p5  = parseInt(pack5)  || 0;
-  const p10 = showPack10 ? (parseInt(pack10) || 0) : 0;
-  const rej = parseInt(reject) || 0;
-  const leb = parseInt(lebihan) || 0;
+  const p5   = parseInt(pack5)       || 0;
+  const p10  = showPack10 ? (parseInt(pack10) || 0) : 0;
+  const rej  = parseInt(reject)      || 0;
+  const rejL = parseInt(rejectLain)  || 0;
+  const leb  = parseInt(lebihan)     || 0;
 
   // Stage 1: Total Check = direndam only
-  const sum     = p5 * 5 + p10 * 10 + rej + leb;
+  const sum     = p5 * 5 + p10 * 10 + rej + rejL + leb;
   const selisih = direndam - sum;
   const match   = selisih === 0 && direndam > 0;
 
@@ -1344,22 +1444,43 @@ function InputStokModal({ batch, carryIn, carryFromDate, cfg, busy, onClose, onC
               )}
             </div>
 
-            {/* Reject & Lebihan */}
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className={`label ${locked ? "text-gray-400" : ""}`}>Reject</label>
-                <div className="flex items-center gap-1.5">
-                  <input type="number" min="0" placeholder="0" className={`${inputCls} flex-1`}
-                    value={reject} onChange={(e) => setReject(e.target.value)} disabled={locked} />
-                  <span className="text-xs text-gray-400">pcs</span>
+            {/* Reject, Basi/Hilang/dll & Lebihan */}
+            <div className="space-y-2">
+              <p className="text-xs font-bold text-gray-500 uppercase tracking-wide">Reject & Lainnya</p>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className={`label ${locked ? "text-gray-400" : ""}`}>Reject</label>
+                  <div className="flex items-center gap-1.5">
+                    <input type="number" min="0" placeholder="0" className={`${inputCls} flex-1`}
+                      value={reject} onChange={(e) => setReject(e.target.value)} disabled={locked} />
+                    <span className="text-xs text-gray-400">pcs</span>
+                  </div>
+                </div>
+                <div>
+                  <label className={`label ${locked ? "text-gray-400" : ""}`}>Lebihan</label>
+                  <div className="flex items-center gap-1.5">
+                    <input type="number" min="0" placeholder="0" className={`${inputCls} flex-1`}
+                      value={lebihan} onChange={(e) => setLebihan(e.target.value)} disabled={locked} />
+                    <span className="text-xs text-gray-400">pcs</span>
+                  </div>
                 </div>
               </div>
-              <div>
-                <label className={`label ${locked ? "text-gray-400" : ""}`}>Lebihan</label>
-                <div className="flex items-center gap-1.5">
-                  <input type="number" min="0" placeholder="0" className={`${inputCls} flex-1`}
-                    value={lebihan} onChange={(e) => setLebihan(e.target.value)} disabled={locked} />
+              {/* Basi/Hilang/Salah Resep/dll */}
+              <div className={`rounded-xl border p-3 space-y-2 ${locked ? "opacity-50" : "border-orange-200 bg-orange-50"}`}>
+                <p className="text-xs font-semibold text-orange-700">Basi / Hilang / Salah Resep / dll</p>
+                <div className="flex items-center gap-2">
+                  <input type="number" min="0" placeholder="0" className={`${inputCls} w-20`}
+                    value={rejectLain} onChange={(e) => setRejectLain(e.target.value)} disabled={locked} />
                   <span className="text-xs text-gray-400">pcs</span>
+                  {(parseInt(rejectLain) || 0) > 0 && (
+                    <select value={alasanRejectLain} onChange={(e) => setAlasanRejectLain(e.target.value)}
+                      disabled={locked}
+                      className="flex-1 input py-1.5 text-sm">
+                      {ALASAN_REJECT_LAIN.map((a) => (
+                        <option key={a.key} value={a.key}>{a.label}</option>
+                      ))}
+                    </select>
+                  )}
                 </div>
               </div>
             </div>
@@ -1377,8 +1498,8 @@ function InputStokModal({ batch, carryIn, carryFromDate, cfg, busy, onClose, onC
               <p className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Total Check</p>
               <p className="text-xs text-gray-600">
                 {showPack10
-                  ? `(Isi 5 × 5) + (Isi 10 × 10) + Reject + Lebihan = `
-                  : `(Isi 5 × 5) + Reject + Lebihan = `}
+                  ? `(Isi 5 × 5) + (Isi 10 × 10) + Reject + Basi/dll + Lebihan = `
+                  : `(Isi 5 × 5) + Reject + Basi/dll + Lebihan = `}
                 <b>{formatAngka(sum)} pcs</b>
               </p>
               <p className="text-xs text-gray-600">Harus sama dengan: <b>{formatAngka(direndam)} pcs</b></p>
@@ -1468,7 +1589,7 @@ function InputStokModal({ batch, carryIn, carryFromDate, cfg, busy, onClose, onC
                 <div className="flex gap-2">
                   <button onClick={onClose} className="btn-secondary flex-1">Batal</button>
                   <button
-                    onClick={() => onConfirm({ pack5: p5, pack5Final, pack10: p10, reject: rej, lebihan: leb, catatan })}
+                    onClick={() => onConfirm({ pack5: p5, pack5Final, pack10: p10, reject: rej, rejectLain: rejL, alasanRejectLain, lebihan: leb, catatan })}
                     disabled={busy}
                     className="btn-primary flex-1 flex items-center justify-center gap-2">
                     <CheckCircle size={16} /> {busy ? "Memproses..." : "Selesai"}

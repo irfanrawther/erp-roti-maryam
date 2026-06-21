@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
-import { getUserSession, canAccessAdmin, hashPin, getRoleLabel, getScopeLabel } from "@/lib/auth";
+import { getUserSession, canAccessAdmin, hashPin, getRoleLabel, getScopeLabel, type UserSession } from "@/lib/auth";
 import { homeRoute, ROLE_OPTIONS, SCOPE_OPTIONS } from "@/lib/permissions";
 import { formatTanggalWaktu } from "@/lib/utils";
 import { Plus, X, Users, ShieldAlert, Pencil } from "lucide-react";
@@ -18,25 +18,32 @@ interface User {
 
 export default function AdminUsersPage() {
   const router = useRouter();
-  const currentUser = getUserSession();
-  const [users, setUsers] = useState<User[]>([]);
-  const [showForm, setShowForm] = useState(false);
-  const [editUser, setEditUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [formError, setFormError] = useState("");
+  const [currentUser, setCurrentUser] = useState<UserSession | null>(null);
+  const [users,      setUsers]      = useState<User[]>([]);
+  const [showForm,   setShowForm]   = useState(false);
+  const [editUser,   setEditUser]   = useState<User | null>(null);
+  const [loading,    setLoading]    = useState(false);
+  const [formError,  setFormError]  = useState("");
 
-  const [form, setForm] = useState({ nama: "", pin: "", pin_confirm: "", role: "spv", access_scope: "adonan_rendam" });
+  const [form, setForm] = useState({
+    nama: "", pin: "", pin_confirm: "", role: "spv", access_scope: "adonan_rendam",
+  });
 
   useEffect(() => {
-    if (!currentUser || !canAccessAdmin(currentUser.role)) {
-      router.replace(homeRoute(currentUser));
+    const u = getUserSession();
+    setCurrentUser(u);
+    if (!u || !canAccessAdmin(u.role)) {
+      router.replace(homeRoute(u));
       return;
     }
     fetchUsers();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function fetchUsers() {
-    const { data } = await supabase.from("users").select("id, nama, role, access_scope, aktif, created_at").order("nama");
+    const { data } = await supabase
+      .from("users")
+      .select("id, nama, role, access_scope, aktif, created_at")
+      .order("nama");
     if (data) setUsers(data as User[]);
   }
 
@@ -58,47 +65,82 @@ export default function AdminUsersPage() {
     e.preventDefault();
     setFormError("");
 
-    // Validasi PIN
+    if (!form.nama.trim()) { setFormError("Nama tidak boleh kosong."); return; }
+
     const pinRequired = !editUser;
     if (pinRequired || form.pin) {
-      if (form.pin.length !== 6 || !/^\d{6}$/.test(form.pin)) {
-        setFormError("PIN harus 6 digit angka");
+      if (!/^\d{6}$/.test(form.pin)) {
+        setFormError("PIN harus 6 digit angka.");
         return;
       }
       if (form.pin !== form.pin_confirm) {
-        setFormError("Konfirmasi PIN tidak cocok");
+        setFormError("Konfirmasi PIN tidak cocok.");
         return;
       }
     }
 
     setLoading(true);
 
-    // Validasi PIN unik (jika PIN diisi)
+    const scope = form.role === "spv" ? form.access_scope : null;
+
     if (form.pin) {
+      // Hash PIN dan cek unik
       const pinHash = await hashPin(form.pin);
-      const { data: clash } = await supabase.from("users").select("id, nama").eq("pin_hash", pinHash);
-      const conflict = (clash as { id: string; nama: string }[] | null)?.find((c) => c.id !== editUser?.id);
+      const { data: clash } = await supabase
+        .from("users").select("id, nama").eq("pin_hash", pinHash);
+      const conflict = (clash as { id: string; nama: string }[] | null)
+        ?.find((c) => c.id !== editUser?.id);
       if (conflict) {
         setLoading(false);
         setFormError(`PIN sudah dipakai oleh ${conflict.nama}. Gunakan PIN lain.`);
         return;
       }
 
-      const scope = form.role === "spv" ? form.access_scope : null;
       if (!editUser) {
-        await supabase.from("users").insert({ nama: form.nama, pin_hash: pinHash, role: form.role, access_scope: scope });
+        // CREATE
+        const { error } = await supabase.from("users").insert({
+          nama:         form.nama.trim(),
+          pin_hash:     pinHash,
+          role:         form.role,
+          access_scope: scope,
+          aktif:        true,
+        });
+        if (error) {
+          setLoading(false);
+          setFormError("Gagal menyimpan: " + error.message);
+          return;
+        }
       } else {
-        await supabase.from("users").update({ nama: form.nama, role: form.role, access_scope: scope, pin_hash: pinHash }).eq("id", editUser.id);
+        // EDIT dengan PIN baru
+        const { error } = await supabase.from("users").update({
+          nama:         form.nama.trim(),
+          role:         form.role,
+          access_scope: scope,
+          pin_hash:     pinHash,
+        }).eq("id", editUser.id);
+        if (error) {
+          setLoading(false);
+          setFormError("Gagal menyimpan: " + error.message);
+          return;
+        }
       }
     } else if (editUser) {
-      // Edit tanpa ubah PIN
-      const scope = form.role === "spv" ? form.access_scope : null;
-      await supabase.from("users").update({ nama: form.nama, role: form.role, access_scope: scope }).eq("id", editUser.id);
+      // EDIT tanpa ubah PIN
+      const { error } = await supabase.from("users").update({
+        nama:         form.nama.trim(),
+        role:         form.role,
+        access_scope: scope,
+      }).eq("id", editUser.id);
+      if (error) {
+        setLoading(false);
+        setFormError("Gagal menyimpan: " + error.message);
+        return;
+      }
     }
 
     setLoading(false);
     setShowForm(false);
-    fetchUsers();
+    await fetchUsers();
   }
 
   async function toggleAktif(u: User) {
@@ -106,7 +148,16 @@ export default function AdminUsersPage() {
     fetchUsers();
   }
 
-  if (!currentUser || !canAccessAdmin(currentUser.role)) {
+  // Tampil loading saat currentUser belum diload
+  if (!currentUser) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="w-6 h-6 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  if (!canAccessAdmin(currentUser.role)) {
     return (
       <div className="flex items-center justify-center h-64">
         <div className="text-center">
@@ -133,7 +184,8 @@ export default function AdminUsersPage() {
         </div>
         <div className="space-y-2">
           {users.map((u) => (
-            <div key={u.id} className={`flex items-center justify-between p-3 rounded-xl border ${u.aktif ? "border-gray-100" : "border-gray-100 opacity-50"}`}>
+            <div key={u.id}
+              className={`flex items-center justify-between p-3 rounded-xl border border-gray-100 ${!u.aktif ? "opacity-50" : ""}`}>
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 bg-amber-100 rounded-full flex items-center justify-center font-bold text-amber-700">
                   {u.nama.charAt(0).toUpperCase()}
@@ -141,23 +193,31 @@ export default function AdminUsersPage() {
                 <div>
                   <p className="font-medium text-sm text-gray-800">{u.nama}</p>
                   <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
-                    <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">{getRoleLabel(u.role)}</span>
+                    <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">
+                      {getRoleLabel(u.role)}
+                    </span>
                     {getScopeLabel(u.access_scope) && (
-                      <span className="text-xs bg-amber-50 text-amber-700 px-2 py-0.5 rounded-full">{getScopeLabel(u.access_scope)}</span>
+                      <span className="text-xs bg-amber-50 text-amber-700 px-2 py-0.5 rounded-full">
+                        {getScopeLabel(u.access_scope)}
+                      </span>
+                    )}
+                    {!u.aktif && (
+                      <span className="text-xs bg-red-50 text-red-500 px-2 py-0.5 rounded-full">Nonaktif</span>
                     )}
                   </div>
                   <p className="text-xs text-gray-400 mt-0.5">{formatTanggalWaktu(u.created_at)}</p>
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <button onClick={() => openEdit(u)} className="p-2 text-gray-400 hover:text-amber-500 hover:bg-amber-50 rounded-lg">
+                <button onClick={() => openEdit(u)}
+                  className="p-2 text-gray-400 hover:text-amber-500 hover:bg-amber-50 rounded-lg">
                   <Pencil size={16} />
                 </button>
                 {u.id !== currentUser.id && (
-                  <button
-                    onClick={() => toggleAktif(u)}
-                    className={`text-xs px-3 py-1 rounded-full font-medium ${u.aktif ? "bg-red-50 text-red-500 hover:bg-red-100" : "bg-green-50 text-green-500 hover:bg-green-100"}`}
-                  >
+                  <button onClick={() => toggleAktif(u)}
+                    className={`text-xs px-3 py-1 rounded-full font-medium ${
+                      u.aktif ? "bg-red-50 text-red-500 hover:bg-red-100" : "bg-green-50 text-green-500 hover:bg-green-100"
+                    }`}>
                     {u.aktif ? "Nonaktifkan" : "Aktifkan"}
                   </button>
                 )}
@@ -167,33 +227,38 @@ export default function AdminUsersPage() {
         </div>
       </div>
 
-      {/* Modal */}
+      {/* Modal tambah / edit */}
       {showForm && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-4">
           <div className="bg-white rounded-2xl w-full max-w-md">
             <div className="flex items-center justify-between p-4 border-b">
               <h2 className="font-bold text-gray-800">{editUser ? "Edit User" : "Tambah User Baru"}</h2>
-              <button onClick={() => setShowForm(false)} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
+              <button onClick={() => setShowForm(false)} className="text-gray-400 hover:text-gray-600">
+                <X size={20} />
+              </button>
             </div>
             <form onSubmit={handleSubmit} className="p-4 space-y-3">
               <div>
                 <label className="label">Nama Lengkap *</label>
-                <input className="input" required value={form.nama} onChange={(e) => setForm({ ...form, nama: e.target.value })} placeholder="Nama user..." />
+                <input className="input" required value={form.nama}
+                  onChange={(e) => setForm({ ...form, nama: e.target.value })}
+                  placeholder="Nama user..." />
               </div>
               <div>
                 <label className="label">Role *</label>
-                <select className="input" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
+                <select className="input" value={form.role}
+                  onChange={(e) => setForm({ ...form, role: e.target.value })}>
                   {ROLE_OPTIONS.map((r) => (
                     <option key={r.value} value={r.value}>{r.label}</option>
                   ))}
                 </select>
               </div>
 
-              {/* Scope khusus SPV */}
               {form.role === "spv" && (
                 <div>
                   <label className="label">Akses SPV *</label>
-                  <select className="input" value={form.access_scope} onChange={(e) => setForm({ ...form, access_scope: e.target.value })}>
+                  <select className="input" value={form.access_scope}
+                    onChange={(e) => setForm({ ...form, access_scope: e.target.value })}>
                     {SCOPE_OPTIONS.map((s) => (
                       <option key={s.value} value={s.value}>{s.label}</option>
                     ))}
@@ -203,9 +268,9 @@ export default function AdminUsersPage() {
               )}
 
               <div>
-                <label className="label">PIN 6 Digit {editUser && "(kosongkan jika tidak diubah)"}</label>
+                <label className="label">PIN 6 Digit {editUser ? "(kosongkan jika tidak diubah)" : "*"}</label>
                 <input
-                  type="tel" inputMode="numeric" maxLength={6} pattern="\d{6}"
+                  type="tel" inputMode="numeric" maxLength={6}
                   className="input tracking-widest text-center text-lg font-bold"
                   required={!editUser}
                   value={form.pin}
@@ -214,7 +279,7 @@ export default function AdminUsersPage() {
                 />
               </div>
               <div>
-                <label className="label">Konfirmasi PIN {editUser && "(isi jika PIN diubah)"}</label>
+                <label className="label">Konfirmasi PIN {editUser ? "(isi jika PIN diubah)" : "*"}</label>
                 <input
                   type="tel" inputMode="numeric" maxLength={6}
                   className="input tracking-widest text-center text-lg font-bold"
@@ -224,10 +289,20 @@ export default function AdminUsersPage() {
                   placeholder="••••••"
                 />
               </div>
-              {formError && <p className="text-red-500 text-sm">{formError}</p>}
+
+              {formError && (
+                <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-sm text-red-600">
+                  {formError}
+                </div>
+              )}
+
               <div className="flex gap-2 pt-2">
-                <button type="button" onClick={() => setShowForm(false)} className="btn-secondary flex-1">Batal</button>
-                <button type="submit" disabled={loading} className="btn-primary flex-1">{loading ? "Menyimpan..." : "Simpan"}</button>
+                <button type="button" onClick={() => setShowForm(false)} className="btn-secondary flex-1">
+                  Batal
+                </button>
+                <button type="submit" disabled={loading} className="btn-primary flex-1">
+                  {loading ? "Menyimpan..." : "Simpan"}
+                </button>
               </div>
             </form>
           </div>

@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { getUserSession } from "@/lib/auth";
@@ -34,11 +35,13 @@ export default function PengirimanPage() {
     if (user && !caps.pengiriman) router.replace(homeRoute(user));
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const [activeTab, setActiveTab] = useState<"pengiriman" | "laporan">("pengiriman");
-  const [skuList,   setSkuList]   = useState<ProdukSku[]>([]);
-  const [allRows,   setAllRows]   = useState<PengirimanRow[]>([]);
-  const [busy,      setBusy]      = useState(false);
-  const [toast,     setToast]     = useState("");
+  const [activeTab,      setActiveTab]      = useState<"pengiriman" | "laporan">("pengiriman");
+  const [skuList,        setSkuList]        = useState<ProdukSku[]>([]);
+  const [allRows,        setAllRows]        = useState<PengirimanRow[]>([]);
+  const [busy,           setBusy]           = useState(false);
+  const [toast,          setToast]          = useState("");
+  const [showResetModal, setShowResetModal] = useState(false);
+  const [resetBusy,      setResetBusy]      = useState(false);
 
   // Butter Hollmann bahan_baku id
   const [butterId, setButterId] = useState<string | null>(null);
@@ -170,11 +173,10 @@ export default function PengirimanPage() {
   const totalPackForm = Object.values(packForm).reduce((s, v) => s + (parseInt(v) || 0), 0);
   const sumForSku = (id: string) => allRows.filter(p => p.produk_sku_id === id).reduce((s, p) => s + p.jumlah_pack, 0);
 
-  function handleReset() {
+  function resetUiState() {
     const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" });
     const y = new Date().getFullYear();
     const m = String(new Date().getMonth() + 1).padStart(2, "0");
-
     setActiveTab("pengiriman");
     setPackForm({});
     setButterManual("");
@@ -184,8 +186,21 @@ export default function PengirimanPage() {
     setCustomStart("");
     setCustomEnd("");
     setSelectedBulan(`${y}-${m}`);
-
     setAllRows([]);
+  }
+
+  async function doReset() {
+    setResetBusy(true);
+    // Hapus semua data pengiriman
+    await supabase.from("pengiriman").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+    // Reset stok produk ke 0 (semua sudah dikirim)
+    await supabase.from("produk_sku").update({ stok_saat_ini: 0 }).eq("aktif", true);
+    resetUiState();
+    setShowResetModal(false);
+    setResetBusy(false);
+    setToast("Data pengiriman & laporan berhasil direset.");
+    setTimeout(() => setToast(""), 3000);
+    fetchSkus();
   }
 
   function periodLabel() {
@@ -211,7 +226,7 @@ export default function PengirimanPage() {
 
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-bold text-gray-800">Pengiriman</h1>
-        <button type="button" onClick={() => handleReset()}
+        <button type="button" onClick={() => setShowResetModal(true)}
           className="flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-lg bg-red-100 text-red-600 hover:bg-red-200 transition-colors cursor-pointer">
           <RotateCcw size={11} /> Reset
         </button>
@@ -425,6 +440,33 @@ export default function PengirimanPage() {
             );
           })()}
         </div>
+      )}
+
+      {showResetModal && typeof document !== "undefined" && createPortal(
+        <div className="fixed inset-0 bg-black/40 z-[9999] flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl w-full max-w-xs shadow-xl p-5 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-red-100 rounded-full flex items-center justify-center shrink-0">
+                <RotateCcw size={18} className="text-red-500" />
+              </div>
+              <div>
+                <p className="font-bold text-gray-800 text-sm">Reset Data Pengiriman?</p>
+                <p className="text-xs text-gray-500 mt-0.5">Semua data pengiriman & laporan penjualan akan dihapus permanen. Stok produk dikembalikan ke 0.</p>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button type="button" onClick={() => setShowResetModal(false)} disabled={resetBusy}
+                className="flex-1 py-2 rounded-xl border border-gray-200 text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors disabled:opacity-50">
+                Batal
+              </button>
+              <button type="button" onClick={doReset} disabled={resetBusy}
+                className="flex-1 py-2 rounded-xl bg-red-500 text-white text-sm font-semibold hover:bg-red-600 transition-colors disabled:opacity-60">
+                {resetBusy ? "Memproses..." : "Ya, Reset"}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
       )}
     </div>
   );

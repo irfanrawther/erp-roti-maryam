@@ -1,7 +1,8 @@
 "use client";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { getUserSession, clearUserSession, getRoleLabel, getScopeLabel } from "@/lib/auth";
+import { useState, useEffect } from "react";
+import { getUserSession, clearUserSession, getRoleLabel, getScopeLabel, type UserSession } from "@/lib/auth";
 import { getCapabilities } from "@/lib/permissions";
 import { cn } from "@/lib/utils";
 import {
@@ -10,6 +11,7 @@ import {
   Truck,
   Users,
   BookOpen,
+  ClipboardList,
   LogOut,
   X,
 } from "lucide-react";
@@ -22,14 +24,16 @@ interface SidebarProps {
 export default function Sidebar({ open, onClose }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
-  const user = getUserSession();
+  const [user, setUser] = useState<UserSession | null>(null);
+  useEffect(() => { setUser(getUserSession()); }, []);
   const caps = getCapabilities(user);
 
   // Nav items difilter berdasarkan capability
   const navItems = [
-    { href: "/dashboard",  label: "Dashboard",   icon: LayoutDashboard, show: caps.dashboard },
-    { href: "/packing",    label: "Produksi",    icon: Workflow,        show: caps.bahanBaku || caps.produksiFlow },
-    { href: "/pengiriman", label: "Pengiriman",  icon: Truck,           show: caps.pengiriman },
+    { href: "/dashboard",     label: "Dashboard",     icon: LayoutDashboard, show: caps.dashboard },
+    { href: "/packing",       label: "Produksi",      icon: Workflow,        show: caps.bahanBaku || caps.produksiFlow },
+    { href: "/pengiriman",    label: "Pengiriman",    icon: Truck,           show: caps.pengiriman },
+    { href: "/stock-opname",  label: "Stock Opname",  icon: ClipboardList,   show: caps.stockOpname },
   ].filter((i) => i.show);
 
   const adminItems = [
