@@ -15,6 +15,7 @@ export interface Capabilities {
   packingFreezer: boolean;
   produksiRiwayat: boolean;
   pengiriman: boolean;
+  produkReject: boolean;  // halaman Produk Reject (jual ke Olmoz Store)
   kelolaUser: boolean;
   masterResep: boolean;
   stockOpname: boolean;   // halaman Stock Opname (PIC + Super Admin)
@@ -24,7 +25,7 @@ export interface Capabilities {
 const NONE: Capabilities = {
   dashboard: false, bahanBaku: false, produksiFlow: false,
   adonan: false, rendam: false, packingFreezer: false, produksiRiwayat: false,
-  pengiriman: false, kelolaUser: false, masterResep: false,
+  pengiriman: false, produkReject: false, kelolaUser: false, masterResep: false,
   stockOpname: false, isSuperAdmin: false,
 };
 
@@ -37,7 +38,7 @@ export function getCapabilities(user: UserSession | null): Capabilities {
     return {
       dashboard: true, bahanBaku: true, produksiFlow: true,
       adonan: true, rendam: true, packingFreezer: true, produksiRiwayat: true,
-      pengiriman: true, kelolaUser: true, masterResep: true,
+      pengiriman: true, produkReject: true, kelolaUser: true, masterResep: true,
       stockOpname: true, isSuperAdmin: true,
     };
   }
@@ -51,7 +52,7 @@ export function getCapabilities(user: UserSession | null): Capabilities {
   }
 
   if (role === "staff_packing_pengiriman") {
-    return { ...NONE, pengiriman: true };
+    return { ...NONE, pengiriman: true, produkReject: true };
   }
 
   if (role === "spv") {
@@ -69,6 +70,7 @@ export function homeRoute(user: UserSession | null): string {
   if (caps.dashboard) return "/dashboard";
   if (caps.bahanBaku || caps.produksiFlow) return "/packing";
   if (caps.pengiriman) return "/pengiriman";
+  if (caps.produkReject) return "/produk-reject";
   if (caps.stockOpname) return "/stock-opname";
   return "/login";
 }

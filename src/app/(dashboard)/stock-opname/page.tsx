@@ -44,8 +44,17 @@ interface DetailProduk {
   produk_sku: { brand: string; varian: string; isi_per_pack: number };
 }
 
+interface DetailReject {
+  id: string;
+  reject_id: string;
+  stok_sistem: number;
+  stok_fisik: number | null;
+  stok_produk_reject: { brand: string; varian: string };
+}
+
 interface BahanBaku { id: string; nama: string; satuan: string; stok_saat_ini: number; }
 interface ProdukSku  { id: string; brand: string; varian: string; isi_per_pack: number; stok_saat_ini: number; }
+interface RejectStok { id: string; brand: string; varian: string; stok_pcs: number; }
 
 // ── Helpers ──────────────────────────────────────────────────
 const BULAN_ID = ["Januari","Februari","Maret","April","Mei","Juni","Juli","Agustus","September","Oktober","November","Desember"];
@@ -128,6 +137,19 @@ function sortProduk(list: ProdukSku[]): ProdukSku[] {
   });
 }
 
+function sortReject(list: RejectStok[]): RejectStok[] {
+  return [...list].sort((a, b) => {
+    if (a.brand !== b.brand) return a.brand === "cane" ? -1 : 1;
+    const order = a.brand === "cane" ? CANE_VARIANTS : MEHANA_VARIANTS;
+    return (order.indexOf(a.varian) ?? 99) - (order.indexOf(b.varian) ?? 99);
+  });
+}
+
+function rejectLabel(brand: string, varian: string): string {
+  const brandLabel = brand === "cane" ? "Cane RawtheR" : brand === "mehana" ? "Mehana Boga Utama" : brand;
+  return `${brandLabel} — ${varian}`;
+}
+
 // ── Main Component ───────────────────────────────────────────
 export default function StockOpnamePage() {
   const router = useRouter();
@@ -139,8 +161,10 @@ export default function StockOpnamePage() {
   const [opname,       setOpname]       = useState<OpnameRow | null>(null);
   const [detailBahan,  setDetailBahan]  = useState<DetailBahan[]>([]);
   const [detailProduk, setDetailProduk] = useState<DetailProduk[]>([]);
+  const [detailReject, setDetailReject] = useState<DetailReject[]>([]);
   const [bahanList,    setBahanList]    = useState<BahanBaku[]>([]);
   const [skuList,      setSkuList]      = useState<ProdukSku[]>([]);
+  const [rejectList,   setRejectList]   = useState<RejectStok[]>([]);
   const [allOpname,    setAllOpname]    = useState<OpnameRow[]>([]);
 
   // Local input state — bahan: utuh + sisa dengan satuan masing-masing
@@ -149,6 +173,7 @@ export default function StockOpnamePage() {
   const [sisaBahan,      setSisaBahan]      = useState<Record<string, string>>({});
   const [satuanSisaBahan,setSatuanSisaBahan]= useState<Record<string, string>>({});
   const [fisikProduk, setFisikProduk] = useState<Record<string, string>>({});
+  const [fisikReject, setFisikReject] = useState<Record<string, string>>({});
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [catatanPic,  setCatatanPic]  = useState("");
 
@@ -162,6 +187,7 @@ export default function StockOpnamePage() {
   const [reviewModal,       setReviewModal]       = useState<OpnameRow | null>(null);
   const [reviewDetailBahan, setReviewDetailBahan] = useState<DetailBahan[]>([]);
   const [reviewDetailProduk,setReviewDetailProduk]= useState<DetailProduk[]>([]);
+  const [reviewDetailReject,setReviewDetailReject]= useState<DetailReject[]>([]);
   const [catatanApproval,   setCatatanApproval]   = useState("");
   const [approvalBusy,      setApprovalBusy]      = useState(false);
 
@@ -189,12 +215,14 @@ export default function StockOpnamePage() {
   }, [selYear, selMonth]);
 
   const fetchMaster = useCallback(async () => {
-    const [bahanRes, skuRes] = await Promise.all([
+    const [bahanRes, skuRes, rejectRes] = await Promise.all([
       supabase.from("bahan_baku").select("id,nama,satuan,stok_saat_ini").eq("aktif", true),
       supabase.from("produk_sku").select("id,brand,varian,isi_per_pack,stok_saat_ini").eq("aktif", true),
+      supabase.from("stok_produk_reject").select("id,brand,varian,stok_pcs").eq("aktif", true),
     ]);
-    if (bahanRes.data) setBahanList(sortBahan(bahanRes.data as BahanBaku[]));
-    if (skuRes.data)   setSkuList(sortProduk(skuRes.data as ProdukSku[]));
+    if (bahanRes.data)  setBahanList(sortBahan(bahanRes.data as BahanBaku[]));
+    if (skuRes.data)    setSkuList(sortProduk(skuRes.data as ProdukSku[]));
+    if (rejectRes.data) setRejectList(sortReject(rejectRes.data as RejectStok[]));
   }, []);
 
   const fetchOpname = useCallback(async (p: string) => {
@@ -208,18 +236,23 @@ export default function StockOpnamePage() {
     setOpname(op);
 
     if (op) {
-      const [dbahan, dproduk] = await Promise.all([
+      const [dbahan, dproduk, dreject] = await Promise.all([
         supabase.from("stock_opname_detail_bahan")
           .select("id,bahan_id,stok_sistem,stok_fisik,stok_utuh,satuan_utuh,stok_sisa,satuan_sisa,bahan_baku:bahan_id(nama,satuan)")
           .eq("opname_id", op.id).order("bahan_id"),
         supabase.from("stock_opname_detail_produk")
           .select("id,produk_id,stok_sistem,stok_fisik,produk_sku:produk_id(brand,varian,isi_per_pack)")
           .eq("opname_id", op.id).order("produk_id"),
+        supabase.from("stock_opname_detail_reject")
+          .select("id,reject_id,stok_sistem,stok_fisik,stok_produk_reject:reject_id(brand,varian)")
+          .eq("opname_id", op.id).order("reject_id"),
       ]);
       const dbahanData = (dbahan.data ?? []) as unknown as DetailBahan[];
       const dprodukData = (dproduk.data ?? []) as unknown as DetailProduk[];
+      const drejectData = (dreject.data ?? []) as unknown as DetailReject[];
       setDetailBahan(dbahanData);
       setDetailProduk(dprodukData);
+      setDetailReject(drejectData);
 
       // Seed local inputs from existing DB values
       const fu: Record<string, string> = {};
@@ -238,13 +271,18 @@ export default function StockOpnamePage() {
       const fp: Record<string, string> = {};
       dprodukData.forEach((d) => { if (d.stok_fisik != null) fp[d.produk_id] = String(d.stok_fisik); });
       setFisikProduk(fp);
+      const fr: Record<string, string> = {};
+      drejectData.forEach((d) => { if (d.stok_fisik != null) fr[d.reject_id] = String(d.stok_fisik); });
+      setFisikReject(fr);
       setCatatanPic(op.catatan_pic ?? "");
     } else {
       setDetailBahan([]);
       setDetailProduk([]);
+      setDetailReject([]);
       setUtuhBahan({}); setSatuanUtuhBahan({});
       setSisaBahan({}); setSatuanSisaBahan({});
       setFisikProduk({});
+      setFisikReject({});
       setCatatanPic("");
     }
   }, []);
@@ -292,12 +330,14 @@ export default function StockOpnamePage() {
     const opId = (newOp as { id: string }).id;
 
     // Refresh master data first
-    const [bahanRes, skuRes] = await Promise.all([
+    const [bahanRes, skuRes, rejectRes] = await Promise.all([
       supabase.from("bahan_baku").select("id,nama,satuan,stok_saat_ini").eq("aktif", true),
       supabase.from("produk_sku").select("id,brand,varian,isi_per_pack,stok_saat_ini").eq("aktif", true),
+      supabase.from("stok_produk_reject").select("id,brand,varian,stok_pcs").eq("aktif", true),
     ]);
-    const bahans = (bahanRes.data ?? []) as BahanBaku[];
-    const skus   = (skuRes.data ?? [])   as ProdukSku[];
+    const bahans  = (bahanRes.data ?? [])  as BahanBaku[];
+    const skus    = (skuRes.data ?? [])    as ProdukSku[];
+    const rejects = (rejectRes.data ?? []) as RejectStok[];
 
     // Snapshot detail rows
     await Promise.all([
@@ -306,6 +346,9 @@ export default function StockOpnamePage() {
       ),
       supabase.from("stock_opname_detail_produk").insert(
         skus.map((s) => ({ opname_id: opId, produk_id: s.id, stok_sistem: s.stok_saat_ini }))
+      ),
+      supabase.from("stock_opname_detail_reject").insert(
+        rejects.map((r) => ({ opname_id: opId, reject_id: r.id, stok_sistem: r.stok_pcs }))
       ),
     ]);
 
@@ -333,6 +376,11 @@ export default function StockOpnamePage() {
           .update({ stok_fisik: null })
           .eq("id", d.id)
       ),
+      ...detailReject.map((d) =>
+        supabase.from("stock_opname_detail_reject")
+          .update({ stok_fisik: null })
+          .eq("id", d.id)
+      ),
       supabase.from("stock_opname")
         .update({ status: "draft", catatan_approval: null, catatan_pic: null, submitted_at: null })
         .eq("id", opname.id),
@@ -342,6 +390,7 @@ export default function StockOpnamePage() {
     setUtuhBahan({}); setSatuanUtuhBahan({});
     setSisaBahan({}); setSatuanSisaBahan({});
     setFisikProduk({});
+    setFisikReject({});
     setCatatanPic("");
     setShowResetConfirm(false);
     await fetchAllOpname();
@@ -384,6 +433,14 @@ export default function StockOpnamePage() {
         const num      = val !== undefined && val !== "" ? parseFloat(val) : null;
         const liveStok = skuList.find((s) => s.id === d.produk_id)?.stok_saat_ini ?? d.stok_sistem;
         return supabase.from("stock_opname_detail_produk")
+          .update({ stok_fisik: (num !== null && !isNaN(num)) ? num : null, stok_sistem: liveStok })
+          .eq("id", d.id);
+      }),
+      ...detailReject.map((d) => {
+        const val      = fisikReject[d.reject_id];
+        const num      = val !== undefined && val !== "" ? parseFloat(val) : null;
+        const liveStok = rejectList.find((r) => r.id === d.reject_id)?.stok_pcs ?? d.stok_sistem;
+        return supabase.from("stock_opname_detail_reject")
           .update({ stok_fisik: (num !== null && !isNaN(num)) ? num : null, stok_sistem: liveStok })
           .eq("id", d.id);
       }),
@@ -437,6 +494,14 @@ export default function StockOpnamePage() {
           .update({ stok_fisik: (num !== null && !isNaN(num)) ? num : null, stok_sistem: liveStok })
           .eq("id", d.id);
       }),
+      ...detailReject.map((d) => {
+        const val      = fisikReject[d.reject_id];
+        const num      = val !== undefined && val !== "" ? parseFloat(val) : null;
+        const liveStok = rejectList.find((r) => r.id === d.reject_id)?.stok_pcs ?? d.stok_sistem;
+        return supabase.from("stock_opname_detail_reject")
+          .update({ stok_fisik: (num !== null && !isNaN(num)) ? num : null, stok_sistem: liveStok })
+          .eq("id", d.id);
+      }),
     ]);
 
     const { error: err } = await supabase.from("stock_opname")
@@ -455,16 +520,20 @@ export default function StockOpnamePage() {
   async function openReview(op: OpnameRow) {
     setReviewModal(op);
     setCatatanApproval("");
-    const [dbahan, dproduk] = await Promise.all([
+    const [dbahan, dproduk, dreject] = await Promise.all([
       supabase.from("stock_opname_detail_bahan")
         .select("id,bahan_id,stok_sistem,stok_fisik,bahan_baku:bahan_id(nama,satuan)")
         .eq("opname_id", op.id),
       supabase.from("stock_opname_detail_produk")
         .select("id,produk_id,stok_sistem,stok_fisik,produk_sku:produk_id(brand,varian,isi_per_pack)")
         .eq("opname_id", op.id),
+      supabase.from("stock_opname_detail_reject")
+        .select("id,reject_id,stok_sistem,stok_fisik,stok_produk_reject:reject_id(brand,varian)")
+        .eq("opname_id", op.id),
     ]);
     setReviewDetailBahan((dbahan.data ?? []) as unknown as DetailBahan[]);
     setReviewDetailProduk((dproduk.data ?? []) as unknown as DetailProduk[]);
+    setReviewDetailReject((dreject.data ?? []) as unknown as DetailReject[]);
   }
 
   // ── Approve ─────────────────────────────────────────────────
@@ -782,6 +851,63 @@ export default function StockOpnamePage() {
                 </div>
               </div>
 
+              {/* ── PRODUK REJECT ── */}
+              <div className="card overflow-hidden p-0">
+                <div className="bg-red-500 px-4 py-2.5">
+                  <p className="font-bold text-white text-sm">Produk Reject — {periodeLabel(periode)} <span className="font-normal opacity-80">(pcs)</span></p>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="bg-gray-50 text-xs text-gray-500 uppercase tracking-wider">
+                        <th className="text-left px-4 py-2">Produk</th>
+                        <th className="text-right px-3 py-2">Stok Sistem</th>
+                        <th className="text-right px-3 py-2">Stok Fisik</th>
+                        <th className="text-right px-4 py-2">Selisih</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {rejectList.map((rj) => {
+                        const d = detailReject.find((x) => x.reject_id === rj.id);
+                        if (!d) return null;
+                        const fisikVal = fisikReject[d.reject_id] ?? "";
+                        const fisikNum = fisikVal !== "" ? parseFloat(fisikVal) : null;
+                        const liveStok = rj.stok_pcs;
+                        const selisih  = (fisikNum !== null && !isNaN(fisikNum)) ? fisikNum - liveStok : null;
+                        return (
+                          <tr key={d.id} className="hover:bg-gray-50/50">
+                            <td className="px-4 py-2.5 font-medium text-gray-700">{rejectLabel(rj.brand, rj.varian)}</td>
+                            <td className="px-3 py-2.5 text-right text-gray-500">
+                              {formatAngka(liveStok)} <span className="text-xs text-gray-400">pcs</span>
+                            </td>
+                            <td className="px-3 py-2.5 text-right">
+                              {isLocked ? (
+                                <span className="text-gray-700">{d.stok_fisik != null ? `${formatAngka(d.stok_fisik)} pcs` : "—"}</span>
+                              ) : (
+                                <input
+                                  type="number" min="0" step="1"
+                                  value={fisikVal}
+                                  onChange={(e) => setFisikReject((prev) => ({ ...prev, [d.reject_id]: e.target.value }))}
+                                  className="w-20 text-right border border-gray-200 rounded-lg px-2 py-1 text-sm focus:outline-none focus:border-red-400 bg-white"
+                                  placeholder="—"
+                                />
+                              )}
+                            </td>
+                            <td className="px-4 py-2.5 text-right font-semibold">
+                              {selisih !== null ? (
+                                <span className={selisih > 0 ? "text-green-600" : selisih < 0 ? "text-red-600" : "text-gray-400"}>
+                                  {selisih > 0 ? "+" : ""}{formatAngka(selisih)} pcs
+                                </span>
+                              ) : <span className="text-gray-300">—</span>}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
               {/* Catatan PIC */}
               {!isLocked && (
                 <div className="card space-y-2">
@@ -964,6 +1090,30 @@ export default function StockOpnamePage() {
                     <p className="text-xs text-gray-400 italic">
                       {reviewDetailProduk.filter((d) => d.stok_fisik == null).length} produk belum diisi.
                     </p>
+                  )}
+                </div>
+              </div>
+
+              {/* Produk Reject review */}
+              <div>
+                <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Produk Reject (pcs)</p>
+                <div className="space-y-1">
+                  {reviewDetailReject.filter((d) => d.stok_fisik != null).map((d) => {
+                    const selisih = d.stok_fisik! - d.stok_sistem;
+                    return (
+                      <div key={d.id} className="flex items-center justify-between text-sm">
+                        <span className="text-gray-700 font-medium">{rejectLabel(d.stok_produk_reject?.brand, d.stok_produk_reject?.varian)}</span>
+                        <div className="flex items-center gap-3 text-right">
+                          <span className="text-gray-400 text-xs">{formatAngka(d.stok_sistem)} → {formatAngka(d.stok_fisik!)} pcs</span>
+                          <span className={`text-xs font-bold w-16 text-right ${selisih > 0 ? "text-green-600" : selisih < 0 ? "text-red-600" : "text-gray-400"}`}>
+                            {selisih > 0 ? "+" : ""}{formatAngka(selisih)}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {reviewDetailReject.filter((d) => d.stok_fisik != null).length === 0 && (
+                    <p className="text-xs text-gray-400 italic">Tidak ada input produk reject.</p>
                   )}
                 </div>
               </div>

@@ -12,6 +12,7 @@ import {
   Users,
   BookOpen,
   ClipboardList,
+  AlertTriangle,
   LogOut,
   X,
 } from "lucide-react";
@@ -33,6 +34,7 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
     { href: "/dashboard",     label: "Dashboard",     icon: LayoutDashboard, show: caps.dashboard },
     { href: "/packing",       label: "Produksi",      icon: Workflow,        show: caps.bahanBaku || caps.produksiFlow },
     { href: "/pengiriman",    label: "Pengiriman",    icon: Truck,           show: caps.pengiriman },
+    { href: "/produk-reject", label: "Produk Reject", icon: AlertTriangle,   show: caps.produkReject },
     { href: "/stock-opname",  label: "Stock Opname",  icon: ClipboardList,   show: caps.stockOpname },
   ].filter((i) => i.show);
 

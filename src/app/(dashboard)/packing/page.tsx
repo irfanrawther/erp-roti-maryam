@@ -366,6 +366,21 @@ export default function PackingPage() {
     await supabase.from("produk_sku").update({ stok_saat_ini: Math.max(0, cur + delta) }).eq("id", skuId);
   }
 
+  // ── Stok produk reject (pcs) — reject packing masuk ke sini ──
+  async function adjustStokReject(brand: string, varian: string, deltaPcs: number) {
+    if (deltaPcs === 0) return;
+    const { data } = await supabase
+      .from("stok_produk_reject")
+      .select("id, stok_pcs")
+      .eq("brand", brand).eq("varian", varian)
+      .maybeSingle();
+    const row = data as { id: string; stok_pcs: number } | null;
+    if (!row) return;
+    await supabase.from("stok_produk_reject")
+      .update({ stok_pcs: Math.max(0, row.stok_pcs + deltaPcs), updated_at: new Date().toISOString() })
+      .eq("id", row.id);
+  }
+
   // ── STAGE 1: submit adonan ──────────────────────────────────
   async function doCreateAdonan(brandKey: BrandKey): Promise<Batch[]> {
     if (!user) return [];
@@ -560,6 +575,9 @@ export default function PackingPage() {
         if (data.pack5Final > 0) await adjustProdukJadi(batch.produk_sku_id, data.pack5Final);
       }
 
+      // 2b. reject packing → masuk stok produk reject (pcs)
+      if (data.reject > 0) await adjustStokReject(cfg.brandKey, cfg.varianDB, data.reject);
+
       // 3. batch → selesai
       const { error: updateErr } = await supabase.from("batch_produksi").update({
         status: "selesai", jumlah_pack_packing: packPcs, jumlah_reject: data.reject,
@@ -599,9 +617,9 @@ export default function PackingPage() {
         // Ambil data pack5/pack10/carry_in/lebihan dari packing_input
         const { data: piRows } = await supabase
           .from("packing_input")
-          .select("pack5, pack10, carry_in, lebihan, brand, varian")
+          .select("pack5, pack10, carry_in, lebihan, reject, brand, varian")
           .eq("batch_produksi_id", batch.id);
-        for (const pi of (piRows as { pack5: number; pack10: number; carry_in: number; lebihan: number; brand: string; varian: string }[] | null) ?? []) {
+        for (const pi of (piRows as { pack5: number; pack10: number; carry_in: number; lebihan: number; reject: number; brand: string; varian: string }[] | null) ?? []) {
           // pack5 simpan nilai original; pack5Final = + extra dari gabungkan carry-over
           const totalLeb  = (pi.carry_in ?? 0) + pi.lebihan;
           const extraPack = totalLeb >= 5 ? Math.floor(totalLeb / 5) : 0;
@@ -614,6 +632,8 @@ export default function PackingPage() {
           } else {
             if (pack5Final > 0) await adjustProdukJadi(batch.produk_sku_id, -pack5Final);
           }
+          // restore stok produk reject (reject packing)
+          if ((pi.reject ?? 0) > 0) await adjustStokReject(pi.brand, pi.varian, -pi.reject);
         }
         // Hapus packing_input rows terkait batch ini
         await supabase.from("packing_input").delete().eq("batch_produksi_id", batch.id);
@@ -649,9 +669,9 @@ export default function PackingPage() {
         if (batch.status === "selesai") {
           const { data: piRows } = await supabase
             .from("packing_input")
-            .select("pack5, pack10, carry_in, lebihan, brand, varian")
+            .select("pack5, pack10, carry_in, lebihan, reject, brand, varian")
             .eq("batch_produksi_id", batch.id);
-          for (const pi of (piRows as { pack5: number; pack10: number; carry_in: number; lebihan: number; brand: string; varian: string }[] | null) ?? []) {
+          for (const pi of (piRows as { pack5: number; pack10: number; carry_in: number; lebihan: number; reject: number; brand: string; varian: string }[] | null) ?? []) {
             const totalLeb   = (pi.carry_in ?? 0) + pi.lebihan;
             const extraPack  = totalLeb >= 5 ? Math.floor(totalLeb / 5) : 0;
             const pack5Final = pi.pack5 + extraPack;
@@ -663,6 +683,7 @@ export default function PackingPage() {
             } else {
               if (pack5Final > 0) await adjustProdukJadi(batch.produk_sku_id, -pack5Final);
             }
+            if ((pi.reject ?? 0) > 0) await adjustStokReject(pi.brand, pi.varian, -pi.reject);
           }
         }
         // Restore bahan rendam (untuk batch yg sudah melewati Rendam)
