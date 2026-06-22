@@ -6,7 +6,7 @@ import { supabase } from "@/lib/supabase";
 import { getUserSession } from "@/lib/auth";
 import { getCapabilities, homeRoute } from "@/lib/permissions";
 import { formatAngka } from "@/lib/utils";
-import { AlertTriangle, Store, RotateCcw } from "lucide-react";
+import { AlertTriangle, Store, RotateCcw, ChevronLeft, ChevronRight } from "lucide-react";
 import { RiwayatFilter, getRiwayatRange, ID_MONTHS } from "@/components/RiwayatFilter";
 import type { RiwayatPreset } from "@/components/RiwayatFilter";
 
@@ -270,13 +270,13 @@ export default function ProdukRejectPage() {
           {/* ───── INPUT PENJUALAN ───── */}
           <div className="card space-y-4">
             <h2 className="font-semibold text-gray-700 text-sm flex items-center gap-2">
-              <Store size={15} className="text-red-500" /> Jual ke {TOKO}
+              <Store size={15} className="text-red-500" /> Penjualan {TOKO}
             </h2>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-3">
               <div>
                 <label className="label">Tanggal *</label>
-                <input type="date" className="input" value={tanggal} onChange={e => setTanggal(e.target.value)} />
+                <IndonesianDatePicker value={tanggal} onChange={setTanggal} />
               </div>
               <div>
                 <label className="label">Keterangan</label>
@@ -298,10 +298,7 @@ export default function ProdukRejectPage() {
                       const over = pcs > row.stok_pcs;
                       return (
                         <div key={v} className="space-y-0.5">
-                          <div className="flex items-center justify-between">
-                            <span className="text-xs text-gray-700 font-medium">{v} <span className="text-gray-400 font-normal">(isi {row.pcs_per_pack} pcs)</span></span>
-                            <span className="text-[10px] text-gray-400">stok {formatAngka(row.stok_pcs)} pcs</span>
-                          </div>
+                          <span className="text-xs text-gray-700 font-medium block">{v} <span className="text-gray-400 font-normal">(isi {row.pcs_per_pack} pcs)</span></span>
                           <div className="flex items-center gap-1">
                             <input type="number" min="0" placeholder=""
                               className={`input flex-1 text-right text-sm py-1 ${over ? "border-red-300" : ""}`}
@@ -454,6 +451,57 @@ export default function ProdukRejectPage() {
         </div>,
         document.body
       )}
+    </div>
+  );
+}
+
+// ── Kalender Indonesia (mulai Senin) ──────────────────────────
+const HARI_PENDEK = ["Sen", "Sel", "Rab", "Kam", "Jum", "Sab", "Min"];
+const NAMA_BULAN  = ["Januari","Februari","Maret","April","Mei","Juni","Juli","Agustus","September","Oktober","November","Desember"];
+
+function IndonesianDatePicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const todayDate = new Date();
+  const initDate = value ? new Date(value + "T00:00:00") : todayDate;
+  const [viewYear,  setViewYear]  = useState(initDate.getFullYear());
+  const [viewMonth, setViewMonth] = useState(initDate.getMonth());
+  const selected = value ? new Date(value + "T00:00:00") : null;
+
+  function prevMonth() { if (viewMonth === 0) { setViewMonth(11); setViewYear((y) => y - 1); } else setViewMonth((m) => m - 1); }
+  function nextMonth() { if (viewMonth === 11) { setViewMonth(0); setViewYear((y) => y + 1); } else setViewMonth((m) => m + 1); }
+
+  const firstOffset = (new Date(viewYear, viewMonth, 1).getDay() + 6) % 7;
+  const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
+  const cells: (number | null)[] = [...Array(firstOffset).fill(null), ...Array.from({ length: daysInMonth }, (_, i) => i + 1)];
+
+  function selectDay(day: number) {
+    const mm = String(viewMonth + 1).padStart(2, "0");
+    const dd = String(day).padStart(2, "0");
+    onChange(`${viewYear}-${mm}-${dd}`);
+  }
+  const isSelected = (day: number) => selected !== null && selected.getDate() === day && selected.getMonth() === viewMonth && selected.getFullYear() === viewYear;
+  const isToday = (day: number) => todayDate.getDate() === day && todayDate.getMonth() === viewMonth && todayDate.getFullYear() === viewYear;
+
+  return (
+    <div className="bg-gray-50 rounded-xl border border-gray-200 p-4 select-none">
+      <div className="flex items-center justify-between mb-3">
+        <button type="button" onClick={prevMonth} className="p-1.5 rounded-lg hover:bg-gray-200 text-gray-500"><ChevronLeft size={18} /></button>
+        <span className="font-bold text-gray-700 text-sm">{NAMA_BULAN[viewMonth]} {viewYear}</span>
+        <button type="button" onClick={nextMonth} className="p-1.5 rounded-lg hover:bg-gray-200 text-gray-500"><ChevronRight size={18} /></button>
+      </div>
+      <div className="grid grid-cols-7 mb-1">
+        {HARI_PENDEK.map((h) => <p key={h} className="text-center text-xs font-semibold text-gray-400 py-1">{h}</p>)}
+      </div>
+      <div className="grid grid-cols-7 gap-y-1">
+        {cells.map((day, i) =>
+          day === null ? <div key={`e-${i}`} /> : (
+            <button key={day} type="button" onClick={() => selectDay(day)}
+              className={`text-center text-sm py-1.5 rounded-lg font-medium transition-colors ${
+                isSelected(day) ? "bg-red-500 text-white shadow-sm" :
+                isToday(day) ? "bg-red-100 text-red-700" : "hover:bg-white hover:shadow-sm text-gray-700"
+              }`}>{day}</button>
+          )
+        )}
+      </div>
     </div>
   );
 }
