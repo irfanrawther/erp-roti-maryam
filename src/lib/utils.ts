@@ -35,3 +35,16 @@ export function formatBahan(num: number, satuan?: string) {
     maximumFractionDigits: 3,
   }).format(num);
 }
+
+// Versi ringkas untuk Grand Total: tanpa desimal kalau bulat, maksimal 2 digit.
+// Mis. 1 kg, 0,23 Kg, 2,19 kg. Satuan hitungan tetap utuh.
+export function formatBahanRingkas(num: number) {
+  return new Intl.NumberFormat("id-ID", { maximumFractionDigits: 2 }).format(num);
+}
+
+// Tampilkan satuan dengan huruf depan kapital, mis. "pcs" → "Pcs", "kg" → "Kg".
+export function capSatuan(satuan?: string) {
+  const s = (satuan ?? "").trim();
+  if (!s) return s;
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}

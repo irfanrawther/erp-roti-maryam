@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { supabase } from "@/lib/supabase";
 import { getUserSession, canAccessAdmin } from "@/lib/auth";
-import { formatAngka, formatBahan, formatTanggalWaktu, formatTanggal } from "@/lib/utils";
+import { formatAngka, formatBahan, formatBahanRingkas, capSatuan, formatTanggalWaktu, formatTanggal } from "@/lib/utils";
 import { Plus, Minus, X, History, Check, FlaskConical, SlidersHorizontal, Trash2, AlertCircle, CheckCircle2, RotateCcw, TrendingDown, TrendingUp, Pencil } from "lucide-react";
 import { RiwayatFilter, getRiwayatRange, type RiwayatPreset } from "@/components/RiwayatFilter";
 
@@ -749,7 +749,7 @@ export default function BahanBakuView() {
                 {sorted.map(([nama, { jumlah, satuan }]) => (
                   <div key={nama} className="flex items-center justify-between">
                     <span className="text-xs text-gray-300">{nama}</span>
-                    <span className="text-xs font-bold text-white">{formatBahan(jumlah, satuan)} {satuan}</span>
+                    <span className="text-xs font-bold text-white">{formatBahanRingkas(jumlah)} {capSatuan(satuan)}</span>
                   </div>
                 ))}
               </div>
@@ -780,7 +780,7 @@ export default function BahanBakuView() {
                         <div className="flex items-start justify-between gap-2">
                           <div className="flex-1 min-w-0">
                             <p className="text-sm font-bold text-red-500">
-                              − {formatBahan(r.jumlah, r.satuan)} {r.satuan} — {r.namaBahan}
+                              − {formatBahan(r.jumlah, r.satuan)} {capSatuan(r.satuan)} — {r.namaBahan}
                             </p>
                             <p className="text-xs text-gray-600 mt-0.5">
                               dari <span className="font-medium">{r.label}</span>
