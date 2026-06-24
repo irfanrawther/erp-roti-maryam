@@ -23,9 +23,13 @@ export function formatAngka(num: number) {
   return new Intl.NumberFormat("id-ID").format(num);
 }
 
-// Khusus jumlah bahan baku (kg/liter): selalu tampilkan 3 digit di belakang koma
-// supaya presisi gram/ml terbaca penuh, mis. 2,185 kg (bukan 2,18 kg).
-export function formatBahan(num: number) {
+// Khusus jumlah bahan baku: satuan berat/volume (kg/liter) selalu tampil 3 digit
+// di belakang koma supaya presisi gram/ml terbaca penuh, mis. 2,185 kg.
+// Satuan hitungan (pcs/butir/biji/buah) tampil utuh tanpa desimal, mis. 12 pcs.
+export function formatBahan(num: number, satuan?: string) {
+  const s = (satuan ?? "").toLowerCase().trim();
+  const isHitungan = ["pcs", "butir", "biji", "buah"].includes(s);
+  if (isHitungan) return new Intl.NumberFormat("id-ID").format(num);
   return new Intl.NumberFormat("id-ID", {
     minimumFractionDigits: 3,
     maximumFractionDigits: 3,

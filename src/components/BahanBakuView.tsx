@@ -749,7 +749,7 @@ export default function BahanBakuView() {
                 {sorted.map(([nama, { jumlah, satuan }]) => (
                   <div key={nama} className="flex items-center justify-between">
                     <span className="text-xs text-gray-300">{nama}</span>
-                    <span className="text-xs font-bold text-white">{formatBahan(jumlah)} {satuan}</span>
+                    <span className="text-xs font-bold text-white">{formatBahan(jumlah, satuan)} {satuan}</span>
                   </div>
                 ))}
               </div>
@@ -780,7 +780,7 @@ export default function BahanBakuView() {
                         <div className="flex items-start justify-between gap-2">
                           <div className="flex-1 min-w-0">
                             <p className="text-sm font-bold text-red-500">
-                              − {formatBahan(r.jumlah)} {r.satuan} — {r.namaBahan}
+                              − {formatBahan(r.jumlah, r.satuan)} {r.satuan} — {r.namaBahan}
                             </p>
                             <p className="text-xs text-gray-600 mt-0.5">
                               dari <span className="font-medium">{r.label}</span>
@@ -792,7 +792,7 @@ export default function BahanBakuView() {
                                 {rowAdjs.map((a) => (
                                   <div key={a.id} className="flex items-center gap-1.5 flex-wrap">
                                     <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold ${a.tipe === "sisa" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>
-                                      {a.tipe === "sisa" ? "↑ Sisa" : "↓ Over"} {formatBahan(a.jumlah_adjustment)} {a.satuan}
+                                      {a.tipe === "sisa" ? "↑ Sisa" : "↓ Over"} {formatBahan(a.jumlah_adjustment, a.satuan)} {a.satuan}
                                     </span>
                                     <span className="text-[10px] text-gray-400">
                                       oleh <span className="font-medium text-gray-500">{a.users?.nama ?? "—"}</span> · {formatTanggalWaktu(a.created_at)}
@@ -830,7 +830,7 @@ export default function BahanBakuView() {
                             <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 p-3 space-y-2">
                               <div className="flex items-center justify-between">
                                 <p className="text-xs font-semibold text-amber-700">Adjustment: {r.namaBahan}</p>
-                                <p className="text-xs text-gray-500">Pemakaian saat ini: <span className="font-bold text-gray-700">{formatBahan(r.jumlah)} {r.satuan}</span></p>
+                                <p className="text-xs text-gray-500">Pemakaian saat ini: <span className="font-bold text-gray-700">{formatBahan(r.jumlah, r.satuan)} {r.satuan}</span></p>
                               </div>
                               <div className="flex gap-2">
                                 <button type="button" onClick={() => setAdjTipe("sisa")}
@@ -858,11 +858,11 @@ export default function BahanBakuView() {
                                   ? <p className="text-xs text-red-500 bg-red-50 rounded px-2 py-1">Satuan {adjSatuan} tidak kompatibel dengan {r.satuan}</p>
                                   : preview
                                     ? <p className="text-xs bg-white rounded px-2 py-1 border border-amber-200">
-                                        Pemakaian: <span className="font-bold text-gray-700">{formatBahan(r.jumlah)} {r.satuan}</span>
+                                        Pemakaian: <span className="font-bold text-gray-700">{formatBahan(r.jumlah, r.satuan)} {r.satuan}</span>
                                         {" → "}
-                                        <span className={`font-bold ${adjTipe === "sisa" ? "text-green-600" : "text-red-600"}`}>{formatBahan(preview.newJumlah)} {r.satuan}</span>
+                                        <span className={`font-bold ${adjTipe === "sisa" ? "text-green-600" : "text-red-600"}`}>{formatBahan(preview.newJumlah, r.satuan)} {r.satuan}</span>
                                         <span className="text-gray-400 ml-1">
-                                          ({adjTipe === "sisa" ? "stok +" : "stok −"}{formatBahan(preview.insertJumlah)} {preview.insertSatuan})
+                                          ({adjTipe === "sisa" ? "stok +" : "stok −"}{formatBahan(preview.insertJumlah, preview.insertSatuan)} {preview.insertSatuan})
                                         </span>
                                       </p>
                                     : <p className="text-xs text-red-500 bg-red-50 rounded px-2 py-1">Jumlah sisa melebihi pemakaian saat ini</p>
