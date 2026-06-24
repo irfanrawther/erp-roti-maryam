@@ -44,7 +44,8 @@ export function getCapabilities(user: UserSession | null): Capabilities {
   }
 
   if (role === "pic") {
-    return { ...NONE, stockOpname: true };
+    // PIC: Dashboard (sebagian card) + Bahan Baku (read-only) + Stock Opname
+    return { ...NONE, dashboard: true, bahanBaku: true, stockOpname: true };
   }
 
   if (role === "staff_produksi") {

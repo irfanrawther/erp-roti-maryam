@@ -46,6 +46,7 @@ export default function DashboardPage() {
   const user = getUserSession();
   const router = useRouter();
   const caps = getCapabilities(user);
+  const isPic = user?.role === "pic"; // PIC: hanya card Bahan Baku, Batch Adonan Aktif, Batch Adonan
   const today = new Date().toISOString().split("T")[0];
 
   const [bahanKritis, setBahanKritis] = useState<StokBahan[]>([]);
@@ -194,6 +195,7 @@ export default function DashboardPage() {
             <ArrowUpRight size={16} className="text-blue-300 group-hover:text-blue-500 transition-colors" />
           </div>
         </button>
+        {!isPic && (
         <div className="card">
           <div className="flex items-center gap-2 mb-2">
             <div className="w-8 h-8 bg-indigo-100 rounded-lg flex items-center justify-center">
@@ -204,6 +206,8 @@ export default function DashboardPage() {
           <p className="text-2xl font-bold text-gray-800">{stokProduk.length}</p>
           <p className="text-xs text-gray-400">produk aktif</p>
         </div>
+        )}
+        {!isPic && (
         <div className="card col-span-2 lg:col-span-1">
           <div className="flex items-center gap-2 mb-3">
             <div className="w-8 h-8 bg-green-100 rounded-lg flex items-center justify-center">
@@ -234,6 +238,7 @@ export default function DashboardPage() {
             </button>
           </div>
         </div>
+        )}
       </div>
 
       <div className="grid lg:grid-cols-2 gap-4">
@@ -271,6 +276,7 @@ export default function DashboardPage() {
         </div>
 
         {/* Stock Roti Cane */}
+        {!isPic && (
         <div className="card">
           <h2 className="font-bold text-gray-800 mb-3 flex items-center gap-2">
             <Snowflake size={16} className="text-indigo-500" />
@@ -325,6 +331,7 @@ export default function DashboardPage() {
             })}
           </div>
         </div>
+        )}
       </div>
 
       {/* Modal Batch Adonan Aktif - Detail Rendam */}

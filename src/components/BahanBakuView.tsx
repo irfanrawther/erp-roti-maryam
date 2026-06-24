@@ -541,6 +541,9 @@ export default function BahanBakuView() {
     setResyncLoading(false);
   }
 
+  // PIC = read-only: hanya bisa lihat, tidak bisa Tambah/Kurangi/Reset/adjustment
+  const readOnly = user?.role === "pic";
+
   const TABS: { key: ActiveTab; label: string }[] = [
     { key: "stok",      label: "Stok Saat Ini" },
     { key: "riwayat",   label: "Riwayat" },
@@ -568,10 +571,12 @@ export default function BahanBakuView() {
             <CheckCircle2 size={11} /> Sinkron
           </button>
         )}
-        <button type="button" onClick={() => setShowResetModal(true)}
-          className="flex items-center gap-1 text-xs font-semibold px-2.5 py-2 rounded-lg bg-red-100 text-red-600 hover:bg-red-200 transition-colors shrink-0">
-          <RotateCcw size={11} /> Reset
-        </button>
+        {!readOnly && (
+          <button type="button" onClick={() => setShowResetModal(true)}
+            className="flex items-center gap-1 text-xs font-semibold px-2.5 py-2 rounded-lg bg-red-100 text-red-600 hover:bg-red-200 transition-colors shrink-0">
+            <RotateCcw size={11} /> Reset
+          </button>
+        )}
       </div>
 
       {/* ── Tab: Stok ── */}
@@ -586,6 +591,7 @@ export default function BahanBakuView() {
                 isSuperAdmin={canAccessAdmin(user?.role ?? "")}
                 onDirectSet={setStokLangsung}
                 canKurangi={user?.role !== "staff_produksi"}
+                readOnly={readOnly}
               />
             ))}
           </div>
@@ -686,10 +692,12 @@ export default function BahanBakuView() {
                                     <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold ${a.tipe === "sisa" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>
                                       {a.tipe === "sisa" ? "↑ Sisa" : "↓ Over"} {formatAngka(a.jumlah_adjustment)} {a.satuan}
                                     </span>
-                                    <button type="button" onClick={() => handleDeleteAdjustment(a)}
-                                      className="text-gray-300 hover:text-red-400 transition-colors" title="Hapus adjustment">
-                                      <Trash2 size={11} />
-                                    </button>
+                                    {!readOnly && (
+                                      <button type="button" onClick={() => handleDeleteAdjustment(a)}
+                                        className="text-gray-300 hover:text-red-400 transition-colors" title="Hapus adjustment">
+                                        <Trash2 size={11} />
+                                      </button>
+                                    )}
                                   </div>
                                 ))}
                               </div>
@@ -801,12 +809,14 @@ export default function BahanBakuView() {
                             }`}>
                               {r.sumber === "produksi" ? "Produksi" : "Proses Bikin"}
                             </span>
-                            <button type="button"
-                              onClick={() => isEditing ? setEditRowId(null) : openEditPemakaian(r)}
-                              className={`p-1.5 rounded-lg transition-colors ${isEditing ? "bg-amber-100 text-amber-600" : "text-gray-300 hover:text-amber-500 hover:bg-amber-50"}`}
-                              title="Edit Sisa/Over">
-                              <SlidersHorizontal size={13} />
-                            </button>
+                            {!readOnly && (
+                              <button type="button"
+                                onClick={() => isEditing ? setEditRowId(null) : openEditPemakaian(r)}
+                                className={`p-1.5 rounded-lg transition-colors ${isEditing ? "bg-amber-100 text-amber-600" : "text-gray-300 hover:text-amber-500 hover:bg-amber-50"}`}
+                                title="Edit Sisa/Over">
+                                <SlidersHorizontal size={13} />
+                              </button>
+                            )}
                           </div>
                         </div>
 
@@ -955,12 +965,13 @@ export default function BahanBakuView() {
 
 
 // ── BahanCard ────────────────────────────────────────────────
-function BahanCard({ bahan, onSubmit, isSuperAdmin, onDirectSet, canKurangi }: {
+function BahanCard({ bahan, onSubmit, isSuperAdmin, onDirectSet, canKurangi, readOnly }: {
   bahan: BahanBaku;
   onSubmit: (id: string, tipe: "masuk" | "keluar", jumlah: number, satuan: string) => Promise<boolean>;
   isSuperAdmin: boolean;
   onDirectSet: (id: string, nilai: number) => Promise<boolean>;
   canKurangi: boolean;
+  readOnly?: boolean;
 }) {
   const kritis = bahan.stok_saat_ini <= bahan.stok_minimum;
   const [mode,        setMode]        = useState<"masuk" | "keluar" | null>(null);
@@ -1057,7 +1068,7 @@ function BahanCard({ bahan, onSubmit, isSuperAdmin, onDirectSet, canKurangi }: {
         </div>
       </div>
 
-      {!mode && !editingStok && (
+      {!mode && !editingStok && !readOnly && (
         <div className="flex gap-2 mt-2.5">
           <button onClick={() => openForm("masuk")} className="flex items-center gap-1 text-xs font-semibold px-2.5 py-1.5 rounded-lg bg-green-100 text-green-700 hover:bg-green-200 transition-colors">
             <Plus size={12} /> Tambah
