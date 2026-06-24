@@ -22,3 +22,12 @@ export function formatTanggalWaktu(date: string | Date) {
 export function formatAngka(num: number) {
   return new Intl.NumberFormat("id-ID").format(num);
 }
+
+// Khusus jumlah bahan baku (kg/liter): selalu tampilkan 3 digit di belakang koma
+// supaya presisi gram/ml terbaca penuh, mis. 2,185 kg (bukan 2,18 kg).
+export function formatBahan(num: number) {
+  return new Intl.NumberFormat("id-ID", {
+    minimumFractionDigits: 3,
+    maximumFractionDigits: 3,
+  }).format(num);
+}
