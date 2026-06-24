@@ -43,6 +43,7 @@ interface RiwayatPemakaian {
 }
 interface ProsesBikinRow {
   id: string; bahan_baku_id: string; jumlah: number; satuan: string; keterangan: string; created_at: string;
+  tipe: "masuk" | "keluar";
   bahan_baku: { nama: string };
   users: { nama: string };
 }
@@ -71,6 +72,7 @@ interface PemakaianEntry {
   label: string;
   tanggal?: string;
   namaUser: string;
+  isReturn?: boolean;   // koreksi packing aktual < rendam → bahan dikembalikan (+)
 }
 
 // Label mapping untuk proses bikin brand+varian key
@@ -467,11 +469,19 @@ export default function BahanBakuView() {
     // Sumber 2: Proses Bikin (penerimaan_bahan_baku proses_bikin::)
     ...riwayatProsesBikin.map((r): PemakaianEntry => {
       let label = "Proses Bikin";
+      let isReturn = false;
       try {
         const jsonStr = r.keterangan.replace("proses_bikin::", "").split(" | ")[0];
         const json = JSON.parse(jsonStr);
         const brandLabels = PROSES_BIKIN_LABEL[json.brandKey] ?? {};
-        label = brandLabels[json.varianKey] ?? `Proses Bikin ${json.varianKey ?? ""}`;
+        const varianLabel = brandLabels[json.varianKey] ?? `Proses Bikin ${json.varianKey ?? ""}`;
+        if (json.koreksi) {
+          const s = json.selisih as number;
+          label = `Koreksi Packing ${s > 0 ? "+" : ""}${s} pcs ${varianLabel}`;
+          isReturn = r.tipe === "masuk";   // selisih < 0 → dikembalikan
+        } else {
+          label = varianLabel;
+        }
       } catch {}
       return {
         id:         `pb-${r.id}`,
@@ -483,6 +493,7 @@ export default function BahanBakuView() {
         created_at: r.created_at,
         label,
         namaUser:   r.users?.nama ?? "",
+        isReturn,
       };
     }),
   ].sort((a, b) => b.created_at.localeCompare(a.created_at)); // terbaru di atas
@@ -729,7 +740,8 @@ export default function BahanBakuView() {
             const totals: Record<string, { jumlah: number; satuan: string }> = {};
             for (const r of pemakaianFiltered) {
               if (!totals[r.namaBahan]) totals[r.namaBahan] = { jumlah: 0, satuan: r.satuan };
-              totals[r.namaBahan].jumlah += r.jumlah;
+              // Koreksi return (bahan dikembalikan) mengurangi total pemakaian
+              totals[r.namaBahan].jumlah += r.isReturn ? -r.jumlah : r.jumlah;
             }
             const prodCount = pemakaianFiltered.filter(r => r.sumber === "produksi").length;
             const pbCount   = pemakaianFiltered.filter(r => r.sumber === "proses_bikin").length;
@@ -779,8 +791,9 @@ export default function BahanBakuView() {
                       <div key={r.id} className="border-b border-gray-50 pb-2.5 last:border-0 last:pb-0">
                         <div className="flex items-start justify-between gap-2">
                           <div className="flex-1 min-w-0">
-                            <p className="text-sm font-bold text-red-500">
-                              − {formatBahan(r.jumlah, r.satuan)} {capSatuan(r.satuan)} — {r.namaBahan}
+                            <p className={`text-sm font-bold ${r.isReturn ? "text-green-600" : "text-red-500"}`}>
+                              {r.isReturn ? "+" : "−"} {formatBahan(r.jumlah, r.satuan)} {capSatuan(r.satuan)} — {r.namaBahan}
+                              {r.isReturn && <span className="text-green-500 font-normal"> dikembalikan</span>}
                             </p>
                             <p className="text-xs text-gray-600 mt-0.5">
                               dari <span className="font-medium">{r.label}</span>

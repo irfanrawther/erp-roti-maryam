@@ -42,6 +42,18 @@ interface PengirimanHariIni {
   produk_sku: { brand: string; varian: string; isi_per_pack: number };
 }
 
+interface SelisihPacking {
+  id: string;
+  brand: string;
+  varian: string;
+  total_direndam: number;
+  total_aktual: number;
+  selisih_pcs: number;
+  catatan: string | null;
+  nama_user: string | null;
+  created_at: string;
+}
+
 export default function DashboardPage() {
   const user = getUserSession();
   const router = useRouter();
@@ -55,6 +67,7 @@ export default function DashboardPage() {
   const [stokProduk, setStokProduk] = useState<StokProduk[]>([]);
   const [batchBerjalan, setBatchBerjalan] = useState<BatchBerjalan[]>([]);
   const [pengirimanHariIni, setPengirimanHariIni] = useState<PengirimanHariIni[]>([]);
+  const [selisihPacking, setSelisihPacking] = useState<SelisihPacking[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModalBahan, setShowModalBahan] = useState(false);
   const [showModalKiriman, setShowModalKiriman] = useState<"cane" | "mehana" | null>(null);
@@ -79,12 +92,14 @@ export default function DashboardPage() {
 
   async function fetchAll() {
     setLoading(true);
-    const [bahanRes, produkRes, batchRes, pengirimanRes] = await Promise.all([
+    const [bahanRes, produkRes, batchRes, pengirimanRes, selisihRes] = await Promise.all([
       supabase.from("bahan_baku").select("id, nama, satuan, stok_saat_ini, stok_minimum").eq("aktif", true).order("nama"),
       supabase.from("produk_sku").select("id, brand, nama_brand, varian, isi_per_pack, kode_sku, stok_saat_ini").eq("aktif", true),
       supabase.from("batch_produksi").select("id, tanggal_produksi, shift, status, jumlah_pack_rencana, jumlah_pack_adonan, produk_sku:produk_sku_id(nama_brand, varian, isi_per_pack), users:created_by(nama)").neq("status", "selesai").order("created_at", { ascending: false }),
       supabase.from("pengiriman").select("id, jumlah_pack, produk_sku:produk_sku_id(brand, varian, isi_per_pack)").eq("tanggal_keluar", today),
+      supabase.from("selisih_packing").select("id, brand, varian, total_direndam, total_aktual, selisih_pcs, catatan, nama_user, created_at").eq("status_review", "pending").order("created_at", { ascending: false }),
     ]);
+    if (selisihRes.data) setSelisihPacking(selisihRes.data as unknown as SelisihPacking[]);
 
     if (bahanRes.data) {
       setAllBahan(bahanRes.data);
@@ -110,6 +125,13 @@ export default function DashboardPage() {
     if (batchRes.data) setBatchBerjalan(batchRes.data as unknown as BatchBerjalan[]);
     if (pengirimanRes.data) setPengirimanHariIni(pengirimanRes.data as unknown as PengirimanHariIni[]);
     setLoading(false);
+  }
+
+  async function markSelisihReviewed(id: string) {
+    await supabase.from("selisih_packing")
+      .update({ status_review: "reviewed", reviewed_by: user?.nama ?? "", reviewed_at: new Date().toISOString() })
+      .eq("id", id);
+    setSelisihPacking((list) => list.filter((s) => s.id !== id));
   }
 
   const CANE_VARIANTS_ORD   = ["Original", "Melted Choco", "Grated Cheese", "Whole Wheat"];
@@ -154,6 +176,43 @@ export default function DashboardPage() {
         <h1 className="text-2xl font-bold text-gray-800">Selamat datang, {user?.nama} 👋</h1>
         <p className="text-gray-500 text-sm">{formatTanggal(new Date())}</p>
       </div>
+
+      {/* Notifikasi Selisih Packing — Super Admin */}
+      {caps.isSuperAdmin && selisihPacking.length > 0 && (
+        <div className="card border-2 border-amber-200 bg-amber-50">
+          <div className="flex items-center gap-2 mb-3">
+            <AlertTriangle size={18} className="text-amber-500" />
+            <h2 className="font-bold text-amber-700">{selisihPacking.length} selisih packing menunggu review</h2>
+          </div>
+          <div className="space-y-2">
+            {selisihPacking.map((s) => {
+              const lebih = s.selisih_pcs > 0;
+              const brandLabel = s.brand === "cane" ? "Cane RawtheR" : "Mehana Boga Utama";
+              return (
+                <div key={s.id} className="bg-white rounded-xl border border-amber-100 p-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      <p className="font-semibold text-sm text-gray-800">{brandLabel} — {s.varian}</p>
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        Direndam {formatAngka(s.total_direndam)} → Aktual {formatAngka(s.total_aktual)} pcs ·{" "}
+                        <span className={`font-bold ${lebih ? "text-blue-600" : "text-amber-600"}`}>
+                          {lebih ? `Lebih ${formatAngka(s.selisih_pcs)}` : `Kurang ${formatAngka(-s.selisih_pcs)}`} pcs
+                        </span>
+                      </p>
+                      {s.catatan && <p className="text-xs text-gray-600 mt-1 italic">"{s.catatan}"</p>}
+                      <p className="text-[11px] text-gray-400 mt-0.5">oleh {s.nama_user || "—"} · {formatTanggal(s.created_at)}</p>
+                    </div>
+                    <button onClick={() => markSelisihReviewed(s.id)}
+                      className="shrink-0 text-xs font-semibold px-2.5 py-1.5 rounded-lg bg-green-100 text-green-700 hover:bg-green-200 transition-colors">
+                      Sudah Direview
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Summary Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">

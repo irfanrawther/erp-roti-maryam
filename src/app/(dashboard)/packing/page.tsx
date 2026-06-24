@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { getUserSession, canAccessAdmin } from "@/lib/auth";
 import { getCapabilities, homeRoute } from "@/lib/permissions";
-import { formatAngka, formatTanggal, formatTanggalWaktu } from "@/lib/utils";
+import { formatAngka, formatBahan, formatTanggal, formatTanggalWaktu } from "@/lib/utils";
 import { ChevronLeft, ChevronRight, X, CheckCircle, History, RotateCcw, AlertTriangle, Trash2 } from "lucide-react";
 import BahanBakuView from "@/components/BahanBakuView";
 import { RiwayatFilter, getRiwayatRange } from "@/components/RiwayatFilter";
@@ -347,16 +347,61 @@ export default function PackingPage() {
   }
   async function restoreRendam(batch: Batch) {
     if (!user) return;
+    // Ambil SEMUA entri proses_bikin batch ini (rendam + koreksi packing),
+    // tipe apapun. Balik dengan tipe lawan supaya stok kembali persis.
     const { data } = await supabase.from("penerimaan_bahan_baku")
-      .select("id, bahan_baku_id, jumlah, satuan")
-      .like("keterangan", `proses_bikin::{"batchId":"${batch.id}"%`)
-      .eq("tipe", "keluar");
-    const rows = (data as { id: string; bahan_baku_id: string; jumlah: number; satuan: string }[] | null) ?? [];
+      .select("id, bahan_baku_id, jumlah, satuan, tipe")
+      .like("keterangan", `proses_bikin::{"batchId":"${batch.id}"%`);
+    const rows = (data as { id: string; bahan_baku_id: string; jumlah: number; satuan: string; tipe: string }[] | null) ?? [];
     for (const r of rows) {
-      await supabase.from("penerimaan_bahan_baku").insert({ bahan_baku_id: r.bahan_baku_id, jumlah: r.jumlah, satuan: r.satuan, tipe: "masuk", tanggal: batch.tanggal_produksi, keterangan: `Restore rendam batch #${batch.id.slice(0, 8)}`, created_by: user.id });
+      const lawan = r.tipe === "keluar" ? "masuk" : "keluar";
+      await supabase.from("penerimaan_bahan_baku").insert({ bahan_baku_id: r.bahan_baku_id, jumlah: r.jumlah, satuan: r.satuan, tipe: lawan, tanggal: batch.tanggal_produksi, keterangan: `Restore rendam batch #${batch.id.slice(0, 8)}`, created_by: user.id });
     }
     const ids = rows.map((r) => r.id);
     if (ids.length) await supabase.from("penerimaan_bahan_baku").delete().in("id", ids);
+  }
+
+  // ── Koreksi bahan baku berdasarkan selisih pcs (aktual vs rendam) ──
+  // selisihPcs > 0 → aktual lebih → bahan dikurangi lagi (tipe keluar)
+  // selisihPcs < 0 → aktual kurang → bahan dikembalikan (tipe masuk)
+  async function applyKoreksiBahan(batch: Batch, selisihPcs: number) {
+    if (!user || selisihPcs === 0) return;
+    const cfg = findVarian(batch);
+    if (!cfg) return;
+    const { data } = await supabase
+      .from("resep_bikin")
+      .select("bahan_baku_id, jumlah_per_kg")
+      .eq("produk_sku_id", batch.produk_sku_id);
+    const resep = (data as { bahan_baku_id: string; jumlah_per_kg: number }[] | null) ?? [];
+    if (!resep.length) return;
+    const tipe = selisihPcs > 0 ? "keluar" : "masuk";
+    const absPcs = Math.abs(selisihPcs);
+    const meta = JSON.stringify({
+      batchId: batch.id, brandKey: cfg.brandKey, brandLabel: cfg.brandLabel,
+      varianKey: cfg.key, varianLabel: cfg.label, tanggal: batch.tanggal_produksi,
+      koreksi: true, selisih: selisihPcs, userName: user.nama ?? "",
+    });
+    for (const r of resep) {
+      const grPerPcs = r.jumlah_per_kg / cfg.pcs_per_kg;
+      const jumlahKg = (grPerPcs * absPcs) / 1000;
+      if (jumlahKg <= 0) continue;
+      await supabase.from("penerimaan_bahan_baku").insert({
+        bahan_baku_id: r.bahan_baku_id, jumlah: jumlahKg, satuan: "Kg",
+        tipe, tanggal: batch.tanggal_produksi, keterangan: "proses_bikin::" + meta, created_by: user.id,
+      });
+    }
+  }
+
+  // ── Catat selisih packing untuk review Super Admin ──────────
+  async function recordSelisihPacking(batch: Batch, totalDirendam: number, totalAktual: number, selisihPcs: number, catatan: string) {
+    if (!user) return;
+    const cfg = findVarian(batch);
+    await supabase.from("selisih_packing").insert({
+      batch_packing_id: batch.id,
+      brand: cfg?.brandKey ?? "", varian: cfg?.varianDB ?? batch.produk_sku?.varian ?? "",
+      total_direndam: totalDirendam, total_aktual: totalAktual, selisih_pcs: selisihPcs,
+      catatan: catatan || null, nama_user: user.nama ?? "", status_review: "pending",
+    });
   }
 
   // ── Produk jadi stok (tanpa trigger — update langsung) ──────
@@ -552,6 +597,14 @@ export default function PackingPage() {
     const direndam = batch.jumlah_pack_adonan ?? 0;
     // pack5 = original dari form (untuk rekap); pack5Final = termasuk gabungkan carry-over
     const packPcs = data.pack5Final * 5 + data.pack10 * 10;
+
+    // Total aktual fisik (raw) = (pack×isi) + reject + basi/hilang + lebihan
+    const totalAktual = data.pack5 * 5 + data.pack10 * 10 + data.reject + data.rejectLain + data.lebihan;
+    const selisihPcs  = totalAktual - direndam;   // + aktual lebih, − aktual kurang
+    // Aktual KURANG dari rendam → deficit otomatis masuk Reject Packing
+    const deficit     = selisihPcs < 0 ? -selisihPcs : 0;
+    const rejectSaved = data.reject + deficit;
+
     setBusy(true);
     try {
       // 1. simpan record: pack5 & lebihan = nilai ORIGINAL dari form (raw)
@@ -559,7 +612,7 @@ export default function PackingPage() {
         batch_produksi_id: batch.id, produk_sku_id: batch.produk_sku_id,
         brand: cfg.brandKey, varian: cfg.varianDB, tanggal: batch.tanggal_produksi,
         total_direndam: direndam, carry_in: carryIn, total_available: direndam,
-        pack5: data.pack5, pack10: data.pack10, reject: data.reject,
+        pack5: data.pack5, pack10: data.pack10, reject: rejectSaved,
         reject_lain: data.rejectLain, alasan_reject_lain: data.rejectLain > 0 ? (data.alasanRejectLain || null) : null,
         lebihan: data.lebihan, catatan: data.catatan || null, created_by: user.id,
       });
@@ -575,12 +628,18 @@ export default function PackingPage() {
         if (data.pack5Final > 0) await adjustProdukJadi(batch.produk_sku_id, data.pack5Final);
       }
 
-      // 2b. reject packing → masuk stok produk reject (pcs)
-      if (data.reject > 0) await adjustStokReject(cfg.brandKey, cfg.varianDB, data.reject);
+      // 2b. reject packing (+ deficit otomatis) → masuk stok produk reject (pcs)
+      if (rejectSaved > 0) await adjustStokReject(cfg.brandKey, cfg.varianDB, rejectSaved);
+
+      // 2c. KOREKSI bahan baku + catat selisih untuk review Super Admin
+      if (selisihPcs !== 0) {
+        await applyKoreksiBahan(batch, selisihPcs);
+        await recordSelisihPacking(batch, direndam, totalAktual, selisihPcs, data.catatan);
+      }
 
       // 3. batch → selesai
       const { error: updateErr } = await supabase.from("batch_produksi").update({
-        status: "selesai", jumlah_pack_packing: packPcs, jumlah_reject: data.reject,
+        status: "selesai", jumlah_pack_packing: packPcs, jumlah_reject: rejectSaved,
         jumlah_reject_lain: data.rejectLain,
         catatan_reject: data.catatan || null, updated_by: user.id, status_updated_at: new Date().toISOString(),
       }).eq("id", batch.id);
@@ -637,6 +696,8 @@ export default function PackingPage() {
         }
         // Hapus packing_input rows terkait batch ini
         await supabase.from("packing_input").delete().eq("batch_produksi_id", batch.id);
+        // Hapus catatan selisih packing terkait batch ini
+        await supabase.from("selisih_packing").delete().eq("batch_packing_id", batch.id);
         void cfg; // used above via batch.produk_sku_id
       }
 
@@ -693,8 +754,9 @@ export default function PackingPage() {
         // Restore bahan adonan (semua batch)
         await restoreIngredients(batch.id, batch.tanggal_produksi);
       }
-      // Hapus semua packing_input dan batch_produksi
+      // Hapus semua packing_input, selisih_packing, dan batch_produksi
       await supabase.from("packing_input").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+      await supabase.from("selisih_packing").delete().neq("id", "00000000-0000-0000-0000-000000000000");
       await supabase.from("batch_produksi").delete().neq("id", "00000000-0000-0000-0000-000000000000");
       setAdonanForm((f) => ({ ...f, cane: {}, mehana: {} }));
       setActiveTab("adonan");
@@ -1405,10 +1467,18 @@ function InputStokModal({ batch, carryIn, carryFromDate, cfg, busy, onClose, onC
   const rejL = parseInt(rejectLain)  || 0;
   const leb  = parseInt(lebihan)     || 0;
 
-  // Stage 1: Total Check = direndam only
-  const sum     = p5 * 5 + p10 * 10 + rej + rejL + leb;
-  const selisih = direndam - sum;
-  const match   = selisih === 0 && direndam > 0;
+  // Total aktual fisik vs total direndam
+  const sum           = p5 * 5 + p10 * 10 + rej + rejL + leb;   // = total aktual
+  const selisihAktual = sum - direndam;                          // + lebih, − kurang, 0 pas
+  const adaSelisih    = selisihAktual !== 0;
+  const catatanOk     = !adaSelisih || catatan.trim().length > 0;
+  const bolehSubmit   = sum > 0 && catatanOk;
+
+  // Preview koreksi bahan baku (dari resep rendam: gr/kg ÷ pcs/kg × selisih)
+  const koreksiBahan = (cfg?.rendam ?? []).map((b) => ({
+    nama: b.nama,
+    gr: Math.abs(selisihAktual) * (b.gr / (cfg?.pcs_per_kg || 1)),
+  }));
 
   // Stage 2: Akumulasi
   const totalLebihan  = carryIn + leb;
@@ -1506,36 +1576,66 @@ function InputStokModal({ batch, carryIn, carryFromDate, cfg, busy, onClose, onC
               </div>
             </div>
 
-            {/* Catatan */}
+            {/* Total Aktual */}
+            <div className="rounded-xl p-3 border border-gray-200 bg-gray-50">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-gray-600">Total Aktual</span>
+                <span className="font-bold text-gray-800">{formatAngka(sum)} pcs</span>
+              </div>
+              <p className="text-[11px] text-gray-400 mt-0.5">
+                {showPack10
+                  ? "(Isi 5×5) + (Isi 10×10) + Reject + Basi/Hilang + Lebihan"
+                  : "(Isi 5×5) + Reject + Basi/Hilang + Lebihan"}
+              </p>
+            </div>
+
+            {/* Selisih Rendam vs Aktual */}
+            <div className={`rounded-xl p-3 border-2 ${!adaSelisih ? "bg-green-50 border-green-200" : selisihAktual > 0 ? "bg-blue-50 border-blue-200" : "bg-amber-50 border-amber-200"}`}>
+              <p className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Selisih Rendam vs Aktual</p>
+              <p className="text-xs text-gray-600">Direndam <b>{formatAngka(direndam)}</b> pcs → Aktual <b>{formatAngka(sum)}</b> pcs</p>
+              <p className="mt-1.5 text-sm font-bold">
+                {!adaSelisih
+                  ? <span className="text-green-600">✅ Pas</span>
+                  : selisihAktual > 0
+                    ? <span className="text-blue-600">⚠️ Lebih {formatAngka(selisihAktual)} pcs</span>
+                    : <span className="text-amber-600">⚠️ Kurang {formatAngka(-selisihAktual)} pcs (masuk Reject Packing)</span>}
+              </p>
+            </div>
+
+            {/* Catatan Selisih */}
             <div>
-              <label className={`label ${locked ? "text-gray-400" : ""}`}>Catatan <span className="text-gray-400 font-normal">(optional)</span></label>
-              <textarea rows={2} className={`input resize-none ${locked ? "opacity-50 cursor-not-allowed bg-gray-100" : ""}`}
-                placeholder="Catatan tambahan..." value={catatan}
+              <label className={`label ${locked ? "text-gray-400" : ""}`}>
+                {adaSelisih
+                  ? <>Catatan Selisih <span className="text-red-500 font-semibold">(wajib)</span></>
+                  : <>Catatan <span className="text-gray-400 font-normal">(optional)</span></>}
+              </label>
+              <textarea rows={2} className={`input resize-none ${locked ? "opacity-50 cursor-not-allowed bg-gray-100" : ""} ${adaSelisih && !catatanOk ? "border-red-300" : ""}`}
+                placeholder={adaSelisih ? "Wajib: jelaskan kenapa ada selisih..." : "Catatan tambahan..."} value={catatan}
                 onChange={(e) => setCatatan(e.target.value)} disabled={locked} />
             </div>
 
-            {/* Total Check */}
-            <div className={`rounded-xl p-3 border-2 ${match ? "bg-green-50 border-green-200" : "bg-red-50 border-red-200"}`}>
-              <p className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Total Check</p>
-              <p className="text-xs text-gray-600">
-                {showPack10
-                  ? `(Isi 5 × 5) + (Isi 10 × 10) + Reject + Basi/dll + Lebihan = `
-                  : `(Isi 5 × 5) + Reject + Basi/dll + Lebihan = `}
-                <b>{formatAngka(sum)} pcs</b>
-              </p>
-              <p className="text-xs text-gray-600">Harus sama dengan: <b>{formatAngka(direndam)} pcs</b></p>
-              <p className="mt-2 text-sm font-bold">
-                {!match
-                  ? <span className="text-red-600">❌ Belum match — {selisih > 0 ? `kurang ${formatAngka(selisih)} pcs` : `lebih ${formatAngka(-selisih)} pcs`}</span>
-                  : <span className="text-green-600">✅ Match</span>}
-              </p>
-            </div>
+            {/* Koreksi Bahan Baku (auto preview) */}
+            {adaSelisih && koreksiBahan.length > 0 && (
+              <div className="rounded-xl p-3 border border-orange-200 bg-orange-50 space-y-1.5">
+                <p className="text-xs font-bold text-orange-700">⚠️ Bahan baku akan dikoreksi:</p>
+                {koreksiBahan.map((b) => (
+                  <div key={b.nama} className="flex items-center justify-between text-xs">
+                    <span className="text-gray-700">{b.nama}</span>
+                    <span className={`font-semibold ${selisihAktual > 0 ? "text-red-600" : "text-green-600"}`}>
+                      {selisihAktual > 0
+                        ? `− ${formatBahan(b.gr / 1000, "Kg")} Kg tambahan`
+                        : `+ ${formatBahan(b.gr / 1000, "Kg")} Kg dikembalikan`}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
 
             {/* Submit Produksi — hanya di stage 1 */}
             {stage === "input" && (
               <div className="flex gap-2">
                 <button onClick={onClose} className="btn-secondary flex-1">Batal</button>
-                <button onClick={() => setStage("akumulasi")} disabled={!match || busy}
+                <button onClick={() => setStage("akumulasi")} disabled={!bolehSubmit || busy}
                   className="btn-primary flex-1 flex items-center justify-center gap-2">
                   <CheckCircle size={16} /> Submit Produksi
                 </button>
