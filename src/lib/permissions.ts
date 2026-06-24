@@ -57,10 +57,11 @@ export function getCapabilities(user: UserSession | null): Capabilities {
   }
 
   if (role === "spv") {
+    // SPV: + Dashboard (card Stok Cane saja) + Stok Produk Reject (read-only)
     if (scope === "packing") {
-      return { ...NONE, produksiFlow: true, packingFreezer: true, produksiRiwayat: true };
+      return { ...NONE, dashboard: true, produkReject: true, produksiFlow: true, packingFreezer: true, produksiRiwayat: true };
     }
-    return { ...NONE, produksiFlow: true, adonan: true, rendam: true, produksiRiwayat: true };
+    return { ...NONE, dashboard: true, produkReject: true, produksiFlow: true, adonan: true, rendam: true, produksiRiwayat: true };
   }
 
   return { ...NONE };

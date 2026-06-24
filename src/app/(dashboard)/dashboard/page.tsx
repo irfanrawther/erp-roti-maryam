@@ -47,6 +47,7 @@ export default function DashboardPage() {
   const router = useRouter();
   const caps = getCapabilities(user);
   const isPic = user?.role === "pic"; // PIC: hanya card Bahan Baku, Batch Adonan Aktif, Batch Adonan
+  const isSpv = user?.role === "spv"; // SPV: hanya card Stok Produk Jadi (Cane RawtheR saja)
   const today = new Date().toISOString().split("T")[0];
 
   const [bahanKritis, setBahanKritis] = useState<StokBahan[]>([]);
@@ -157,6 +158,7 @@ export default function DashboardPage() {
       {/* Summary Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         {/* Card Bahan Baku — clickable */}
+        {!isSpv && (
         <button
           onClick={() => setShowModalBahan(true)}
           className="card text-left hover:shadow-md hover:border-amber-200 transition-all active:scale-95 border border-transparent"
@@ -177,6 +179,8 @@ export default function DashboardPage() {
             <p className="text-xs text-gray-400">semua aman</p>
           )}
         </button>
+        )}
+        {!isSpv && (
         <button
           onClick={() => setShowModalBatch(true)}
           className="card text-left hover:shadow-md hover:border-blue-200 transition-all active:scale-95 border border-transparent"
@@ -195,7 +199,8 @@ export default function DashboardPage() {
             <ArrowUpRight size={16} className="text-blue-300 group-hover:text-blue-500 transition-colors" />
           </div>
         </button>
-        {!isPic && (
+        )}
+        {!isPic && !isSpv && (
         <div className="card">
           <div className="flex items-center gap-2 mb-2">
             <div className="w-8 h-8 bg-indigo-100 rounded-lg flex items-center justify-center">
@@ -207,7 +212,7 @@ export default function DashboardPage() {
           <p className="text-xs text-gray-400">produk aktif</p>
         </div>
         )}
-        {!isPic && (
+        {!isPic && !isSpv && (
         <div className="card col-span-2 lg:col-span-1">
           <div className="flex items-center gap-2 mb-3">
             <div className="w-8 h-8 bg-green-100 rounded-lg flex items-center justify-center">
@@ -243,6 +248,7 @@ export default function DashboardPage() {
 
       <div className="grid lg:grid-cols-2 gap-4">
         {/* Batch Produksi Berjalan */}
+        {!isSpv && (
         <div className="card">
           <h2 className="font-bold text-gray-800 mb-3 flex items-center gap-2">
             <ChefHat size={16} className="text-amber-500" />
@@ -274,6 +280,7 @@ export default function DashboardPage() {
             </div>
           )}
         </div>
+        )}
 
         {/* Stock Roti Cane */}
         {!isPic && (
@@ -283,7 +290,7 @@ export default function DashboardPage() {
             Stock Roti Cane
           </h2>
           <div className="space-y-4">
-            {(["cane", "mehana"] as const).map((brand) => {
+            {(isSpv ? (["cane"] as const) : (["cane", "mehana"] as const)).map((brand) => {
               const brandLabel = brand === "cane" ? "Cane RawtheR" : "Mehana Boga Utama";
               const CANE_ORDER = ["Original", "Melted Choco", "Grated Cheese", "Whole Wheat"];
               const MEHANA_ORDER = ["Original", "Cokelat", "Keju"];

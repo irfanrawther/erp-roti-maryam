@@ -29,6 +29,7 @@ export default function ProdukRejectPage() {
   const user     = getUserSession();
   const router   = useRouter();
   const caps     = getCapabilities(user);
+  const readOnly = user?.role === "spv"; // SPV: hanya lihat, tidak bisa jual/reset/undo
   const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" });
 
   useEffect(() => {
@@ -211,10 +212,12 @@ export default function ProdukRejectPage() {
           <AlertTriangle size={20} className="text-red-500" />
           <h1 className="text-xl font-bold text-gray-800">Produk Reject</h1>
         </div>
-        <button type="button" onClick={() => setShowResetModal(true)}
-          className="flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-lg bg-red-100 text-red-600 hover:bg-red-200 transition-colors cursor-pointer">
-          <RotateCcw size={11} /> Reset
-        </button>
+        {!readOnly && (
+          <button type="button" onClick={() => setShowResetModal(true)}
+            className="flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-lg bg-red-100 text-red-600 hover:bg-red-200 transition-colors cursor-pointer">
+            <RotateCcw size={11} /> Reset
+          </button>
+        )}
       </div>
 
       {/* Tab bar */}
@@ -239,10 +242,12 @@ export default function ProdukRejectPage() {
               <h2 className="font-semibold text-gray-700 text-sm flex items-center gap-2">
                 <AlertTriangle size={15} className="text-red-500" /> Stok Produk Reject
               </h2>
-              <button type="button" onClick={() => setShowUndoModal(true)}
-                className="flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-lg bg-orange-100 text-orange-600 hover:bg-orange-200 transition-colors">
-                <RotateCcw size={11} /> Undo Penjualan Hari Ini
-              </button>
+              {!readOnly && (
+                <button type="button" onClick={() => setShowUndoModal(true)}
+                  className="flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-lg bg-orange-100 text-orange-600 hover:bg-orange-200 transition-colors">
+                  <RotateCcw size={11} /> Undo Penjualan Hari Ini
+                </button>
+              )}
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -268,6 +273,7 @@ export default function ProdukRejectPage() {
           </div>
 
           {/* ───── INPUT PENJUALAN ───── */}
+          {!readOnly && (
           <div className="card space-y-4">
             <h2 className="font-semibold text-gray-700 text-sm flex items-center gap-2">
               <Store size={15} className="text-red-500" /> Penjualan {TOKO}
@@ -324,6 +330,7 @@ export default function ProdukRejectPage() {
               {busy ? "Menyimpan..." : `Simpan Penjualan${totalPackForm > 0 ? ` (${totalPackForm} pack)` : ""}`}
             </button>
           </div>
+          )}
         </div>
       )}
 
