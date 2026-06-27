@@ -5,7 +5,9 @@ import { supabase } from "@/lib/supabase";
 import { getUserSession } from "@/lib/auth";
 import { getCapabilities, homeRoute } from "@/lib/permissions";
 import { formatAngka, formatTanggal } from "@/lib/utils";
-import { Package, ChefHat, Truck, Snowflake, X, AlertTriangle, ArrowUpRight } from "lucide-react";
+import { RiwayatFilter, getRiwayatRange } from "@/components/RiwayatFilter";
+import type { RiwayatPreset } from "@/components/RiwayatFilter";
+import { Package, ChefHat, Truck, Snowflake, X, AlertTriangle, ArrowUpRight, Factory } from "lucide-react";
 
 interface StokBahan {
   id: string;
@@ -42,6 +44,17 @@ interface PengirimanHariIni {
   produk_sku: { brand: string; varian: string; isi_per_pack: number };
 }
 
+interface ProdRow {
+  brand: string;
+  varian: string;
+  tanggal: string;
+  pack5: number;
+  pack10: number;
+  reject: number;
+  reject_lain: number;
+  lebihan: number;
+}
+
 interface SelisihPacking {
   id: string;
   brand: string;
@@ -68,10 +81,20 @@ export default function DashboardPage() {
   const [batchBerjalan, setBatchBerjalan] = useState<BatchBerjalan[]>([]);
   const [pengirimanHariIni, setPengirimanHariIni] = useState<PengirimanHariIni[]>([]);
   const [selisihPacking, setSelisihPacking] = useState<SelisihPacking[]>([]);
+  const [prodRows, setProdRows] = useState<ProdRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModalBahan, setShowModalBahan] = useState(false);
   const [showModalKiriman, setShowModalKiriman] = useState<"cane" | "mehana" | null>(null);
   const [showModalBatch,   setShowModalBatch]   = useState(false);
+  const [showModalProduksi, setShowModalProduksi] = useState(false);
+
+  // Filter tanggal untuk angka produksi (default: hari ini)
+  const [prodPreset,    setProdPreset]    = useState<RiwayatPreset>("hari_ini");
+  const [prodCustomS,   setProdCustomS]   = useState("");
+  const [prodCustomE,   setProdCustomE]   = useState("");
+  const [prodBulan,     setProdBulan]     = useState(() => {
+    const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  });
 
   // Route guard — hanya Super Admin yang punya akses Dashboard
   useEffect(() => {
@@ -92,14 +115,16 @@ export default function DashboardPage() {
 
   async function fetchAll() {
     setLoading(true);
-    const [bahanRes, produkRes, batchRes, pengirimanRes, selisihRes] = await Promise.all([
+    const [bahanRes, produkRes, batchRes, pengirimanRes, selisihRes, prodRes] = await Promise.all([
       supabase.from("bahan_baku").select("id, nama, satuan, stok_saat_ini, stok_minimum").eq("aktif", true).order("nama"),
       supabase.from("produk_sku").select("id, brand, nama_brand, varian, isi_per_pack, kode_sku, stok_saat_ini").eq("aktif", true),
       supabase.from("batch_produksi").select("id, tanggal_produksi, shift, status, jumlah_pack_rencana, jumlah_pack_adonan, produk_sku:produk_sku_id(nama_brand, varian, isi_per_pack), users:created_by(nama)").neq("status", "selesai").order("created_at", { ascending: false }),
       supabase.from("pengiriman").select("id, jumlah_pack, produk_sku:produk_sku_id(brand, varian, isi_per_pack)").eq("tanggal_keluar", today),
       supabase.from("selisih_packing").select("id, brand, varian, total_direndam, total_aktual, selisih_pcs, catatan, nama_user, created_at").eq("status_review", "pending").order("created_at", { ascending: false }),
+      supabase.from("packing_input").select("brand, varian, tanggal, pack5, pack10, reject, reject_lain, lebihan"),
     ]);
     if (selisihRes.data) setSelisihPacking(selisihRes.data as unknown as SelisihPacking[]);
+    if (prodRes.data) setProdRows(prodRes.data as unknown as ProdRow[]);
 
     if (bahanRes.data) {
       setAllBahan(bahanRes.data);
@@ -136,6 +161,29 @@ export default function DashboardPage() {
 
   const CANE_VARIANTS_ORD   = ["Original", "Melted Choco", "Grated Cheese", "Whole Wheat"];
   const MEHANA_VARIANTS_ORD = ["Original", "Cokelat", "Keju"];
+
+  // ── Agregasi produksi (dari packing_input, difilter range tanggal) ──
+  const prodRange = getRiwayatRange(prodPreset, prodCustomS, prodCustomE, prodBulan);
+  const prodInRange = prodRows.filter((r) => r.tanggal >= prodRange.start && r.tanggal <= prodRange.end);
+  type ProdAgg = { brand: string; varian: string; jadi: number; rejectNormal: number; rejectBasi: number; lebihan: number; diproduksi: number };
+  const prodAggMap: Record<string, ProdAgg> = {};
+  for (const r of prodInRange) {
+    const key = `${r.brand}|${r.varian}`;
+    if (!prodAggMap[key]) prodAggMap[key] = { brand: r.brand, varian: r.varian, jadi: 0, rejectNormal: 0, rejectBasi: 0, lebihan: 0, diproduksi: 0 };
+    const a = prodAggMap[key];
+    const jadi = (r.pack5 || 0) * 5 + (r.pack10 || 0) * 10;
+    a.jadi         += jadi;
+    a.rejectNormal += r.reject || 0;
+    a.rejectBasi   += r.reject_lain || 0;
+    a.lebihan      += r.lebihan || 0;
+    a.diproduksi   += jadi + (r.reject || 0) + (r.reject_lain || 0) + (r.lebihan || 0);
+  }
+  const prodAggList = Object.values(prodAggMap).sort((a, b) => {
+    if (a.brand !== b.brand) return a.brand === "cane" ? -1 : 1;
+    const ord = a.brand === "cane" ? CANE_VARIANTS_ORD : MEHANA_VARIANTS_ORD;
+    return ord.indexOf(a.varian) - ord.indexOf(b.varian);
+  });
+  const prodTotal = prodAggList.reduce((s, a) => s + a.diproduksi, 0);
 
   // Hitung total pcs per brand hari ini
   const canePcs = pengirimanHariIni
@@ -260,16 +308,22 @@ export default function DashboardPage() {
         </button>
         )}
         {!isPic && !isSpv && (
-        <div className="card">
+        <button
+          onClick={() => setShowModalProduksi(true)}
+          className="card text-left hover:shadow-md hover:border-indigo-200 transition-all active:scale-95 border border-transparent"
+        >
           <div className="flex items-center gap-2 mb-2">
             <div className="w-8 h-8 bg-indigo-100 rounded-lg flex items-center justify-center">
-              <Snowflake size={16} className="text-indigo-600" />
+              <Factory size={16} className="text-indigo-600" />
             </div>
-            <p className="text-xs text-gray-500">Total SKU</p>
+            <p className="text-xs text-gray-500">Total Produksi</p>
           </div>
-          <p className="text-2xl font-bold text-gray-800">{stokProduk.length}</p>
-          <p className="text-xs text-gray-400">produk aktif</p>
-        </div>
+          <div className="flex items-center justify-between group">
+            <p className="text-2xl font-bold text-gray-800">{formatAngka(prodTotal)} <span className="text-sm font-normal text-gray-400">pcs</span></p>
+            <ArrowUpRight size={16} className="text-indigo-300 group-hover:text-indigo-500 transition-colors" />
+          </div>
+          <p className="text-xs text-gray-400">{prodPreset === "hari_ini" ? "hari ini" : "klik untuk detail"}</p>
+        </button>
         )}
         {!isPic && !isSpv && (
         <div className="card col-span-2 lg:col-span-1">
@@ -626,6 +680,79 @@ export default function DashboardPage() {
               >
                 Tutup
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Detail Produksi */}
+      {showModalProduksi && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-4">
+          <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[88vh] flex flex-col">
+            <div className="flex items-center justify-between p-4 border-b border-gray-100 shrink-0">
+              <div className="flex items-center gap-2">
+                <Factory size={18} className="text-indigo-500" />
+                <h2 className="font-bold text-gray-800">Angka Produksi</h2>
+              </div>
+              <button onClick={() => setShowModalProduksi(false)}
+                className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors">
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="overflow-y-auto p-4 space-y-3">
+              <RiwayatFilter
+                preset={prodPreset} onPreset={setProdPreset}
+                customStart={prodCustomS} customEnd={prodCustomE}
+                onCustomStart={setProdCustomS} onCustomEnd={setProdCustomE}
+                selectedBulan={prodBulan} onBulan={setProdBulan}
+                accentColor="amber"
+              />
+
+              {prodAggList.length === 0 ? (
+                <p className="text-gray-400 text-sm text-center py-8">Belum ada produksi yang disubmit dalam rentang ini</p>
+              ) : (
+                <>
+                  {/* Grand total */}
+                  <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-3 flex items-center justify-between">
+                    <span className="text-sm font-bold text-indigo-700">Total Diproduksi</span>
+                    <span className="text-lg font-bold text-indigo-700">{formatAngka(prodTotal)} pcs</span>
+                  </div>
+
+                  {/* Tabel per varian */}
+                  <div className="rounded-xl border border-gray-100 overflow-hidden">
+                    <div className="grid grid-cols-12 gap-1 px-3 py-2 bg-gray-50 text-[11px] font-bold text-gray-500 uppercase tracking-wide">
+                      <div className="col-span-4">Varian</div>
+                      <div className="col-span-2 text-right">Diproduksi</div>
+                      <div className="col-span-2 text-right">Jadi</div>
+                      <div className="col-span-2 text-right">Reject</div>
+                      <div className="col-span-2 text-right">Basi/Hilang</div>
+                    </div>
+                    {prodAggList.map((a) => {
+                      const brandLabel = a.brand === "cane" ? "Cane" : "Mehana";
+                      return (
+                        <div key={`${a.brand}|${a.varian}`} className="grid grid-cols-12 gap-1 px-3 py-2.5 border-t border-gray-50 text-sm items-center">
+                          <div className="col-span-4">
+                            <p className="font-medium text-gray-800 leading-tight">{a.varian}</p>
+                            <p className="text-[10px] text-gray-400">{brandLabel}</p>
+                          </div>
+                          <div className="col-span-2 text-right font-bold text-gray-800">{formatAngka(a.diproduksi)}</div>
+                          <div className="col-span-2 text-right text-green-600 font-semibold">{formatAngka(a.jadi)}</div>
+                          <div className="col-span-2 text-right text-red-500">{formatAngka(a.rejectNormal)}</div>
+                          <div className="col-span-2 text-right text-orange-500">{formatAngka(a.rejectBasi)}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <p className="text-[11px] text-gray-400">
+                    Diproduksi = Jadi + Reject + Basi/Hilang + Lebihan · satuan pcs · hanya produksi yang sudah disubmit di Packing &amp; Freezer.
+                  </p>
+                </>
+              )}
+            </div>
+
+            <div className="p-4 border-t border-gray-100 shrink-0">
+              <button onClick={() => setShowModalProduksi(false)} className="btn-secondary w-full">Tutup</button>
             </div>
           </div>
         </div>
