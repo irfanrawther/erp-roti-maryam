@@ -1019,10 +1019,13 @@ export default function PackingPage() {
           renderActions={(b) => (
             <div className="flex flex-col sm:flex-row gap-2">
               <button onClick={() => openInputStok(b)} disabled={busy} className="btn-primary flex-1 text-sm py-2">Input Stok</button>
-              <button onClick={() => undoPacking(b)} disabled={busy}
-                className="flex items-center justify-center gap-1.5 flex-1 text-sm py-2 rounded-xl border-2 border-red-200 text-red-600 hover:bg-red-50 transition-colors disabled:opacity-40">
-                <ChevronLeft size={15} /> Kembali ke Rendam
-              </button>
+              {/* Kembali ke Rendam hanya untuk Super Admin (testing); SPV packing tidak boleh */}
+              {canAccessAdmin(user?.role ?? "") && (
+                <button onClick={() => undoPacking(b)} disabled={busy}
+                  className="flex items-center justify-center gap-1.5 flex-1 text-sm py-2 rounded-xl border-2 border-red-200 text-red-600 hover:bg-red-50 transition-colors disabled:opacity-40">
+                  <ChevronLeft size={15} /> Kembali ke Rendam
+                </button>
+              )}
             </div>
           )}
         />
