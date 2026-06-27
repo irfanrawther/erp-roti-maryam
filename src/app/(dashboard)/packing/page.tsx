@@ -1623,8 +1623,8 @@ function InputStokModal({ batch, carryIn, carryFromDate, cfg, busy, onClose, onC
                     <span className="text-gray-700">{b.nama}</span>
                     <span className={`font-semibold ${selisihAktual > 0 ? "text-red-600" : "text-green-600"}`}>
                       {selisihAktual > 0
-                        ? `− ${formatBahan(b.gr / 1000, "Kg")} Kg tambahan`
-                        : `+ ${formatBahan(b.gr / 1000, "Kg")} Kg dikembalikan`}
+                        ? `− ${formatAngka(Math.round(b.gr))} gr tambahan`
+                        : `+ ${formatAngka(Math.round(b.gr))} gr dikembalikan`}
                     </span>
                   </div>
                 ))}
