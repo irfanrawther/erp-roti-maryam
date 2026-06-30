@@ -464,7 +464,8 @@ export default function AdminResepPage() {
                         onChange={(e) => updateRow(idx, "satuan", e.target.value)}
                         className="input text-sm py-1.5 text-center disabled:bg-gray-100 disabled:text-gray-300">
                         <option value="">—</option>
-                        {modal.satuanOpts.map((s) => <option key={s} value={s}>{s}</option>)}
+                        {/* Minyak berbasis berat (gr/kg); bahan lain pakai opsi penuh */}
+                        {(row.nama.includes("Minyak") ? ["gr", "kg"] : modal.satuanOpts).map((s) => <option key={s} value={s}>{s}</option>)}
                       </select>
                     ) : (
                       <div className="flex items-center justify-center">

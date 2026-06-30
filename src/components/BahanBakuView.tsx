@@ -82,6 +82,10 @@ const PROSES_BIKIN_LABEL: Record<string, Record<string, string>> = {
 };
 
 const SATUAN_OPTIONS = ["ml", "gr", "kg", "liter", "pcs"];
+// Minyak kini berbasis berat (kg/gr) — bukan volume. Bahan lain tetap semua opsi.
+function satuanOptionsFor(nama: string): string[] {
+  return nama === "Minyak" ? ["gr", "kg"] : SATUAN_OPTIONS;
+}
 const URUTAN_BAHAN = [
   "Terigu","Minyak","Garam","Gula","Air",
   "Margarine Menara","Mesis Innova","Keju Calf",
@@ -119,7 +123,7 @@ function unitCompatible(a: string, b: string): boolean {
 // ── Stok default (baseline) per bahan baku ─────────────────────
 const STOK_AWAL: Record<string, number> = {
   "Terigu":              500,
-  "Minyak":              500,
+  "Minyak":              450,   // 500 liter → 450 kg (1 L = 0.9 kg)
   "Garam":                25,
   "Gula":                 50,
   "Air":                 190,
@@ -862,7 +866,7 @@ export default function BahanBakuView() {
                                 <select className="input text-sm py-1.5 w-24"
                                   value={adjSatuan} onChange={(e) => setAdjSatuan(e.target.value)}>
                                   <option value="">Satuan</option>
-                                  {SATUAN_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
+                                  {satuanOptionsFor(r.namaBahan).map((s) => <option key={s} value={s}>{s}</option>)}
                                 </select>
                               </div>
                               {/* Live preview */}
@@ -1105,7 +1109,7 @@ function BahanCard({ bahan, onSubmit, isSuperAdmin, onDirectSet, canKurangi, rea
               className="input py-1.5 text-sm w-24 text-center" />
             <select required value={satuan} onChange={(e) => setSatuan(e.target.value)} className="input py-1.5 text-sm flex-1">
               <option value="">Satuan</option>
-              {SATUAN_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
+              {satuanOptionsFor(bahan.nama).map((s) => <option key={s} value={s}>{s}</option>)}
             </select>
             <button type="submit" disabled={loading || !jumlah || !satuan}
               className={`flex items-center justify-center w-8 h-8 rounded-lg text-white shrink-0 transition-colors disabled:opacity-40 ${mode === "masuk" ? "bg-green-500 hover:bg-green-600" : "bg-red-500 hover:bg-red-600"}`}>
