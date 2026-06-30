@@ -516,12 +516,15 @@ function AturShift({ karyawanList, shifts, shiftIndex, userName }: {
   async function resetJadwal() {
     setBusy(true); setResetMsg("");
     if (resetScope === "semua") {
+      // shift_assignment + absensi (denda/flag tersimpan di absensi) — karyawan/shift_master/pengaturan tetap
       await supabase.from("shift_assignment").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+      await supabase.from("absensi").delete().neq("id", "00000000-0000-0000-0000-000000000000");
     } else {
       await supabase.from("shift_assignment").delete().gte("tanggal", monthStart).lte("tanggal", monthEnd);
+      await supabase.from("absensi").delete().gte("tanggal", monthStart).lte("tanggal", monthEnd);
     }
     setBusy(false); setShowReset(false); setResetKonfirmasi("");
-    setResetMsg("✓ Jadwal shift berhasil dikosongkan");
+    setResetMsg("✓ Jadwal shift, absensi, dan flag berhasil dikosongkan");
     await fetchAssign();
   }
   // END TEMPORARY
@@ -637,7 +640,7 @@ function AturShift({ karyawanList, shifts, shiftIndex, userName }: {
           <div className="bg-white rounded-2xl w-full max-w-sm p-5 space-y-4">
             <h3 className="font-bold text-red-600 flex items-center gap-2">⚠️ Kosongkan Jadwal Shift (TESTING)</h3>
             <p className="text-sm text-gray-600">
-              Ini akan mengosongkan jadwal shift yang sudah di-assign. Data karyawan & absensi <b>TIDAK</b> terhapus. Yakin?
+              Ini akan mengosongkan: (1) Semua jadwal shift, (2) Semua data absensi &amp; denda, (3) Semua flag di Review &amp; Flag. Data karyawan &amp; pengaturan lokasi <b>TIDAK</b> terhapus. Yakin?
             </p>
             <div className="space-y-1.5">
               <label className="flex items-center gap-2 text-sm">
