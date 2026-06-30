@@ -468,6 +468,12 @@ function AturShift({ karyawanList, shifts, shiftIndex, userName }: {
   const [editCell, setEditCell] = useState<{ karyawanId: string; tanggal: string } | null>(null);
   const [showMassal, setShowMassal] = useState(false);
   const [busy, setBusy] = useState(false);
+  // TEMPORARY - REMOVE BEFORE PRODUCTION
+  const [showReset, setShowReset] = useState(false);
+  const [resetScope, setResetScope] = useState<"bulan" | "semua">("bulan");
+  const [resetKonfirmasi, setResetKonfirmasi] = useState("");
+  const [resetMsg, setResetMsg] = useState("");
+  // END TEMPORARY
 
   const daysInMonth = new Date(year, month, 0).getDate();
   const monthStart = `${year}-${String(month).padStart(2, "0")}-01`;
@@ -506,6 +512,20 @@ function AturShift({ karyawanList, shifts, shiftIndex, userName }: {
     setBusy(false);
   }
 
+  // TEMPORARY - REMOVE BEFORE PRODUCTION
+  async function resetJadwal() {
+    setBusy(true); setResetMsg("");
+    if (resetScope === "semua") {
+      await supabase.from("shift_assignment").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+    } else {
+      await supabase.from("shift_assignment").delete().gte("tanggal", monthStart).lte("tanggal", monthEnd);
+    }
+    setBusy(false); setShowReset(false); setResetKonfirmasi("");
+    setResetMsg("✓ Jadwal shift berhasil dikosongkan");
+    await fetchAssign();
+  }
+  // END TEMPORARY
+
   function cellLabel(a: Assignment | undefined): { text: string; cls: string } | null {
     if (!a) return null;
     if (a.is_libur) return { text: "Libur", cls: LIBUR_COLOR };
@@ -523,10 +543,19 @@ function AturShift({ karyawanList, shifts, shiftIndex, userName }: {
           <span className="font-bold text-gray-700 text-sm w-32 text-center">{ID_MONTHS[month - 1]} {year}</span>
           <button onClick={nextMonth} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500"><ChevronRight size={18} /></button>
         </div>
-        <button onClick={() => setShowMassal(true)} className="btn-primary flex items-center gap-1.5 text-sm">
-          <Layers size={15} /> Assign Massal
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={() => setShowMassal(true)} className="btn-primary flex items-center gap-1.5 text-sm">
+            <Layers size={15} /> Assign Massal
+          </button>
+          {/* TEMPORARY - REMOVE BEFORE PRODUCTION */}
+          <button onClick={() => { setShowReset(true); setResetKonfirmasi(""); setResetScope("bulan"); }}
+            className="flex items-center gap-1.5 text-sm font-semibold px-3 py-2 rounded-xl border-2 border-red-200 text-red-600 hover:bg-red-50">
+            <Trash2 size={15} /> Kosongkan Jadwal
+          </button>
+          {/* END TEMPORARY */}
+        </div>
       </div>
+      {resetMsg && <p className="text-sm text-green-600">{resetMsg}</p>}
 
       {/* Legend */}
       <div className="flex flex-wrap gap-2 text-xs">
@@ -601,6 +630,40 @@ function AturShift({ karyawanList, shifts, shiftIndex, userName }: {
         <AssignMassal karyawanList={karyawanList} shifts={shifts} userName={userName}
           onClose={() => setShowMassal(false)} onDone={() => { setShowMassal(false); fetchAssign(); }} />
       )}
+
+      {/* TEMPORARY - REMOVE BEFORE PRODUCTION */}
+      {showReset && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl w-full max-w-sm p-5 space-y-4">
+            <h3 className="font-bold text-red-600 flex items-center gap-2">⚠️ Kosongkan Jadwal Shift (TESTING)</h3>
+            <p className="text-sm text-gray-600">
+              Ini akan mengosongkan jadwal shift yang sudah di-assign. Data karyawan & absensi <b>TIDAK</b> terhapus. Yakin?
+            </p>
+            <div className="space-y-1.5">
+              <label className="flex items-center gap-2 text-sm">
+                <input type="radio" checked={resetScope === "bulan"} onChange={() => setResetScope("bulan")} />
+                Kosongkan bulan ini saja ({ID_MONTHS[month - 1]} {year})
+              </label>
+              <label className="flex items-center gap-2 text-sm">
+                <input type="radio" checked={resetScope === "semua"} onChange={() => setResetScope("semua")} />
+                Kosongkan SEMUA jadwal
+              </label>
+            </div>
+            <div>
+              <label className="text-xs text-gray-500">Ketik <b>RESET</b> untuk konfirmasi</label>
+              <input className="input mt-1" value={resetKonfirmasi} onChange={(e) => setResetKonfirmasi(e.target.value)} placeholder="RESET" autoFocus />
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => setShowReset(false)} disabled={busy} className="btn-secondary flex-1">Batal</button>
+              <button onClick={resetJadwal} disabled={busy || resetKonfirmasi !== "RESET"}
+                className="flex-1 py-2 rounded-xl bg-red-500 text-white text-sm font-semibold hover:bg-red-600 disabled:opacity-40">
+                {busy ? "Mengosongkan..." : "Konfirmasi"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* END TEMPORARY */}
     </div>
   );
 }
