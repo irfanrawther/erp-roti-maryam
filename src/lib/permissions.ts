@@ -19,6 +19,7 @@ export interface Capabilities {
   kelolaUser: boolean;
   masterResep: boolean;
   stockOpname: boolean;   // halaman Stock Opname (PIC + Super Admin)
+  absensi: boolean;       // halaman Absensi (Super Admin only, tahap 1)
   isSuperAdmin: boolean;
 }
 
@@ -26,7 +27,7 @@ const NONE: Capabilities = {
   dashboard: false, bahanBaku: false, produksiFlow: false,
   adonan: false, rendam: false, packingFreezer: false, produksiRiwayat: false,
   pengiriman: false, produkReject: false, kelolaUser: false, masterResep: false,
-  stockOpname: false, isSuperAdmin: false,
+  stockOpname: false, absensi: false, isSuperAdmin: false,
 };
 
 export function getCapabilities(user: UserSession | null): Capabilities {
@@ -39,7 +40,7 @@ export function getCapabilities(user: UserSession | null): Capabilities {
       dashboard: true, bahanBaku: true, produksiFlow: true,
       adonan: true, rendam: true, packingFreezer: true, produksiRiwayat: true,
       pengiriman: true, produkReject: true, kelolaUser: true, masterResep: true,
-      stockOpname: true, isSuperAdmin: true,
+      stockOpname: true, absensi: true, isSuperAdmin: true,
     };
   }
 
