@@ -5,7 +5,7 @@ import { supabase } from "@/lib/supabase";
 import { getUserSession, canAccessAdmin, hashPin, type UserSession } from "@/lib/auth";
 import { homeRoute } from "@/lib/permissions";
 import { ID_MONTHS } from "@/components/RiwayatFilter";
-import { CalendarClock, Users, Plus, X, Pencil, Trash2, ChevronLeft, ChevronRight, Layers } from "lucide-react";
+import { CalendarClock, Plus, X, Pencil, Trash2, ChevronLeft, ChevronRight, Layers, MapPin, Crosshair } from "lucide-react";
 
 interface Karyawan {
   id: string;
@@ -33,7 +33,7 @@ const LIBUR_COLOR = "bg-gray-200 text-gray-500 border-gray-300";
 export default function AbsensiPage() {
   const router = useRouter();
   const [user, setUser] = useState<UserSession | null>(null);
-  const [tab, setTab] = useState<"karyawan" | "shift">("karyawan");
+  const [tab, setTab] = useState<"karyawan" | "shift" | "pengaturan">("karyawan");
 
   const [karyawanList, setKaryawanList] = useState<Karyawan[]>([]);
   const [erpUsers,     setErpUsers]     = useState<ErpUser[]>([]);
@@ -68,8 +68,8 @@ export default function AbsensiPage() {
       </div>
 
       {/* Tabs */}
-      <div className="flex bg-white rounded-xl border border-gray-100 p-1 gap-1 max-w-md">
-        {([["karyawan", "Data Karyawan"], ["shift", "Atur Jadwal Shift"]] as const).map(([k, label]) => (
+      <div className="flex bg-white rounded-xl border border-gray-100 p-1 gap-1 max-w-xl">
+        {([["karyawan", "Data Karyawan"], ["shift", "Atur Jadwal Shift"], ["pengaturan", "Pengaturan Lokasi"]] as const).map(([k, label]) => (
           <button key={k} onClick={() => setTab(k)}
             className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${tab === k ? "bg-amber-500 text-white" : "text-gray-600 hover:bg-gray-50"}`}>
             {label}
@@ -83,6 +83,95 @@ export default function AbsensiPage() {
       {tab === "shift" && (
         <AturShift karyawanList={karyawanList.filter((k) => k.status === "aktif")} shifts={shifts} shiftIndex={shiftIndex} userName={user?.nama ?? ""} />
       )}
+      {tab === "pengaturan" && (
+        <PengaturanLokasi userName={user?.nama ?? ""} />
+      )}
+    </div>
+  );
+}
+
+// ══════════════════════ TAB 3: PENGATURAN LOKASI ══════════════════════
+function PengaturanLokasi({ userName }: { userName: string }) {
+  const [lat, setLat] = useState("");
+  const [lng, setLng] = useState("");
+  const [radius, setRadius] = useState("100");
+  const [updatedAt, setUpdatedAt] = useState<string | null>(null);
+  const [rowId, setRowId] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [gpsBusy, setGpsBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [err, setErr] = useState("");
+
+  useEffect(() => { load(); }, []);
+  async function load() {
+    const { data } = await supabase.from("pengaturan_absensi")
+      .select("id, latitude_dapur, longitude_dapur, radius_meter, updated_at").limit(1).maybeSingle();
+    const r = data as { id: string; latitude_dapur: number; longitude_dapur: number; radius_meter: number; updated_at: string } | null;
+    if (r) {
+      setRowId(r.id);
+      setLat(String(r.latitude_dapur)); setLng(String(r.longitude_dapur));
+      setRadius(String(r.radius_meter)); setUpdatedAt(r.updated_at);
+    }
+  }
+
+  function gunakanLokasiSaya() {
+    setGpsBusy(true); setErr(""); setMsg("");
+    navigator.geolocation.getCurrentPosition(
+      (pos) => { setLat(String(pos.coords.latitude)); setLng(String(pos.coords.longitude)); setGpsBusy(false); setMsg("Lokasi device diambil. Jangan lupa Simpan."); },
+      () => { setErr("Tidak bisa ambil lokasi. Izinkan akses GPS di browser."); setGpsBusy(false); },
+      { enableHighAccuracy: true, timeout: 10000 },
+    );
+  }
+
+  async function save() {
+    setErr(""); setMsg("");
+    const latN = parseFloat(lat), lngN = parseFloat(lng), radN = parseInt(radius);
+    if (isNaN(latN) || isNaN(lngN)) { setErr("Latitude & longitude harus angka"); return; }
+    if (isNaN(radN) || radN <= 0)   { setErr("Radius harus angka > 0"); return; }
+    setBusy(true);
+    const payload = { latitude_dapur: latN, longitude_dapur: lngN, radius_meter: radN, updated_by: userName, updated_at: new Date().toISOString() };
+    const { error } = rowId
+      ? await supabase.from("pengaturan_absensi").update(payload).eq("id", rowId)
+      : await supabase.from("pengaturan_absensi").insert(payload);
+    setBusy(false);
+    if (error) { setErr(error.message); return; }
+    setMsg("✓ Pengaturan lokasi tersimpan");
+    load();
+  }
+
+  return (
+    <div className="card max-w-md space-y-4">
+      <div className="flex items-center gap-2">
+        <MapPin size={16} className="text-amber-500" />
+        <h2 className="font-semibold text-gray-700 text-sm">Titik Lokasi Dapur & Radius</h2>
+      </div>
+
+      <button onClick={gunakanLokasiSaya} disabled={gpsBusy}
+        className="w-full py-2.5 rounded-xl bg-amber-500 text-white text-sm font-semibold hover:bg-amber-600 disabled:opacity-50 flex items-center justify-center gap-2">
+        <Crosshair size={16} /> {gpsBusy ? "Mengambil lokasi..." : "Gunakan Lokasi Saya Sekarang"}
+      </button>
+      <p className="text-[11px] text-gray-400 -mt-2">Tips: buka halaman ini saat berada di dapur, klik tombol di atas, lalu Simpan.</p>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="label">Latitude</label>
+          <input className="input" value={lat} onChange={(e) => setLat(e.target.value)} placeholder="-6.xxxxxx" />
+        </div>
+        <div>
+          <label className="label">Longitude</label>
+          <input className="input" value={lng} onChange={(e) => setLng(e.target.value)} placeholder="106.xxxxxx" />
+        </div>
+      </div>
+      <div>
+        <label className="label">Radius (meter)</label>
+        <input className="input" inputMode="numeric" value={radius} onChange={(e) => setRadius(e.target.value.replace(/\D/g, ""))} placeholder="100" />
+      </div>
+
+      {err && <p className="text-sm text-red-500">{err}</p>}
+      {msg && <p className="text-sm text-green-600">{msg}</p>}
+      {updatedAt && <p className="text-[11px] text-gray-400">Terakhir diperbarui: {new Date(updatedAt).toLocaleString("id-ID")}</p>}
+
+      <button onClick={save} disabled={busy} className="btn-primary w-full">{busy ? "Menyimpan..." : "Simpan Pengaturan"}</button>
     </div>
   );
 }
