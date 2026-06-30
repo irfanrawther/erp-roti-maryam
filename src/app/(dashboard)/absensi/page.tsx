@@ -5,7 +5,8 @@ import { supabase } from "@/lib/supabase";
 import { getUserSession, canAccessAdmin, hashPin, type UserSession } from "@/lib/auth";
 import { homeRoute } from "@/lib/permissions";
 import { ID_MONTHS } from "@/components/RiwayatFilter";
-import { CalendarClock, Plus, X, Pencil, Trash2, ChevronLeft, ChevronRight, Layers, MapPin, Crosshair } from "lucide-react";
+import { hitungDenda, bulanRange, wibMinutesOfDay, DENDA, JAM_ALPHA, STATUS_LABEL } from "@/lib/absensi";
+import { CalendarClock, Plus, X, Pencil, Trash2, ChevronLeft, ChevronRight, Layers, MapPin, Crosshair, Flag, AlertTriangle } from "lucide-react";
 
 interface Karyawan {
   id: string;
@@ -33,7 +34,7 @@ const LIBUR_COLOR = "bg-gray-200 text-gray-500 border-gray-300";
 export default function AbsensiPage() {
   const router = useRouter();
   const [user, setUser] = useState<UserSession | null>(null);
-  const [tab, setTab] = useState<"karyawan" | "shift" | "pengaturan">("karyawan");
+  const [tab, setTab] = useState<"karyawan" | "shift" | "review" | "pengaturan">("karyawan");
 
   const [karyawanList, setKaryawanList] = useState<Karyawan[]>([]);
   const [erpUsers,     setErpUsers]     = useState<ErpUser[]>([]);
@@ -69,7 +70,7 @@ export default function AbsensiPage() {
 
       {/* Tabs */}
       <div className="flex bg-white rounded-xl border border-gray-100 p-1 gap-1 max-w-xl">
-        {([["karyawan", "Data Karyawan"], ["shift", "Atur Jadwal Shift"], ["pengaturan", "Pengaturan Lokasi"]] as const).map(([k, label]) => (
+        {([["karyawan", "Data Karyawan"], ["shift", "Atur Jadwal Shift"], ["review", "Review & Flag"], ["pengaturan", "Pengaturan Lokasi"]] as const).map(([k, label]) => (
           <button key={k} onClick={() => setTab(k)}
             className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${tab === k ? "bg-amber-500 text-white" : "text-gray-600 hover:bg-gray-50"}`}>
             {label}
@@ -82,6 +83,9 @@ export default function AbsensiPage() {
       )}
       {tab === "shift" && (
         <AturShift karyawanList={karyawanList.filter((k) => k.status === "aktif")} shifts={shifts} shiftIndex={shiftIndex} userName={user?.nama ?? ""} />
+      )}
+      {tab === "review" && (
+        <ReviewFlag karyawanList={karyawanList} shifts={shifts} userName={user?.nama ?? ""} />
       )}
       {tab === "pengaturan" && (
         <PengaturanLokasi userName={user?.nama ?? ""} />
@@ -595,6 +599,321 @@ function AssignMassal({ karyawanList, shifts, userName, onClose, onDone }: {
           <button onClick={submit} disabled={busy} className="btn-primary flex-1">{busy ? "Menyimpan..." : "Assign"}</button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ══════════════════════ TAB 4: REVIEW & FLAG ══════════════════════
+interface AbsRow {
+  id: string; karyawan_id: string; tanggal: string; shift_id: string | null;
+  jam_checkin: string | null; menit_telat: number; kategori_telat: string | null;
+  denda: number; denda_dihapus_ampun: boolean; status_kehadiran: string;
+  is_flagged: boolean; flag_reason: string | null; shift_id_koreksi: string | null;
+  is_override: boolean; catatan_super_admin: string | null;
+  karyawan: { nama: string } | null;
+  shift_master: { nama_shift: string; jam_masuk: string; jam_pulang: string } | null;
+}
+function rupiah(n: number) { return "Rp " + (n || 0).toLocaleString("id-ID"); }
+function jamDari(iso: string | null) {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta", hour: "2-digit", minute: "2-digit" });
+}
+
+function ReviewFlag({ karyawanList, shifts, userName }: {
+  karyawanList: Karyawan[]; shifts: Shift[]; userName: string;
+}) {
+  const now = new Date();
+  const [year, setYear]   = useState(now.getFullYear());
+  const [month, setMonth] = useState(now.getMonth() + 1);
+  const [rows, setRows]   = useState<AbsRow[]>([]);
+  const [catatanMap, setCatatanMap] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(false);
+
+  const daysInMonth = new Date(year, month, 0).getDate();
+  const mStart = `${year}-${String(month).padStart(2, "0")}-01`;
+  const mEnd   = `${year}-${String(month).padStart(2, "0")}-${String(daysInMonth).padStart(2, "0")}`;
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    // 1) Alpha on-demand: assignment (non-libur) yg tanggalnya sudah lewat 17:00 & belum ada absensi
+    const [asgRes, absExist] = await Promise.all([
+      supabase.from("shift_assignment").select("karyawan_id, tanggal, shift_id, is_libur").eq("is_libur", false).not("shift_id", "is", null).gte("tanggal", mStart).lte("tanggal", mEnd),
+      supabase.from("absensi").select("karyawan_id, tanggal").gte("tanggal", mStart).lte("tanggal", mEnd),
+    ]);
+    const have = new Set(((absExist.data as { karyawan_id: string; tanggal: string }[] | null) ?? []).map((a) => `${a.karyawan_id}|${a.tanggal}`));
+    const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" });
+    const nowMin = wibMinutesOfDay(new Date());
+    const ins: Record<string, unknown>[] = [];
+    for (const a of ((asgRes.data as { karyawan_id: string; tanggal: string; shift_id: string }[] | null) ?? [])) {
+      const passed = a.tanggal < todayStr || (a.tanggal === todayStr && nowMin >= JAM_ALPHA * 60);
+      if (!passed || have.has(`${a.karyawan_id}|${a.tanggal}`)) continue;
+      ins.push({ karyawan_id: a.karyawan_id, tanggal: a.tanggal, shift_id: a.shift_id, status_kehadiran: "alpha", denda: DENDA.ALPHA });
+    }
+    if (ins.length) await supabase.from("absensi").upsert(ins, { onConflict: "karyawan_id,tanggal" });
+
+    // 2) Fetch rows lengkap
+    const { data } = await supabase.from("absensi")
+      .select("id, karyawan_id, tanggal, shift_id, jam_checkin, menit_telat, kategori_telat, denda, denda_dihapus_ampun, status_kehadiran, is_flagged, flag_reason, shift_id_koreksi, is_override, catatan_super_admin, karyawan:karyawan_id(nama), shift_master:shift_id(nama_shift, jam_masuk, jam_pulang)")
+      .gte("tanggal", mStart).lte("tanggal", mEnd).order("tanggal", { ascending: false });
+    setRows((data as unknown as AbsRow[]) ?? []);
+    setLoading(false);
+  }, [mStart, mEnd]);
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  async function countK1Ampun(karyawanId: string, tanggal: string, excludeId?: string) {
+    const { start, end } = bulanRange(tanggal);
+    let q = supabase.from("absensi").select("id", { count: "exact", head: true })
+      .eq("karyawan_id", karyawanId).eq("kategori_telat", "K1").eq("denda_dihapus_ampun", true)
+      .gte("tanggal", start).lte("tanggal", end);
+    if (excludeId) q = q.neq("id", excludeId);
+    return (await q).count ?? 0;
+  }
+
+  // Koreksi shift asli → recalc denda
+  async function koreksiShift(row: AbsRow, newShiftId: string) {
+    const shift = shifts.find((s) => s.id === newShiftId);
+    if (!shift || !row.jam_checkin) return;
+    const k1 = await countK1Ampun(row.karyawan_id, row.tanggal, row.id);
+    const res = hitungDenda(shift.jam_masuk, new Date(row.jam_checkin), k1);
+    await supabase.from("absensi").update({
+      shift_id_koreksi: newShiftId,
+      menit_telat: res.menit_telat, kategori_telat: res.kategori_telat,
+      denda: res.denda, denda_dihapus_ampun: res.denda_dihapus_ampun,
+      is_flagged: res.is_flagged, flag_reason: res.flag_reason,
+    }).eq("id", row.id);
+    refresh();
+  }
+  async function hapusDenda(row: AbsRow) {
+    await supabase.from("absensi").update({ denda: 0, is_flagged: false }).eq("id", row.id);
+    refresh();
+  }
+  async function selesaiReview(row: AbsRow) {
+    await supabase.from("absensi").update({
+      is_override: true, is_flagged: false,
+      override_by: userName, override_at: new Date().toISOString(),
+      catatan_super_admin: catatanMap[row.id] || row.catatan_super_admin || null,
+    }).eq("id", row.id);
+    refresh();
+  }
+  async function setStatusIzin(row: AbsRow, status: "izin" | "izin_sakit") {
+    await supabase.from("absensi").update({
+      status_kehadiran: status, denda: 0, is_flagged: false, is_override: true,
+      override_by: userName, override_at: new Date().toISOString(),
+      catatan_super_admin: catatanMap[row.id] || row.catatan_super_admin || null,
+    }).eq("id", row.id);
+    refresh();
+  }
+
+  function prevMonth() { if (month === 1) { setMonth(12); setYear((y) => y - 1); } else setMonth((m) => m - 1); }
+  function nextMonth() { if (month === 12) { setMonth(1); setYear((y) => y + 1); } else setMonth((m) => m + 1); }
+
+  const flagged = rows.filter((r) => r.is_flagged && !r.is_override);
+  const alphaRows = rows.filter((r) => r.status_kehadiran === "alpha" && !r.is_override);
+  const totalDenda = rows.reduce((s, r) => s + (r.denda || 0), 0);
+  const shiftLabel = (id: string | null) => { const i = shifts.findIndex((s) => s.id === id); return i < 0 ? "—" : `S${i + 1}`; };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-2 bg-white rounded-xl border border-gray-100 p-1">
+          <button onClick={prevMonth} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500"><ChevronLeft size={18} /></button>
+          <span className="font-bold text-gray-700 text-sm w-32 text-center">{ID_MONTHS[month - 1]} {year}</span>
+          <button onClick={nextMonth} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500"><ChevronRight size={18} /></button>
+        </div>
+        <div className="text-sm text-gray-500">Total denda bulan ini: <b className="text-gray-800">{rupiah(totalDenda)}</b></div>
+      </div>
+
+      {loading && <p className="text-sm text-gray-400">Memuat...</p>}
+
+      {/* SECTION A — FLAGGED */}
+      <div className="card space-y-3">
+        <div className="flex items-center gap-2">
+          <Flag size={16} className="text-red-500" />
+          <h2 className="font-semibold text-gray-700 text-sm">Perlu Konfirmasi ({flagged.length})</h2>
+        </div>
+        {flagged.length === 0 ? (
+          <p className="text-gray-400 text-sm text-center py-4">Tidak ada flag</p>
+        ) : flagged.map((r) => (
+          <div key={r.id} className="rounded-xl border border-red-100 bg-red-50/40 p-3 space-y-2">
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <p className="font-semibold text-sm text-gray-800">{r.karyawan?.nama} · {formatTglID(r.tanggal)}</p>
+                <p className="text-xs text-gray-500">
+                  Shift assign: {r.shift_master?.nama_shift ?? "—"} ({r.shift_master?.jam_masuk.slice(0, 5)}) · Check-in <b>{jamDari(r.jam_checkin)}</b>
+                </p>
+                <p className="text-xs font-medium text-red-600 mt-0.5">
+                  {r.flag_reason === "telat_jauh" ? `Telat jauh (${r.menit_telat} menit)` : "Datang kepagian (>45 mnt sebelum shift)"}
+                  {" · "}Denda {rupiah(r.denda)}
+                </p>
+              </div>
+            </div>
+            <div className="grid sm:grid-cols-2 gap-2">
+              <div>
+                <label className="text-[11px] text-gray-500">Shift asli karyawan (recalc)</label>
+                <select className="input py-1.5 text-sm" value={r.shift_id_koreksi ?? ""} onChange={(e) => e.target.value && koreksiShift(r, e.target.value)}>
+                  <option value="">Pilih shift…</option>
+                  {shifts.map((s, i) => <option key={s.id} value={s.id}>Shift {i + 1} ({s.jam_masuk.slice(0, 5)})</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-[11px] text-gray-500">Catatan</label>
+                <input className="input py-1.5 text-sm" value={catatanMap[r.id] ?? ""} onChange={(e) => setCatatanMap((m) => ({ ...m, [r.id]: e.target.value }))} placeholder="opsional" />
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button onClick={() => hapusDenda(r)} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-amber-100 text-amber-700 hover:bg-amber-200">Hapus Denda</button>
+              <button onClick={() => selesaiReview(r)} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-green-500 text-white hover:bg-green-600">Selesai Review</button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* SECTION B — ALPHA */}
+      <div className="card space-y-3">
+        <div className="flex items-center gap-2">
+          <AlertTriangle size={16} className="text-orange-500" />
+          <h2 className="font-semibold text-gray-700 text-sm">Alpha — perlu tindak lanjut ({alphaRows.length})</h2>
+        </div>
+        {alphaRows.length === 0 ? (
+          <p className="text-gray-400 text-sm text-center py-4">Tidak ada alpha</p>
+        ) : alphaRows.map((r) => (
+          <div key={r.id} className="rounded-xl border border-orange-100 bg-orange-50/40 p-3 space-y-2">
+            <p className="font-semibold text-sm text-gray-800">{r.karyawan?.nama} · {formatTglID(r.tanggal)} <span className="text-orange-600">· Alpha · Denda {rupiah(r.denda)}</span></p>
+            <div className="flex flex-wrap gap-2">
+              <button onClick={() => setStatusIzin(r, "izin")} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-blue-100 text-blue-700 hover:bg-blue-200">Ubah → Izin</button>
+              <button onClick={() => setStatusIzin(r, "izin_sakit")} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-purple-100 text-purple-700 hover:bg-purple-200">Ubah → Izin Sakit</button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* SECTION C — OVERRIDE MANUAL */}
+      <OverrideManual karyawanList={karyawanList} shifts={shifts} userName={userName} onDone={refresh} countK1Ampun={countK1Ampun} />
+
+      {/* RINGKASAN bulan */}
+      <div className="card overflow-x-auto">
+        <h2 className="font-semibold text-gray-700 text-sm mb-2">Semua Absensi ({rows.length})</h2>
+        {rows.length === 0 ? <p className="text-gray-400 text-sm text-center py-4">Belum ada data</p> : (
+          <table className="w-full text-sm min-w-[640px]">
+            <thead>
+              <tr className="text-left text-xs text-gray-400 uppercase border-b border-gray-100">
+                <th className="py-2 pr-3">Tanggal</th><th className="py-2 pr-3">Karyawan</th><th className="py-2 pr-3">Shift</th>
+                <th className="py-2 pr-3">Masuk</th><th className="py-2 pr-3">Telat</th><th className="py-2 pr-3">Status</th><th className="py-2 pr-3 text-right">Denda</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.id} className="border-b border-gray-50 last:border-0">
+                  <td className="py-2 pr-3 text-gray-600">{formatTglID(r.tanggal)}</td>
+                  <td className="py-2 pr-3 font-medium text-gray-800">{r.karyawan?.nama}</td>
+                  <td className="py-2 pr-3 text-gray-600">{shiftLabel(r.shift_id_koreksi ?? r.shift_id)}{r.shift_id_koreksi && <span className="text-amber-500 text-[10px]"> ✎</span>}</td>
+                  <td className="py-2 pr-3 text-gray-600">{jamDari(r.jam_checkin)}</td>
+                  <td className="py-2 pr-3">{r.kategori_telat ? <span className="text-red-500 font-medium">{r.kategori_telat} ({r.menit_telat}′)</span> : <span className="text-gray-300">—</span>}</td>
+                  <td className="py-2 pr-3">{STATUS_LABEL[r.status_kehadiran] ?? r.status_kehadiran}{r.denda_dihapus_ampun && <span className="text-green-500 text-[10px]"> (ampun)</span>}</td>
+                  <td className="py-2 pr-3 text-right font-semibold text-gray-800">{r.denda ? rupiah(r.denda) : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Override manual (lupa check-in / set izin) ──
+function OverrideManual({ karyawanList, shifts, userName, onDone, countK1Ampun }: {
+  karyawanList: Karyawan[]; shifts: Shift[]; userName: string;
+  onDone: () => void; countK1Ampun: (k: string, t: string, e?: string) => Promise<number>;
+}) {
+  const [karyawanId, setKaryawanId] = useState("");
+  const [tanggal, setTanggal] = useState("");
+  const [mode, setMode] = useState<"hadir" | "izin" | "izin_sakit">("hadir");
+  const [jamMasuk, setJamMasuk] = useState("");
+  const [catatan, setCatatan] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(""); const [err, setErr] = useState("");
+
+  async function submit() {
+    setErr(""); setMsg("");
+    if (!karyawanId || !tanggal) { setErr("Pilih karyawan & tanggal"); return; }
+    if (mode === "hadir" && !/^\d{2}:\d{2}$/.test(jamMasuk)) { setErr("Isi jam masuk (HH:MM)"); return; }
+    setBusy(true);
+    try {
+      // shift ter-assign tanggal itu
+      const { data: sa } = await supabase.from("shift_assignment")
+        .select("shift_id, is_libur, shift_master:shift_id(jam_masuk)")
+        .eq("karyawan_id", karyawanId).eq("tanggal", tanggal).maybeSingle();
+      const saRow = sa as { shift_id: string | null; is_libur: boolean; shift_master: { jam_masuk: string } | null } | null;
+      const shiftId = saRow && !saRow.is_libur ? saRow.shift_id : null;
+
+      const payload: Record<string, unknown> = {
+        karyawan_id: karyawanId, tanggal, shift_id: shiftId,
+        is_override: true, override_by: userName, override_at: new Date().toISOString(),
+        catatan_super_admin: catatan || null, is_flagged: false,
+      };
+
+      if (mode === "hadir") {
+        const checkinIso = `${tanggal}T${jamMasuk}:00+07:00`;
+        payload.jam_checkin = checkinIso;
+        payload.status_kehadiran = "hadir";
+        if (saRow?.shift_master?.jam_masuk) {
+          const k1 = await countK1Ampun(karyawanId, tanggal);
+          const res = hitungDenda(saRow.shift_master.jam_masuk, new Date(checkinIso), k1);
+          payload.menit_telat = res.menit_telat; payload.kategori_telat = res.kategori_telat;
+          payload.denda = res.denda; payload.denda_dihapus_ampun = res.denda_dihapus_ampun;
+        } else { payload.denda = 0; payload.kategori_telat = null; payload.menit_telat = 0; }
+      } else {
+        payload.status_kehadiran = mode; payload.denda = 0; payload.kategori_telat = null; payload.menit_telat = 0;
+      }
+
+      const { error } = await supabase.from("absensi").upsert(payload, { onConflict: "karyawan_id,tanggal" });
+      if (error) throw new Error(error.message);
+      setMsg("✓ Tersimpan"); setJamMasuk(""); setCatatan("");
+      onDone();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Gagal menyimpan");
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <div className="card space-y-3">
+      <h2 className="font-semibold text-gray-700 text-sm">Override Manual (lupa check-in / set izin)</h2>
+      <div className="grid sm:grid-cols-2 gap-3">
+        <div>
+          <label className="label">Karyawan</label>
+          <select className="input" value={karyawanId} onChange={(e) => setKaryawanId(e.target.value)}>
+            <option value="">Pilih…</option>
+            {karyawanList.map((k) => <option key={k.id} value={k.id}>{k.nama}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="label">Tanggal</label>
+          <input type="date" className="input" value={tanggal} onChange={(e) => setTanggal(e.target.value)} />
+        </div>
+        <div>
+          <label className="label">Mode</label>
+          <select className="input" value={mode} onChange={(e) => setMode(e.target.value as typeof mode)}>
+            <option value="hadir">Hadir (input jam masuk)</option>
+            <option value="izin">Izin</option>
+            <option value="izin_sakit">Izin Sakit</option>
+          </select>
+        </div>
+        {mode === "hadir" && (
+          <div>
+            <label className="label">Jam Masuk (HH:MM)</label>
+            <input type="time" className="input" value={jamMasuk} onChange={(e) => setJamMasuk(e.target.value)} />
+          </div>
+        )}
+        <div className="sm:col-span-2">
+          <label className="label">Catatan</label>
+          <input className="input" value={catatan} onChange={(e) => setCatatan(e.target.value)} placeholder="opsional" />
+        </div>
+      </div>
+      {err && <p className="text-sm text-red-500">{err}</p>}
+      {msg && <p className="text-sm text-green-600">{msg}</p>}
+      <button onClick={submit} disabled={busy} className="btn-primary">{busy ? "Menyimpan..." : "Simpan Override"}</button>
     </div>
   );
 }

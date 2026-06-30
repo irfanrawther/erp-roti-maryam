@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { hashPin } from "@/lib/auth";
+import { hitungDenda, bulanRange } from "@/lib/absensi";
 import { Clock, MapPin, Camera, CheckCircle2, LogIn, LogOut, X, RefreshCw } from "lucide-react";
 
 interface Karyawan { id: string; nama: string; jabatan: string | null }
@@ -242,17 +243,39 @@ function CheckInView({ karyawan, shiftName, setting, onCancel, onDone }: {
       if (up.error) throw new Error("Gagal upload foto: " + up.error.message);
       const fotoUrl = supabase.storage.from("foto-absensi").getPublicUrl(path).data.publicUrl;
 
-      // shift_id hari ini (jika ada)
+      // shift hari ini (jika ada) + jam masuk
       const { data: sa } = await supabase.from("shift_assignment")
-        .select("shift_id, is_libur").eq("karyawan_id", karyawan.id).eq("tanggal", today).maybeSingle();
-      const shiftId = (sa as { shift_id: string | null; is_libur: boolean } | null);
+        .select("shift_id, is_libur, shift_master:shift_id(jam_masuk)")
+        .eq("karyawan_id", karyawan.id).eq("tanggal", today).maybeSingle();
+      const saRow = sa as { shift_id: string | null; is_libur: boolean; shift_master: { jam_masuk: string } | null } | null;
+      const adaShift = !!saRow && !saRow.is_libur && !!saRow.shift_id && !!saRow.shift_master;
 
-      const { error } = await supabase.from("absensi").upsert({
+      const checkinDate = new Date();
+      const payload: Record<string, unknown> = {
         karyawan_id: karyawan.id, tanggal: today,
-        shift_id: shiftId && !shiftId.is_libur ? shiftId.shift_id : null,
-        jam_checkin: new Date().toISOString(), foto_checkin_url: fotoUrl,
+        shift_id: adaShift ? saRow!.shift_id : null,
+        jam_checkin: checkinDate.toISOString(), foto_checkin_url: fotoUrl,
         lat_checkin: coords.lat, lng_checkin: coords.lng,
-      }, { onConflict: "karyawan_id,tanggal" });
+        status_kehadiran: "hadir",
+      };
+
+      // Hitung denda telat (hanya jika ada shift ter-assign)
+      if (adaShift) {
+        const { start, end } = bulanRange(today);
+        const { count } = await supabase.from("absensi")
+          .select("id", { count: "exact", head: true })
+          .eq("karyawan_id", karyawan.id).eq("kategori_telat", "K1").eq("denda_dihapus_ampun", true)
+          .gte("tanggal", start).lte("tanggal", end);
+        const res = hitungDenda(saRow!.shift_master!.jam_masuk, checkinDate, count ?? 0);
+        payload.menit_telat         = res.menit_telat;
+        payload.kategori_telat      = res.kategori_telat;
+        payload.denda               = res.denda;
+        payload.denda_dihapus_ampun = res.denda_dihapus_ampun;
+        payload.is_flagged          = res.is_flagged;
+        payload.flag_reason         = res.flag_reason;
+      }
+
+      const { error } = await supabase.from("absensi").upsert(payload, { onConflict: "karyawan_id,tanggal" });
       if (error) throw new Error(error.message);
 
       streamRef.current?.getTracks().forEach((t) => t.stop());
