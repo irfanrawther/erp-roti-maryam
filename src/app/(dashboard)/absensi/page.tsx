@@ -88,11 +88,92 @@ export default function AbsensiPage() {
         <ReviewFlag karyawanList={karyawanList} shifts={shifts} userName={user?.nama ?? ""} />
       )}
       {tab === "pengaturan" && (
-        <PengaturanLokasi userName={user?.nama ?? ""} />
+        <>
+          <PengaturanLokasi userName={user?.nama ?? ""} />
+          {/* TEMPORARY - REMOVE BEFORE PRODUCTION */}
+          <ResetAbsensiTesting onDone={fetchAll} />
+        </>
       )}
     </div>
   );
 }
+
+// ══════════════════════════════════════════════════════════════
+// TEMPORARY - REMOVE BEFORE PRODUCTION
+// Tombol reset data absensi & hapus karyawan dummy (fase testing).
+// ══════════════════════════════════════════════════════════════
+function ResetAbsensiTesting({ onDone }: { onDone: () => void }) {
+  const [showModal, setShowModal] = useState(false);
+  const [konfirmasi, setKonfirmasi] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  async function resetAbsensi() {
+    setBusy(true); setMsg("");
+    // Hapus SEMUA baris absensi (struktur tabel & data lain tetap)
+    await supabase.from("absensi").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+    setBusy(false); setShowModal(false); setKonfirmasi("");
+    setMsg("✓ Data absensi berhasil direset");
+    onDone();
+  }
+
+  async function hapusDummy() {
+    if (!confirm("Hapus semua karyawan dengan jabatan 'Tester' beserta shift & absensinya?")) return;
+    setBusy(true); setMsg("");
+    // FK ON DELETE CASCADE → shift_assignment & absensi karyawan ini ikut terhapus
+    await supabase.from("karyawan").delete().eq("jabatan", "Tester");
+    setBusy(false);
+    setMsg("✓ Karyawan dummy (Tester) dihapus");
+    onDone();
+  }
+
+  return (
+    <div className="card max-w-md mt-4 border-2 border-red-200 bg-red-50/40 space-y-3">
+      <div className="flex items-center gap-2">
+        <AlertTriangle size={16} className="text-red-500" />
+        <h2 className="font-bold text-red-600 text-sm">⚠️ RESET DATA ABSENSI (TESTING ONLY)</h2>
+      </div>
+      <p className="text-xs text-gray-500">Fitur sementara untuk fase testing. Hapus sebelum production.</p>
+      {msg && <p className="text-sm text-green-600">{msg}</p>}
+      <div className="flex flex-col gap-2">
+        <button onClick={() => { setShowModal(true); setKonfirmasi(""); }} disabled={busy}
+          className="w-full py-2.5 rounded-xl bg-red-500 text-white text-sm font-semibold hover:bg-red-600 disabled:opacity-50">
+          Reset Data Absensi
+        </button>
+        <button onClick={hapusDummy} disabled={busy}
+          className="w-full py-2 rounded-xl border-2 border-red-200 text-red-600 text-sm font-semibold hover:bg-red-50 disabled:opacity-50">
+          Hapus Karyawan Dummy (Tester)
+        </button>
+      </div>
+
+      {showModal && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl w-full max-w-sm p-5 space-y-4">
+            <div className="flex items-center gap-2">
+              <AlertTriangle size={20} className="text-red-500" />
+              <h3 className="font-bold text-gray-800">Reset Data Absensi?</h3>
+            </div>
+            <p className="text-sm text-gray-600">
+              Ini akan menghapus <b>SEMUA</b> data absensi, denda, dan flag. Data karyawan & shift assignment <b>TIDAK</b> terhapus. Yakin?
+            </p>
+            <div>
+              <label className="text-xs text-gray-500">Ketik <b>RESET</b> untuk konfirmasi</label>
+              <input className="input mt-1" value={konfirmasi} onChange={(e) => setKonfirmasi(e.target.value)} placeholder="RESET" autoFocus />
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => setShowModal(false)} disabled={busy} className="btn-secondary flex-1">Batal</button>
+              <button onClick={resetAbsensi} disabled={busy || konfirmasi !== "RESET"}
+                className="flex-1 py-2 rounded-xl bg-red-500 text-white text-sm font-semibold hover:bg-red-600 disabled:opacity-40">
+                {busy ? "Mereset..." : "Konfirmasi Reset"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+// END TEMPORARY - REMOVE BEFORE PRODUCTION
 
 // ══════════════════════ TAB 3: PENGATURAN LOKASI ══════════════════════
 function PengaturanLokasi({ userName }: { userName: string }) {
