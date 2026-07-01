@@ -34,7 +34,7 @@ const LIBUR_COLOR = "bg-gray-200 text-gray-500 border-gray-300";
 export default function AbsensiPage() {
   const router = useRouter();
   const [user, setUser] = useState<UserSession | null>(null);
-  const [tab, setTab] = useState<"karyawan" | "shift" | "review" | "pengaturan">("karyawan");
+  const [tab, setTab] = useState<"karyawan" | "shift" | "review" | "rekap" | "pengaturan">("karyawan");
 
   const [karyawanList, setKaryawanList] = useState<Karyawan[]>([]);
   const [erpUsers,     setErpUsers]     = useState<ErpUser[]>([]);
@@ -69,10 +69,10 @@ export default function AbsensiPage() {
       </div>
 
       {/* Tabs */}
-      <div className="flex bg-white rounded-xl border border-gray-100 p-1 gap-1 max-w-xl">
-        {([["karyawan", "Data Karyawan"], ["shift", "Atur Jadwal Shift"], ["review", "Review & Flag"], ["pengaturan", "Pengaturan Lokasi"]] as const).map(([k, label]) => (
+      <div className="flex bg-white rounded-xl border border-gray-100 p-1 gap-1 max-w-3xl overflow-x-auto">
+        {([["karyawan", "Data Karyawan"], ["shift", "Atur Jadwal Shift"], ["review", "Review & Flag"], ["rekap", "Rekap Absensi"], ["pengaturan", "Pengaturan Lokasi"]] as const).map(([k, label]) => (
           <button key={k} onClick={() => setTab(k)}
-            className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${tab === k ? "bg-amber-500 text-white" : "text-gray-600 hover:bg-gray-50"}`}>
+            className={`flex-1 whitespace-nowrap py-2 px-3 rounded-lg text-sm font-medium transition-colors ${tab === k ? "bg-amber-500 text-white" : "text-gray-600 hover:bg-gray-50"}`}>
             {label}
           </button>
         ))}
@@ -86,6 +86,9 @@ export default function AbsensiPage() {
       )}
       {tab === "review" && (
         <ReviewFlag karyawanList={karyawanList} shifts={shifts} userName={user?.nama ?? ""} />
+      )}
+      {tab === "rekap" && (
+        <RekapAbsensi karyawanList={karyawanList} shifts={shifts} />
       )}
       {tab === "pengaturan" && (
         <>
@@ -1115,4 +1118,148 @@ function OverrideManual({ karyawanList, shifts, userName, onDone, countK1Ampun }
 function formatTglID(iso: string) {
   const [y, m, d] = iso.split("-").map(Number);
   return `${d} ${ID_MONTHS[m - 1]?.slice(0, 3)} ${y}`;
+}
+
+// jam WIB (HH:MM) dari timestamptz ISO
+function jamWIB(iso: string | null): string {
+  if (!iso) return "-";
+  return new Date(iso).toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta", hour: "2-digit", minute: "2-digit" });
+}
+
+// ── Rekap Absensi + Foto (Super Admin) ──
+interface RekapRow {
+  id: string; karyawan_id: string; tanggal: string;
+  jam_checkin: string | null; jam_checkout: string | null;
+  foto_checkin_url: string | null; lat_checkin: number | null; lng_checkin: number | null;
+  status_kehadiran: string; denda: number; denda_dihapus_ampun: boolean;
+  menit_telat: number; kategori_telat: string | null;
+}
+function RekapAbsensi({ karyawanList, shifts }: { karyawanList: Karyawan[]; shifts: Shift[] }) {
+  void shifts;
+  const now = new Date();
+  const [year, setYear]   = useState(now.getFullYear());
+  const [month, setMonth] = useState(now.getMonth() + 1);
+  const [rows, setRows]   = useState<RekapRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [fotoModal, setFotoModal] = useState<RekapRow | null>(null);
+
+  const daysInMonth = new Date(year, month, 0).getDate();
+  const mStart = `${year}-${String(month).padStart(2, "0")}-01`;
+  const mEnd   = `${year}-${String(month).padStart(2, "0")}-${String(daysInMonth).padStart(2, "0")}`;
+
+  const namaOf = (kid: string) => karyawanList.find((k) => k.id === kid)?.nama ?? "—";
+
+  const fetchRekap = useCallback(async () => {
+    setLoading(true);
+    const { data } = await supabase.from("absensi")
+      .select("id, karyawan_id, tanggal, jam_checkin, jam_checkout, foto_checkin_url, lat_checkin, lng_checkin, status_kehadiran, denda, denda_dihapus_ampun, menit_telat, kategori_telat")
+      .gte("tanggal", mStart).lte("tanggal", mEnd)
+      .order("tanggal", { ascending: false });
+    setRows((data as RekapRow[]) ?? []);
+    setLoading(false);
+  }, [mStart, mEnd]);
+
+  useEffect(() => { fetchRekap(); }, [fetchRekap]);
+
+  function prevMonth() { if (month === 1) { setMonth(12); setYear((y) => y - 1); } else setMonth((m) => m - 1); }
+  function nextMonth() { if (month === 12) { setMonth(1); setYear((y) => y + 1); } else setMonth((m) => m + 1); }
+
+  const totalDenda = rows.reduce((s, r) => s + (r.denda_dihapus_ampun ? 0 : r.denda), 0);
+
+  return (
+    <div className="space-y-3">
+      {/* Month selector */}
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-2 bg-white rounded-xl border border-gray-100 p-1">
+          <button onClick={prevMonth} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500"><ChevronLeft size={18} /></button>
+          <span className="font-bold text-gray-700 text-sm w-32 text-center">{ID_MONTHS[month - 1]} {year}</span>
+          <button onClick={nextMonth} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500"><ChevronRight size={18} /></button>
+        </div>
+        <div className="text-sm text-gray-500">
+          {rows.length} absensi · Total denda: <span className="font-bold text-red-600">Rp {totalDenda.toLocaleString("id-ID")}</span>
+        </div>
+      </div>
+
+      <div className="card overflow-x-auto p-0">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-gray-500 border-b border-gray-100">
+              <th className="px-3 py-2 font-semibold">Foto</th>
+              <th className="px-3 py-2 font-semibold">Tanggal</th>
+              <th className="px-3 py-2 font-semibold">Karyawan</th>
+              <th className="px-3 py-2 font-semibold">Masuk</th>
+              <th className="px-3 py-2 font-semibold">Keluar</th>
+              <th className="px-3 py-2 font-semibold">Status</th>
+              <th className="px-3 py-2 font-semibold text-right">Denda</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              <tr><td colSpan={7} className="px-3 py-8 text-center text-gray-400">Memuat…</td></tr>
+            ) : rows.length === 0 ? (
+              <tr><td colSpan={7} className="px-3 py-8 text-center text-gray-400">Belum ada absensi bulan ini</td></tr>
+            ) : rows.map((r) => (
+              <tr key={r.id} className="border-b border-gray-50 last:border-0">
+                <td className="px-3 py-1.5">
+                  {r.foto_checkin_url ? (
+                    <button onClick={() => setFotoModal(r)} className="block w-12 h-12 rounded-lg overflow-hidden border border-gray-200 hover:ring-2 hover:ring-amber-400">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={r.foto_checkin_url} alt="foto" className="w-full h-full object-cover" />
+                    </button>
+                  ) : (
+                    <span className="text-gray-300 text-xs">Tidak ada</span>
+                  )}
+                </td>
+                <td className="px-3 py-1.5 whitespace-nowrap text-gray-600">{formatTglID(r.tanggal)}</td>
+                <td className="px-3 py-1.5 font-medium text-gray-800 whitespace-nowrap">{namaOf(r.karyawan_id)}</td>
+                <td className="px-3 py-1.5 tabular-nums text-gray-600">{jamWIB(r.jam_checkin)}</td>
+                <td className="px-3 py-1.5 tabular-nums text-gray-600">{jamWIB(r.jam_checkout)}</td>
+                <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap">
+                  {STATUS_LABEL[r.status_kehadiran] ?? r.status_kehadiran}
+                  {r.menit_telat > 0 && <span className="text-red-500 text-xs"> · telat {r.menit_telat}m</span>}
+                </td>
+                <td className="px-3 py-1.5 text-right tabular-nums whitespace-nowrap">
+                  {r.denda > 0 ? (
+                    r.denda_dihapus_ampun
+                      ? <span className="text-green-600 text-xs">Rp {r.denda.toLocaleString("id-ID")} (ampun)</span>
+                      : <span className="text-red-600 font-semibold">Rp {r.denda.toLocaleString("id-ID")}</span>
+                  ) : <span className="text-gray-300">-</span>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Modal foto full */}
+      {fotoModal && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={() => setFotoModal(null)}>
+          <div className="bg-white rounded-2xl w-full max-w-sm overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+              <div>
+                <p className="font-bold text-gray-800">{namaOf(fotoModal.karyawan_id)}</p>
+                <p className="text-xs text-gray-500">{formatTglID(fotoModal.tanggal)} · Check-in {jamWIB(fotoModal.jam_checkin)}</p>
+              </div>
+              <button onClick={() => setFotoModal(null)} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
+            </div>
+            {fotoModal.foto_checkin_url && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={fotoModal.foto_checkin_url} alt="foto check-in" className="w-full object-contain max-h-[60vh] bg-gray-900" />
+            )}
+            <div className="p-4">
+              {fotoModal.lat_checkin != null && fotoModal.lng_checkin != null ? (
+                <a href={`https://maps.google.com/?q=${fotoModal.lat_checkin},${fotoModal.lng_checkin}`}
+                  target="_blank" rel="noopener noreferrer"
+                  className="flex items-center justify-center gap-2 w-full py-2.5 rounded-xl bg-blue-50 text-blue-600 font-semibold text-sm hover:bg-blue-100">
+                  <MapPin size={16} /> Lihat Lokasi Check-in di Google Maps
+                </a>
+              ) : (
+                <p className="text-center text-xs text-gray-400">Lokasi check-in tidak tercatat</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
