@@ -1027,9 +1027,7 @@ function BahanCard({ bahan, onSubmit, isSuperAdmin, onDirectSet, canKurangi, rea
     if (ok) setEditingStok(false);
   }
 
-  const stokAwal    = STOK_AWAL[bahan.nama] ?? null;
-  const pengurangan = stokAwal !== null ? stokAwal - bahan.stok_saat_ini : 0;
-  const adaPengurangan = stokAwal !== null && pengurangan > 0.0005;
+  const adaPengurangan = false;
 
   return (
     <div className={`rounded-xl border p-3 transition-all ${kritis ? "bg-red-50 border-red-200" : "border-gray-100"}`}>
