@@ -6,7 +6,7 @@ import { supabase } from "@/lib/supabase";
 import { getUserSession } from "@/lib/auth";
 import { getCapabilities, homeRoute } from "@/lib/permissions";
 import { formatAngka } from "@/lib/utils";
-import { AlertTriangle, Store, RotateCcw, ChevronLeft, ChevronRight } from "lucide-react";
+import { AlertTriangle, Store, RotateCcw, ChevronLeft, ChevronRight, Pencil, Check, X } from "lucide-react";
 import { RiwayatFilter, getRiwayatRange, ID_MONTHS } from "@/components/RiwayatFilter";
 import type { RiwayatPreset } from "@/components/RiwayatFilter";
 
@@ -45,6 +45,9 @@ export default function ProdukRejectPage() {
   const [resetBusy,      setResetBusy]      = useState(false);
   const [showUndoModal,  setShowUndoModal]  = useState(false);
   const [undoBusy,       setUndoBusy]       = useState(false);
+  const [editStokId,     setEditStokId]     = useState<string | null>(null);
+  const [editStokVal,    setEditStokVal]    = useState("");
+  const [savingStok,     setSavingStok]     = useState(false);
 
   // Form state
   const [packForm,   setPackForm]   = useState<Record<string, string>>({});
@@ -89,6 +92,24 @@ export default function ProdukRejectPage() {
 
   function rowFor(brand: string, varian: string): RejectStok | undefined {
     return rejectList.find((r) => r.brand === brand && r.varian === varian);
+  }
+
+  function openEditStok(row: RejectStok) {
+    setEditStokId(row.id);
+    setEditStokVal(String(row.stok_pcs));
+  }
+
+  async function saveEditStok(id: string) {
+    const nilai = parseInt(editStokVal);
+    if (isNaN(nilai) || nilai < 0) return;
+    setSavingStok(true);
+    const { error } = await supabase.from("stok_produk_reject")
+      .update({ stok_pcs: nilai, updated_at: new Date().toISOString() }).eq("id", id);
+    setSavingStok(false);
+    if (!error) {
+      setRejectList((list) => list.map((r) => (r.id === id ? { ...r, stok_pcs: nilai } : r)));
+      setEditStokId(null);
+    }
   }
 
   async function handleSubmit() {
@@ -262,7 +283,36 @@ export default function ProdukRejectPage() {
                       return (
                         <div key={v} className="flex items-center justify-between py-1 border-b border-gray-100 last:border-0">
                           <span className="text-xs text-gray-700 font-medium">{v} <span className="text-gray-400 font-normal">(isi {row.pcs_per_pack} pcs)</span></span>
-                          <span className={`text-sm font-bold ${row.stok_pcs > 0 ? "text-gray-800" : "text-gray-300"}`}>{formatAngka(row.stok_pcs)} pcs</span>
+                          {editStokId === row.id ? (
+                            <div className="flex items-center gap-1">
+                              <input
+                                type="number" step="1" min="0" autoFocus
+                                value={editStokVal} onChange={(e) => setEditStokVal(e.target.value)}
+                                onKeyDown={(e) => { if (e.key === "Enter") saveEditStok(row.id); if (e.key === "Escape") setEditStokId(null); }}
+                                className="input py-0.5 text-sm w-16 text-center font-bold"
+                              />
+                              <span className="text-[10px] text-gray-400">pcs</span>
+                              <button type="button" onClick={() => saveEditStok(row.id)} disabled={savingStok || editStokVal === ""}
+                                className="flex items-center justify-center w-6 h-6 rounded-md bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-40 shrink-0">
+                                {savingStok ? <span className="text-[9px]">…</span> : <Check size={11} />}
+                              </button>
+                              <button type="button" onClick={() => setEditStokId(null)}
+                                className="flex items-center justify-center w-6 h-6 rounded-md bg-gray-100 text-gray-500 hover:bg-gray-200 shrink-0">
+                                <X size={11} />
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-1">
+                              <span className={`text-sm font-bold ${row.stok_pcs > 0 ? "text-gray-800" : "text-gray-300"}`}>{formatAngka(row.stok_pcs)} pcs</span>
+                              {!readOnly && (
+                                <button type="button" onClick={() => openEditStok(row)}
+                                  className="p-0.5 rounded-md text-gray-300 hover:text-amber-500 hover:bg-amber-50 transition-colors shrink-0"
+                                  title="Set stok langsung">
+                                  <Pencil size={11} />
+                                </button>
+                              )}
+                            </div>
+                          )}
                         </div>
                       );
                     })}
