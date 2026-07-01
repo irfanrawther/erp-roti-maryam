@@ -21,6 +21,27 @@ interface Karyawan {
 interface ErpUser { id: string; nama: string }
 interface Shift   { id: string; nama_shift: string; jam_masuk: string; jam_pulang: string }
 interface Assignment { id: string; karyawan_id: string; tanggal: string; shift_id: string | null; is_libur: boolean }
+interface AbsRow {
+  id: string; karyawan_id: string; tanggal: string;
+  jam_checkin: string | null; jam_checkout: string | null;
+  foto_checkin_url: string | null; lat_checkin: number | null; lng_checkin: number | null;
+  status_kehadiran: string; denda: number; denda_dihapus_ampun: boolean;
+  menit_telat: number; kategori_telat: string | null; is_flagged: boolean;
+}
+const ABS_SELECT = "id, karyawan_id, tanggal, jam_checkin, jam_checkout, foto_checkin_url, lat_checkin, lng_checkin, status_kehadiran, denda, denda_dihapus_ampun, menit_telat, kategori_telat, is_flagged";
+
+// Warna dot status absensi
+function statusDot(a: AbsRow | undefined): { cls: string; label: string } | null {
+  if (!a) return null;
+  if (a.status_kehadiran === "alpha")      return { cls: "bg-red-500",    label: "Alpha" };
+  if (a.status_kehadiran === "izin")       return { cls: "bg-blue-500",   label: "Izin" };
+  if (a.status_kehadiran === "izin_sakit") return { cls: "bg-purple-500", label: "Sakit" };
+  if (a.status_kehadiran === "hadir")
+    return a.kategori_telat
+      ? { cls: "bg-yellow-400", label: `Telat (${a.kategori_telat})` }
+      : { cls: "bg-green-500",  label: "Hadir tepat waktu" };
+  return null;
+}
 
 // Warna per shift (by index 0-3) + libur
 const SHIFT_COLORS = [
@@ -468,6 +489,8 @@ function AturShift({ karyawanList, shifts, shiftIndex, userName }: {
   const [year, setYear]   = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1); // 1-based
   const [assignments, setAssignments] = useState<Assignment[]>([]);
+  const [absensi, setAbsensi] = useState<AbsRow[]>([]);
+  const [detailCell, setDetailCell] = useState<{ karyawanId: string; tanggal: string } | null>(null);
   const [editCell, setEditCell] = useState<{ karyawanId: string; tanggal: string } | null>(null);
   const [showMassal, setShowMassal] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -486,15 +509,20 @@ function AturShift({ karyawanList, shifts, shiftIndex, userName }: {
   const dowOf = (day: number) => new Date(year, month - 1, day).getDay(); // 0=Minggu
 
   const fetchAssign = useCallback(async () => {
-    const { data } = await supabase.from("shift_assignment")
-      .select("id, karyawan_id, tanggal, shift_id, is_libur")
-      .gte("tanggal", monthStart).lte("tanggal", monthEnd);
-    if (data) setAssignments(data as Assignment[]);
+    const [aRes, absRes] = await Promise.all([
+      supabase.from("shift_assignment").select("id, karyawan_id, tanggal, shift_id, is_libur")
+        .gte("tanggal", monthStart).lte("tanggal", monthEnd),
+      supabase.from("absensi").select(ABS_SELECT)
+        .gte("tanggal", monthStart).lte("tanggal", monthEnd),
+    ]);
+    if (aRes.data)   setAssignments(aRes.data as Assignment[]);
+    if (absRes.data) setAbsensi(absRes.data as AbsRow[]);
   }, [monthStart, monthEnd]);
 
   useEffect(() => { fetchAssign(); }, [fetchAssign]);
 
   const findAssign = (kid: string, tgl: string) => assignments.find((a) => a.karyawan_id === kid && a.tanggal === tgl);
+  const findAbsen  = (kid: string, tgl: string) => absensi.find((a) => a.karyawan_id === kid && a.tanggal === tgl);
 
   function prevMonth() { if (month === 1) { setMonth(12); setYear((y) => y - 1); } else setMonth((m) => m - 1); }
   function nextMonth() { if (month === 12) { setMonth(1); setYear((y) => y + 1); } else setMonth((m) => m + 1); }
@@ -575,6 +603,17 @@ function AturShift({ karyawanList, shifts, shiftIndex, userName }: {
         <span className={`px-2 py-0.5 rounded-full border ${LIBUR_COLOR}`}>Libur</span>
       </div>
 
+      {/* Legend status absensi */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500">
+        <span className="font-semibold text-gray-400">Status:</span>
+        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-green-500" /> Hadir</span>
+        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-yellow-400" /> Telat</span>
+        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-red-500" /> Alpha</span>
+        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-blue-500" /> Izin</span>
+        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-purple-500" /> Sakit</span>
+        <span className="flex items-center gap-1">⚠️ Perlu Review</span>
+      </div>
+
       {karyawanList.length === 0 ? (
         <div className="card"><p className="text-gray-400 text-sm text-center py-8">Belum ada karyawan aktif. Tambah dulu di tab Data Karyawan.</p></div>
       ) : (
@@ -605,12 +644,25 @@ function AturShift({ karyawanList, shifts, shiftIndex, userName }: {
                     // Default Minggu = Libur bila belum ada assignment
                     const lbl = cellLabel(findAssign(k.id, tgl))
                       ?? (isMinggu ? { text: "Libur", cls: LIBUR_COLOR } : null);
+                    const abs = findAbsen(k.id, tgl);
+                    const dot = statusDot(abs);
                     return (
                       <td key={d} className={`p-0.5 border-b border-gray-50 text-center ${isMinggu ? "bg-red-50/50" : ""}`}>
-                        <button onClick={() => setEditCell({ karyawanId: k.id, tanggal: tgl })}
-                          className={`w-full h-7 rounded-md text-[10px] font-bold border transition-colors ${lbl ? lbl.cls : "border-transparent text-gray-300 hover:bg-gray-50"}`}>
-                          {lbl ? lbl.text : "·"}
-                        </button>
+                        <div className="relative">
+                          <button onClick={() => setEditCell({ karyawanId: k.id, tanggal: tgl })}
+                            className={`w-full h-7 rounded-md text-[10px] font-bold border transition-colors ${lbl ? lbl.cls : "border-transparent text-gray-300 hover:bg-gray-50"}`}>
+                            {lbl ? lbl.text : "·"}
+                          </button>
+                          {(dot || abs?.is_flagged) && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setDetailCell({ karyawanId: k.id, tanggal: tgl }); }}
+                              title={dot?.label ?? "Detail absensi"}
+                              className="absolute -top-1 -right-1 flex items-center gap-0.5">
+                              {dot && <span className={`w-2.5 h-2.5 rounded-full border border-white ${dot.cls}`} />}
+                              {abs?.is_flagged && <span className="text-[9px] leading-none">⚠️</span>}
+                            </button>
+                          )}
+                        </div>
                       </td>
                     );
                   })}
@@ -643,6 +695,17 @@ function AturShift({ karyawanList, shifts, shiftIndex, userName }: {
           </div>
         </div>
       )}
+
+      {detailCell && (() => {
+        const abs = findAbsen(detailCell.karyawanId, detailCell.tanggal);
+        const asg = findAssign(detailCell.karyawanId, detailCell.tanggal);
+        const shift = shifts.find((s) => s.id === asg?.shift_id) ?? null;
+        const nama = karyawanList.find((k) => k.id === detailCell.karyawanId)?.nama ?? "—";
+        return (
+          <AbsenDetailModal abs={abs} shift={shift} nama={nama} tanggal={detailCell.tanggal} userName={userName}
+            onClose={() => setDetailCell(null)} onSaved={() => { setDetailCell(null); fetchAssign(); }} />
+        );
+      })()}
 
       {showMassal && (
         <AssignMassal karyawanList={karyawanList} shifts={shifts} userName={userName}
@@ -1124,6 +1187,131 @@ function formatTglID(iso: string) {
 function jamWIB(iso: string | null): string {
   if (!iso) return "-";
   return new Date(iso).toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta", hour: "2-digit", minute: "2-digit" });
+}
+
+// ── Modal detail absensi + ubah status manual (dari grid jadwal) ──
+function AbsenDetailModal({ abs, shift, nama, tanggal, userName, onClose, onSaved }: {
+  abs: AbsRow | undefined; shift: Shift | null; nama: string; tanggal: string; userName: string;
+  onClose: () => void; onSaved: () => void;
+}) {
+  const [status, setStatus]   = useState(abs?.status_kehadiran ?? "hadir");
+  const [catatan, setCatatan] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr]   = useState("");
+  const [showFull, setShowFull] = useState(false);
+
+  const dot = statusDot(abs);
+
+  async function simpan() {
+    if (!abs) { setErr("Belum ada data absensi untuk tanggal ini"); return; }
+    setErr(""); setBusy(true);
+    const patch: Record<string, unknown> = {
+      status_kehadiran: status,
+      is_override: true,
+      override_by: userName,
+      override_at: new Date().toISOString(),
+      catatan_super_admin: catatan || null,
+    };
+    // Izin / Sakit → denda 0. Alpha → denda alpha. Hadir → biarkan denda apa adanya.
+    if (status === "izin" || status === "izin_sakit") { patch.denda = 0; patch.is_flagged = false; }
+    else if (status === "alpha") { patch.denda = DENDA.ALPHA; }
+    const { error } = await supabase.from("absensi").update(patch).eq("id", abs.id);
+    setBusy(false);
+    if (error) { setErr(error.message); return; }
+    onSaved();
+  }
+
+  const Row = ({ label, value }: { label: string; value: React.ReactNode }) => (
+    <div className="flex justify-between gap-3 py-1 border-b border-gray-50 last:border-0">
+      <span className="text-gray-400 shrink-0">{label}</span>
+      <span className="text-gray-800 font-medium text-right">{value}</span>
+    </div>
+  );
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl w-full max-w-sm max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 sticky top-0 bg-white">
+          <div>
+            <p className="font-bold text-gray-800">Detail Absensi</p>
+            <p className="text-xs text-gray-500">{nama} · {formatTglID(tanggal)}</p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
+        </div>
+
+        <div className="p-4 space-y-3 text-sm">
+          {!abs ? (
+            <p className="text-gray-400 text-center py-4">Belum ada data absensi untuk tanggal ini.</p>
+          ) : (
+            <>
+              <div className="space-y-0.5">
+                <Row label="Shift" value={shift ? `${shift.nama_shift} (${shift.jam_masuk.slice(0,5)}-${shift.jam_pulang.slice(0,5)})` : "-"} />
+                <Row label="Status" value={
+                  <span className="inline-flex items-center gap-1.5">
+                    {dot && <span className={`w-2.5 h-2.5 rounded-full ${dot.cls}`} />}
+                    {STATUS_LABEL[abs.status_kehadiran] ?? abs.status_kehadiran}
+                    {abs.is_flagged && <span title="Perlu review">⚠️</span>}
+                  </span>
+                } />
+                <Row label="Jam Check-in"  value={jamWIB(abs.jam_checkin)} />
+                <Row label="Jam Check-out" value={jamWIB(abs.jam_checkout)} />
+                {abs.menit_telat > 0 && <Row label="Menit Telat" value={`${abs.menit_telat} menit`} />}
+                <Row label="Denda" value={
+                  abs.denda > 0
+                    ? (abs.denda_dihapus_ampun
+                        ? <span className="text-green-600">Rp {abs.denda.toLocaleString("id-ID")} (ampun)</span>
+                        : <span className="text-red-600">Rp {abs.denda.toLocaleString("id-ID")}</span>)
+                    : "Rp 0"
+                } />
+              </div>
+
+              {/* Foto + lokasi */}
+              {abs.foto_checkin_url ? (
+                <div>
+                  <button onClick={() => setShowFull(true)} className="block w-20 h-20 rounded-lg overflow-hidden border border-gray-200 hover:ring-2 hover:ring-amber-400">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={abs.foto_checkin_url} alt="foto" className="w-full h-full object-cover" />
+                  </button>
+                  <p className="text-[10px] text-gray-400 mt-1">Klik foto untuk perbesar</p>
+                </div>
+              ) : (
+                <p className="text-xs text-gray-400">Tidak ada foto check-in</p>
+              )}
+              {abs.lat_checkin != null && abs.lng_checkin != null && (
+                <a href={`https://maps.google.com/?q=${abs.lat_checkin},${abs.lng_checkin}`} target="_blank" rel="noopener noreferrer"
+                  className="flex items-center justify-center gap-2 w-full py-2 rounded-xl bg-blue-50 text-blue-600 font-semibold text-xs hover:bg-blue-100">
+                  <MapPin size={14} /> Lihat Lokasi di Google Maps
+                </a>
+              )}
+
+              {/* Ubah status manual */}
+              <div className="pt-2 border-t border-gray-100 space-y-2">
+                <p className="text-xs font-bold text-gray-500 uppercase tracking-wider">Ubah Status Manual</p>
+                <select className="input" value={status} onChange={(e) => setStatus(e.target.value)}>
+                  <option value="hadir">Hadir</option>
+                  <option value="alpha">Alpha</option>
+                  <option value="izin">Izin</option>
+                  <option value="izin_sakit">Sakit</option>
+                </select>
+                <textarea className="input" rows={2} placeholder="Catatan (opsional)…" value={catatan} onChange={(e) => setCatatan(e.target.value)} />
+                {(status === "izin" || status === "izin_sakit") && <p className="text-[11px] text-green-600">Denda otomatis jadi Rp 0.</p>}
+                {err && <p className="text-xs text-red-500">{err}</p>}
+                <button onClick={simpan} disabled={busy} className="btn-primary w-full">{busy ? "Menyimpan…" : "Simpan Perubahan"}</button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Foto full */}
+      {showFull && abs?.foto_checkin_url && (
+        <div className="fixed inset-0 bg-black/80 z-[60] flex items-center justify-center p-4" onClick={() => setShowFull(false)}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={abs.foto_checkin_url} alt="foto full" className="max-w-full max-h-[90vh] object-contain rounded-lg" />
+        </div>
+      )}
+    </div>
+  );
 }
 
 // ── Rekap Absensi + Foto (Super Admin) ──
