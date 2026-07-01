@@ -7,7 +7,7 @@ import { getCapabilities, homeRoute } from "@/lib/permissions";
 import { formatAngka, formatTanggal } from "@/lib/utils";
 import { RiwayatFilter, getRiwayatRange } from "@/components/RiwayatFilter";
 import type { RiwayatPreset } from "@/components/RiwayatFilter";
-import { Package, ChefHat, Truck, Snowflake, X, AlertTriangle, ArrowUpRight, Factory } from "lucide-react";
+import { Package, ChefHat, Truck, Snowflake, X, AlertTriangle, ArrowUpRight, Factory, Pencil, Check } from "lucide-react";
 
 interface StokBahan {
   id: string;
@@ -78,6 +78,9 @@ export default function DashboardPage() {
   const [bahanKritis, setBahanKritis] = useState<StokBahan[]>([]);
   const [allBahan, setAllBahan] = useState<StokBahan[]>([]);
   const [stokProduk, setStokProduk] = useState<StokProduk[]>([]);
+  const [editStokId, setEditStokId] = useState<string | null>(null);
+  const [editStokVal, setEditStokVal] = useState("");
+  const [savingStok, setSavingStok] = useState(false);
   const [batchBerjalan, setBatchBerjalan] = useState<BatchBerjalan[]>([]);
   const [pengirimanHariIni, setPengirimanHariIni] = useState<PengirimanHariIni[]>([]);
   const [selisihPacking, setSelisihPacking] = useState<SelisihPacking[]>([]);
@@ -157,6 +160,24 @@ export default function DashboardPage() {
       .update({ status_review: "reviewed", reviewed_by: user?.nama ?? "", reviewed_at: new Date().toISOString() })
       .eq("id", id);
     setSelisihPacking((list) => list.filter((s) => s.id !== id));
+  }
+
+  function openEditStok(p: StokProduk) {
+    setEditStokId(p.id);
+    setEditStokVal(String(p.stok_saat_ini));
+  }
+
+  async function saveEditStok(id: string) {
+    const nilai = parseFloat(editStokVal);
+    if (isNaN(nilai) || nilai < 0) return;
+    setSavingStok(true);
+    const { error } = await supabase.from("produk_sku")
+      .update({ stok_saat_ini: nilai }).eq("id", id);
+    setSavingStok(false);
+    if (!error) {
+      setStokProduk((list) => list.map((p) => (p.id === id ? { ...p, stok_saat_ini: nilai } : p)));
+      setEditStokId(null);
+    }
   }
 
   const CANE_VARIANTS_ORD   = ["Original", "Melted Choco", "Grated Cheese", "Whole Wheat"];
@@ -425,9 +446,38 @@ export default function DashboardPage() {
                     {p.varian}
                     {brand === "mehana" && <span className="text-gray-400"> Isi {p.isi_per_pack} Pcs</span>}
                   </p>
-                  <span className={`text-sm font-bold tabular-nums ${p.stok_saat_ini === 0 ? "text-gray-400" : "text-gray-800"}`}>
-                    {formatAngka(p.stok_saat_ini)} pack
-                  </span>
+                  {editStokId === p.id ? (
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        type="number" step="0.001" min="0" autoFocus
+                        value={editStokVal} onChange={(e) => setEditStokVal(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === "Enter") saveEditStok(p.id); if (e.key === "Escape") setEditStokId(null); }}
+                        className="input py-1 text-sm w-20 text-center font-bold"
+                      />
+                      <span className="text-xs text-gray-400">pack</span>
+                      <button type="button" onClick={() => saveEditStok(p.id)} disabled={savingStok || editStokVal === ""}
+                        className="flex items-center justify-center w-7 h-7 rounded-lg bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-40 shrink-0">
+                        {savingStok ? <span className="text-[10px]">…</span> : <Check size={12} />}
+                      </button>
+                      <button type="button" onClick={() => setEditStokId(null)}
+                        className="flex items-center justify-center w-7 h-7 rounded-lg bg-gray-100 text-gray-500 hover:bg-gray-200 shrink-0">
+                        <X size={12} />
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1.5">
+                      <span className={`text-sm font-bold tabular-nums ${p.stok_saat_ini === 0 ? "text-gray-400" : "text-gray-800"}`}>
+                        {formatAngka(p.stok_saat_ini)} pack
+                      </span>
+                      {caps.isSuperAdmin && (
+                        <button type="button" onClick={() => openEditStok(p)}
+                          className="p-1 rounded-lg text-gray-300 hover:text-amber-500 hover:bg-amber-50 transition-colors shrink-0"
+                          title="Set stok langsung">
+                          <Pencil size={12} />
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               );
               return (
