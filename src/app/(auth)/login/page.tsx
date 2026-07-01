@@ -3,7 +3,7 @@ import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { loginWithPin, saveUserSession, getUserSession } from "@/lib/auth";
 import { homeRoute } from "@/lib/permissions";
-import { ChevronLeft, UserCog, Factory, Truck, ShieldCheck, ClipboardList } from "lucide-react";
+import { ChevronLeft, UserCog, Factory, Truck, ShieldCheck, ClipboardList, MapPin } from "lucide-react";
 
 type RoleChoice = {
   role: "spv" | "staff_produksi" | "pic" | "staff_packing_pengiriman" | "super_admin";
@@ -125,6 +125,21 @@ export default function LoginPage() {
                   </button>
                 );
               })}
+            </div>
+
+            {/* Divider + Absensi Karyawan */}
+            <div className="pt-4 mt-2 border-t border-gray-100">
+              <p className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-2.5">Absensi Karyawan</p>
+              <button onClick={() => router.push("/absen")}
+                className="w-full flex items-center gap-3 p-4 rounded-2xl border-2 border-rose-200 bg-rose-50 hover:border-rose-400 hover:bg-rose-100 transition-all text-left">
+                <div className="flex items-center justify-center w-11 h-11 rounded-xl bg-rose-500 text-white shrink-0">
+                  <MapPin size={22} />
+                </div>
+                <div>
+                  <p className="text-base font-bold text-rose-700 leading-tight">ABSENSI</p>
+                  <p className="text-xs text-rose-500 mt-0.5">Check-in / Check-out</p>
+                </div>
+              </button>
             </div>
           </div>
         )}
