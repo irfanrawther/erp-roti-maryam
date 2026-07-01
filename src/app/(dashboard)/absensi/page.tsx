@@ -598,9 +598,12 @@ function AturShift({ karyawanList, shifts, shiftIndex, userName }: {
                   <td className="sticky left-0 bg-white z-10 px-3 py-1.5 font-medium text-gray-700 border-b border-r border-gray-100 whitespace-nowrap">{k.nama}</td>
                   {Array.from({ length: daysInMonth }, (_, i) => i + 1).map((d) => {
                     const tgl = dateStr(d);
-                    const lbl = cellLabel(findAssign(k.id, tgl));
+                    const isMinggu = dowOf(d) === 0;
+                    // Default Minggu = Libur bila belum ada assignment
+                    const lbl = cellLabel(findAssign(k.id, tgl))
+                      ?? (isMinggu ? { text: "Libur", cls: LIBUR_COLOR } : null);
                     return (
-                      <td key={d} className={`p-0.5 border-b border-gray-50 text-center ${dowOf(d) === 0 ? "bg-red-50/50" : ""}`}>
+                      <td key={d} className={`p-0.5 border-b border-gray-50 text-center ${isMinggu ? "bg-red-50/50" : ""}`}>
                         <button onClick={() => setEditCell({ karyawanId: k.id, tanggal: tgl })}
                           className={`w-full h-7 rounded-md text-[10px] font-bold border transition-colors ${lbl ? lbl.cls : "border-transparent text-gray-300 hover:bg-gray-50"}`}>
                           {lbl ? lbl.text : "·"}
