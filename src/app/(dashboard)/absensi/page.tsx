@@ -6,7 +6,7 @@ import { getUserSession, canAccessAdmin, hashPin, type UserSession } from "@/lib
 import { homeRoute } from "@/lib/permissions";
 import { ID_MONTHS } from "@/components/RiwayatFilter";
 import { hitungDenda, bulanRange, wibMinutesOfDay, DENDA, JAM_ALPHA, STATUS_LABEL } from "@/lib/absensi";
-import { CalendarClock, Plus, X, Pencil, Trash2, ChevronLeft, ChevronRight, Layers, MapPin, Crosshair, Flag, AlertTriangle } from "lucide-react";
+import { CalendarClock, Plus, X, Pencil, Trash2, ChevronLeft, ChevronRight, Layers, MapPin, Crosshair, Flag, AlertTriangle, Check } from "lucide-react";
 
 interface Karyawan {
   id: string;
@@ -479,6 +479,8 @@ function AturShift({ karyawanList, shifts, shiftIndex, userName }: {
   const monthStart = `${year}-${String(month).padStart(2, "0")}-01`;
   const monthEnd   = `${year}-${String(month).padStart(2, "0")}-${String(daysInMonth).padStart(2, "0")}`;
   const dateStr = (day: number) => `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  const HARI_ABBR = ["Min", "Sen", "Sel", "Rab", "Kam", "Jum", "Sab"];
+  const dowOf = (day: number) => new Date(year, month - 1, day).getDay(); // 0=Minggu
 
   const fetchAssign = useCallback(async () => {
     const { data } = await supabase.from("shift_assignment")
@@ -578,9 +580,16 @@ function AturShift({ karyawanList, shifts, shiftIndex, userName }: {
             <thead>
               <tr>
                 <th className="sticky left-0 bg-gray-50 z-10 px-3 py-2 text-left text-gray-500 font-semibold border-b border-r border-gray-100 min-w-[120px]">Karyawan</th>
-                {Array.from({ length: daysInMonth }, (_, i) => i + 1).map((d) => (
-                  <th key={d} className="px-1 py-2 text-center text-gray-400 font-medium border-b border-gray-100 min-w-[34px]">{d}</th>
-                ))}
+                {Array.from({ length: daysInMonth }, (_, i) => i + 1).map((d) => {
+                  const dow = dowOf(d);
+                  const isMinggu = dow === 0;
+                  return (
+                    <th key={d} className={`px-1 py-1.5 text-center font-medium border-b border-gray-100 min-w-[34px] ${isMinggu ? "bg-red-50" : ""}`}>
+                      <div className={`text-[9px] leading-none ${isMinggu ? "text-red-500 font-bold" : "text-gray-400"}`}>{HARI_ABBR[dow]}</div>
+                      <div className={`text-xs leading-tight ${isMinggu ? "text-red-600 font-bold" : "text-gray-500"}`}>{d}</div>
+                    </th>
+                  );
+                })}
               </tr>
             </thead>
             <tbody>
@@ -591,7 +600,7 @@ function AturShift({ karyawanList, shifts, shiftIndex, userName }: {
                     const tgl = dateStr(d);
                     const lbl = cellLabel(findAssign(k.id, tgl));
                     return (
-                      <td key={d} className="p-0.5 border-b border-gray-50 text-center">
+                      <td key={d} className={`p-0.5 border-b border-gray-50 text-center ${dowOf(d) === 0 ? "bg-red-50/50" : ""}`}>
                         <button onClick={() => setEditCell({ karyawanId: k.id, tanggal: tgl })}
                           className={`w-full h-7 rounded-md text-[10px] font-bold border transition-colors ${lbl ? lbl.cls : "border-transparent text-gray-300 hover:bg-gray-50"}`}>
                           {lbl ? lbl.text : "·"}
@@ -676,32 +685,45 @@ function AssignMassal({ karyawanList, shifts, userName, onClose, onDone }: {
   karyawanList: Karyawan[]; shifts: Shift[]; userName: string;
   onClose: () => void; onDone: () => void;
 }) {
-  const [karyawanId, setKaryawanId] = useState(karyawanList[0]?.id ?? "");
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [start, setStart] = useState("");
   const [end,   setEnd]   = useState("");
   const [value, setValue] = useState(shifts[0]?.id ?? "libur"); // shift.id | "libur"
+  const [mingguLibur, setMingguLibur] = useState(true); // hari Minggu otomatis Libur
   const [busy,  setBusy]  = useState(false);
   const [err,   setErr]   = useState("");
 
+  const allSelected = karyawanList.length > 0 && selectedIds.length === karyawanList.length;
+  function toggleKaryawan(id: string) {
+    setSelectedIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
+  }
+  function toggleAll() {
+    setSelectedIds(allSelected ? [] : karyawanList.map((k) => k.id));
+  }
+
   async function submit() {
     setErr("");
-    if (!karyawanId)     { setErr("Pilih karyawan"); return; }
+    if (selectedIds.length === 0) { setErr("Pilih minimal 1 karyawan"); return; }
     if (!start || !end)  { setErr("Isi range tanggal"); return; }
     if (end < start)     { setErr("Tanggal akhir harus ≥ tanggal mulai"); return; }
 
-    // build daftar tanggal
+    // build daftar tanggal × karyawan terpilih
     const rows: { karyawan_id: string; tanggal: string; shift_id: string | null; is_libur: boolean; created_by: string }[] = [];
-    const d = new Date(start + "T00:00:00");
-    const last = new Date(end + "T00:00:00");
-    while (d <= last) {
-      rows.push({
-        karyawan_id: karyawanId,
-        tanggal: d.toLocaleDateString("en-CA"),
-        shift_id: value === "libur" ? null : value,
-        is_libur: value === "libur",
-        created_by: userName,
-      });
-      d.setDate(d.getDate() + 1);
+    for (const kid of selectedIds) {
+      const d = new Date(start + "T00:00:00");
+      const last = new Date(end + "T00:00:00");
+      while (d <= last) {
+        const isMinggu = d.getDay() === 0;
+        const libur = value === "libur" || (mingguLibur && isMinggu);
+        rows.push({
+          karyawan_id: kid,
+          tanggal: d.toLocaleDateString("en-CA"),
+          shift_id: libur ? null : value,
+          is_libur: libur,
+          created_by: userName,
+        });
+        d.setDate(d.getDate() + 1);
+      }
     }
     setBusy(true);
     const { error } = await supabase.from("shift_assignment").upsert(rows, { onConflict: "karyawan_id,tanggal" });
@@ -718,10 +740,26 @@ function AssignMassal({ karyawanList, shifts, userName, onClose, onDone }: {
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
         </div>
         <div>
-          <label className="label">Karyawan</label>
-          <select className="input" value={karyawanId} onChange={(e) => setKaryawanId(e.target.value)}>
-            {karyawanList.map((k) => <option key={k.id} value={k.id}>{k.nama}</option>)}
-          </select>
+          <div className="flex items-center justify-between mb-1">
+            <label className="label mb-0">Karyawan ({selectedIds.length} dipilih)</label>
+            <button type="button" onClick={toggleAll} className="text-xs font-semibold text-amber-600 hover:text-amber-700">
+              {allSelected ? "Hapus semua" : "Pilih semua"}
+            </button>
+          </div>
+          <div className="max-h-40 overflow-y-auto border border-gray-200 rounded-xl p-1 grid grid-cols-2 gap-0.5">
+            {karyawanList.map((k) => {
+              const checked = selectedIds.includes(k.id);
+              return (
+                <button key={k.id} type="button" onClick={() => toggleKaryawan(k.id)}
+                  className={`flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm text-left transition-colors ${checked ? "bg-amber-50 text-amber-700 font-semibold" : "text-gray-600 hover:bg-gray-50"}`}>
+                  <span className={`flex items-center justify-center w-4 h-4 rounded border shrink-0 ${checked ? "bg-amber-500 border-amber-500 text-white" : "border-gray-300"}`}>
+                    {checked && <Check size={11} />}
+                  </span>
+                  <span className="truncate">{k.nama}</span>
+                </button>
+              );
+            })}
+          </div>
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div>
@@ -740,6 +778,11 @@ function AssignMassal({ karyawanList, shifts, userName, onClose, onDone }: {
             <option value="libur">Libur</option>
           </select>
         </div>
+        <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer">
+          <input type="checkbox" checked={mingguLibur} onChange={(e) => setMingguLibur(e.target.checked)}
+            className="w-4 h-4 rounded accent-amber-500" />
+          Hari Minggu otomatis <span className="font-semibold">Libur</span>
+        </label>
         {err && <p className="text-sm text-red-500">{err}</p>}
         <div className="flex gap-2 pt-1">
           <button onClick={onClose} className="btn-secondary flex-1">Batal</button>
