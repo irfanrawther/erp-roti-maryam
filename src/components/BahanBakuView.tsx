@@ -607,6 +607,7 @@ export default function BahanBakuView() {
                 onDirectSet={setStokLangsung}
                 canKurangi={user?.role !== "staff_produksi"}
                 readOnly={readOnly}
+                addOnly={user?.role === "pic"}
               />
             ))}
           </div>
@@ -982,13 +983,14 @@ export default function BahanBakuView() {
 
 
 // ── BahanCard ────────────────────────────────────────────────
-function BahanCard({ bahan, onSubmit, isSuperAdmin, onDirectSet, canKurangi, readOnly }: {
+function BahanCard({ bahan, onSubmit, isSuperAdmin, onDirectSet, canKurangi, readOnly, addOnly }: {
   bahan: BahanBaku;
   onSubmit: (id: string, tipe: "masuk" | "keluar", jumlah: number, satuan: string) => Promise<boolean>;
   isSuperAdmin: boolean;
   onDirectSet: (id: string, nilai: number) => Promise<boolean>;
   canKurangi: boolean;
   readOnly?: boolean;
+  addOnly?: boolean;
 }) {
   const kritis = bahan.stok_saat_ini <= bahan.stok_minimum;
   const [mode,        setMode]        = useState<"masuk" | "keluar" | null>(null);
@@ -1083,12 +1085,12 @@ function BahanCard({ bahan, onSubmit, isSuperAdmin, onDirectSet, canKurangi, rea
         </div>
       </div>
 
-      {!mode && !editingStok && !readOnly && (
+      {!mode && !editingStok && (!readOnly || addOnly) && (
         <div className="flex gap-2 mt-2.5">
           <button onClick={() => openForm("masuk")} className="flex items-center gap-1 text-xs font-semibold px-2.5 py-1.5 rounded-lg bg-green-100 text-green-700 hover:bg-green-200 transition-colors">
             <Plus size={12} /> Tambah
           </button>
-          {canKurangi && (
+          {canKurangi && !addOnly && (
             <button onClick={() => openForm("keluar")} className="flex items-center gap-1 text-xs font-semibold px-2.5 py-1.5 rounded-lg bg-red-100 text-red-600 hover:bg-red-200 transition-colors">
               <Minus size={12} /> Kurangi
             </button>
