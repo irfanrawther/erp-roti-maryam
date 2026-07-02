@@ -556,8 +556,10 @@ export default function BahanBakuView() {
     setResyncLoading(false);
   }
 
-  // PIC = read-only: hanya bisa lihat, tidak bisa Tambah/Kurangi/Reset/adjustment
+  // PIC = terbatas: bisa Tambah stok & adjustment Sisa/Over, tapi tidak bisa Kurangi/Reset
   const readOnly = user?.role === "pic";
+  const isPic    = user?.role === "pic";
+  const bolehAdjust = !readOnly || isPic; // PIC boleh edit Sisa/Over di tab Pemakaian
 
   const TABS: { key: ActiveTab; label: string }[] = [
     { key: "stok",      label: "Stok Saat Ini" },
@@ -708,7 +710,7 @@ export default function BahanBakuView() {
                                     <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold ${a.tipe === "sisa" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>
                                       {a.tipe === "sisa" ? "↑ Sisa" : "↓ Over"} {formatAngka(a.jumlah_adjustment)} {a.satuan}
                                     </span>
-                                    {!readOnly && (
+                                    {bolehAdjust && (
                                       <button type="button" onClick={() => handleDeleteAdjustment(a)}
                                         className="text-gray-300 hover:text-red-400 transition-colors" title="Hapus adjustment">
                                         <Trash2 size={11} />
@@ -827,7 +829,7 @@ export default function BahanBakuView() {
                             }`}>
                               {r.sumber === "produksi" ? "Produksi" : "Proses Bikin"}
                             </span>
-                            {!readOnly && (
+                            {bolehAdjust && (
                               <button type="button"
                                 onClick={() => isEditing ? setEditRowId(null) : openEditPemakaian(r)}
                                 className={`p-1.5 rounded-lg transition-colors ${isEditing ? "bg-amber-100 text-amber-600" : "text-gray-300 hover:text-amber-500 hover:bg-amber-50"}`}
