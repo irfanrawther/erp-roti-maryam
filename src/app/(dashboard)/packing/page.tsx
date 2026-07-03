@@ -5,7 +5,7 @@ import { supabase } from "@/lib/supabase";
 import { getUserSession, canAccessAdmin } from "@/lib/auth";
 import { getCapabilities, homeRoute } from "@/lib/permissions";
 import { formatAngka, formatBahan, formatTanggal, formatTanggalWaktu } from "@/lib/utils";
-import { ChevronLeft, ChevronRight, X, CheckCircle, History, RotateCcw, AlertTriangle, Trash2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, X, CheckCircle, History, RotateCcw, AlertTriangle, Trash2, ChevronDown } from "lucide-react";
 import BahanBakuView from "@/components/BahanBakuView";
 import { RiwayatFilter, getRiwayatRange } from "@/components/RiwayatFilter";
 import type { RiwayatPreset } from "@/components/RiwayatFilter";
@@ -50,6 +50,17 @@ interface PackingInput {
   catatan: string | null;
   created_at: string;
   users?: { nama: string };
+}
+
+interface SelisihRow {
+  id: string;
+  batch_packing_id: string;
+  total_direndam: number;
+  total_aktual: number;
+  selisih_pcs: number;
+  catatan: string | null;
+  nama_user: string;
+  status_review: string;
 }
 
 const ALASAN_REJECT_LAIN = [
@@ -174,6 +185,8 @@ export default function PackingPage() {
 
   // Input Stok (Packing & Freezer)
   const [packingInputs,  setPackingInputs]  = useState<PackingInput[]>([]);
+  const [selisihList,    setSelisihList]    = useState<SelisihRow[]>([]);
+  const [expandRiwayat,  setExpandRiwayat]  = useState<string | null>(null);
   const [inputStokModal, setInputStokModal] = useState<{ batch: Batch; carryIn: number; carryFromDate: string | null } | null>(null);
 
   // Adonan input form
@@ -214,7 +227,7 @@ export default function PackingPage() {
   useEffect(() => { fetchData(); }, [preset, customStart, customEnd, selectedBulan]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function fetchData() {
-    const [skuRes, bahanRes, batchRes, packingRes] = await Promise.all([
+    const [skuRes, bahanRes, batchRes, packingRes, selisihRes] = await Promise.all([
       supabase.from("produk_sku").select("id, brand, varian, isi_per_pack").eq("aktif", true),
       supabase.from("bahan_baku").select("id, nama").eq("aktif", true),
       supabase.from("batch_produksi")
@@ -223,8 +236,12 @@ export default function PackingPage() {
       supabase.from("packing_input")
         .select("id, batch_produksi_id, produk_sku_id, brand, varian, tanggal, total_direndam, carry_in, total_available, pack5, pack10, reject, reject_lain, alasan_reject_lain, lebihan, catatan, created_at, users:created_by(nama)")
         .order("created_at", { ascending: false }).limit(500),
+      supabase.from("selisih_packing")
+        .select("id, batch_packing_id, total_direndam, total_aktual, selisih_pcs, catatan, nama_user, status_review")
+        .limit(500),
     ]);
     if (packingRes.data) setPackingInputs(packingRes.data as unknown as PackingInput[]);
+    if (selisihRes.data) setSelisihList(selisihRes.data as SelisihRow[]);
     if (skuRes.data) setSkuList(skuRes.data as ProdukSku[]);
     if (bahanRes.data) {
       const m: Record<string, string> = {};
@@ -1067,6 +1084,14 @@ export default function PackingPage() {
                   const totalReject = pi.reduce((s, p) => s + p.reject, 0);
                   const isMehana = row?.brand === "mehana";
                   const hasPackingData = pi.length > 0;
+                  const isi5 = 5;
+                  const isi10 = 10;
+                  // Analisa selisih: dari selisih_packing (otoritatif) atau rekonstruksi
+                  const selisihRow = selisihList.find((s) => s.batch_packing_id === b.id) ?? null;
+                  const totalLain  = pi.reduce((s, p) => s + (p.reject_lain ?? 0), 0);
+                  const p5pcs  = pack5Orig * isi5;
+                  const p10pcs = totalPack10 * isi10;
+                  const isExpanded = expandRiwayat === b.id;
                   return (
                     <div key={b.id} className="border border-gray-100 rounded-xl p-3">
                       {/* Header */}
@@ -1077,6 +1102,13 @@ export default function PackingPage() {
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
                           <span className={statusClass[b.status]}>{statusLabel[b.status]}</span>
+                          {caps.isSuperAdmin && hasPackingData && (
+                            <button onClick={() => setExpandRiwayat(isExpanded ? null : b.id)}
+                              className={`p-1.5 rounded-lg transition-colors ${isExpanded ? "bg-amber-100 text-amber-600" : "text-gray-300 hover:text-amber-500 hover:bg-amber-50"}`}
+                              title="Lihat detail selisih">
+                              <ChevronDown size={15} className={`transition-transform ${isExpanded ? "rotate-180" : ""}`} />
+                            </button>
+                          )}
                           {caps.isSuperAdmin && (
                             <button onClick={() => setDeleteConfirm(b)} disabled={busy}
                               className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors">
@@ -1121,6 +1153,67 @@ export default function PackingPage() {
                       </div>
                       <p className="text-xs text-gray-400 mt-1.5">Oleh: <span className="font-medium text-gray-500">{(b.users as { nama: string })?.nama ?? "—"}</span></p>
 
+                      {/* Detail selisih (Super Admin) */}
+                      {isExpanded && hasPackingData && (() => {
+                        const direndam = selisihRow?.total_direndam ?? b.jumlah_pack_adonan ?? 0;
+                        const aktual   = selisihRow?.total_aktual ?? (p5pcs + p10pcs + totalReject + totalLain + rawLebihan);
+                        const selisih  = selisihRow?.selisih_pcs ?? (aktual - direndam);
+                        const catatan  = selisihRow?.catatan ?? row?.catatan ?? null;
+                        const DetRow = ({ label, val, sub }: { label: string; val: string; sub?: string }) => (
+                          <div className="flex items-center justify-between py-1 border-b border-gray-50 last:border-0">
+                            <span className="text-gray-500">{label}{sub && <span className="text-gray-300"> {sub}</span>}</span>
+                            <span className="font-semibold text-gray-700 tabular-nums">{val}</span>
+                          </div>
+                        );
+                        return (
+                          <div className="mt-2.5 rounded-xl border border-gray-100 bg-gray-50/60 p-3 text-xs space-y-3">
+                            <div>
+                              <p className="font-bold text-gray-500 uppercase tracking-wider text-[10px] mb-1">Rincian Hasil</p>
+                              <DetRow label={isMehana ? "Pack Isi 5" : "Pack"} sub={`(${formatAngka(pack5Orig)} × 5)`} val={`${formatAngka(p5pcs)} pcs`} />
+                              {isMehana && totalPack10 > 0 && <DetRow label={`Pack Isi 10`} sub={`(${formatAngka(totalPack10)} × 10)`} val={`${formatAngka(p10pcs)} pcs`} />}
+                              <DetRow label="Reject Packing" sub="(termasuk kekurangan)" val={`${formatAngka(totalReject)} pcs`} />
+                              {totalLain > 0 && <DetRow label="Basi / Hilang / dll" val={`${formatAngka(totalLain)} pcs`} />}
+                              <DetRow label="Lebihan" val={`${formatAngka(rawLebihan)} pcs`} />
+                            </div>
+
+                            <div className="pt-1">
+                              <p className="font-bold text-gray-500 uppercase tracking-wider text-[10px] mb-1">Analisa Selisih</p>
+                              <DetRow label="Total Direndam" val={`${formatAngka(direndam)} pcs`} />
+                              <DetRow label="Total Aktual (fisik)" val={`${formatAngka(aktual)} pcs`} />
+                              <div className="flex items-center justify-between pt-1.5">
+                                <span className="text-gray-500">Selisih</span>
+                                {selisih === 0 ? (
+                                  <span className="font-bold text-green-600">Sesuai ✓</span>
+                                ) : selisih > 0 ? (
+                                  <span className="font-bold text-blue-600">Adonan LEBIH +{formatAngka(selisih)} pcs</span>
+                                ) : (
+                                  <span className="font-bold text-red-600">Adonan KURANG {formatAngka(selisih)} pcs</span>
+                                )}
+                              </div>
+                              {selisih !== 0 && (
+                                <p className="text-[10px] text-gray-400 mt-1">
+                                  {selisih > 0
+                                    ? "Aktual fisik lebih banyak dari yang direndam — bahan baku dikoreksi (dikurangi lagi otomatis)."
+                                    : "Aktual fisik kurang dari yang direndam — kekurangan otomatis masuk Reject & bahan dikembalikan."}
+                                </p>
+                              )}
+                            </div>
+
+                            {catatan && (
+                              <div className="pt-1 border-t border-gray-100">
+                                <p className="font-bold text-gray-500 uppercase tracking-wider text-[10px] mb-1">Catatan PIC</p>
+                                <p className="text-gray-600 italic">&ldquo;{catatan}&rdquo;</p>
+                              </div>
+                            )}
+                            {selisihRow && (
+                              <p className="text-[10px] text-gray-400">
+                                Diinput oleh <span className="font-medium text-gray-500">{selisihRow.nama_user}</span>
+                                {selisihRow.status_review === "reviewed" && <span className="text-green-500"> · sudah direview</span>}
+                              </p>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </div>
                   );
                 })}
