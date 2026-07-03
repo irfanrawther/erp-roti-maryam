@@ -5,7 +5,7 @@ import { supabase } from "@/lib/supabase";
 import { getUserSession, canAccessAdmin } from "@/lib/auth";
 import { getCapabilities, homeRoute } from "@/lib/permissions";
 import { formatAngka, formatBahan, formatTanggal, formatTanggalWaktu } from "@/lib/utils";
-import { ChevronLeft, ChevronRight, X, CheckCircle, History, RotateCcw, AlertTriangle, Trash2, ChevronDown } from "lucide-react";
+import { ChevronLeft, ChevronRight, X, CheckCircle, History, RotateCcw, AlertTriangle, Trash2, ChevronDown, CalendarDays } from "lucide-react";
 import BahanBakuView from "@/components/BahanBakuView";
 import { RiwayatFilter, getRiwayatRange } from "@/components/RiwayatFilter";
 import type { RiwayatPreset } from "@/components/RiwayatFilter";
@@ -905,6 +905,14 @@ export default function PackingPage() {
           <div className="card">
             <label className="label">Tanggal Produksi</label>
             <IndonesianDatePicker value={adonanForm.tanggal} onChange={(v) => setAdonanForm((f) => ({ ...f, tanggal: v }))} />
+            {adonanForm.tanggal !== today && (
+              <div className="mt-2 flex items-start gap-2 rounded-lg bg-amber-50 border border-amber-200 p-2.5">
+                <AlertTriangle size={15} className="text-amber-500 shrink-0 mt-0.5" />
+                <p className="text-xs text-amber-700">
+                  Kamu input untuk tanggal <b>{formatTanggal(adonanForm.tanggal)}</b>, bukan hari ini ({formatTanggal(today)}). Yakin?
+                </p>
+              </div>
+            )}
           </div>
 
           {/* Error stok */}
@@ -1032,6 +1040,7 @@ export default function PackingPage() {
       {activeTab === "packing" && (
         <StageList
           title="Packing & Freezer"
+          emphasizeDate
           batches={active.filter((b) => b.status === "packing" || b.status === "freezer")}
           renderActions={(b) => (
             <div className="flex flex-col sm:flex-row gap-2">
@@ -1099,6 +1108,9 @@ export default function PackingPage() {
                         <div className="flex-1 min-w-0 pr-2">
                           <p className="font-semibold text-gray-800 text-sm">{sku?.nama_brand} — {sku?.varian}</p>
                           <p className="text-xs text-gray-400">{formatTanggal(b.tanggal_produksi)}</p>
+                          {caps.isSuperAdmin && (
+                            <p className="text-[10px] text-gray-300 mt-0.5">Diinput pada: {formatTanggalWaktu(b.created_at)}</p>
+                          )}
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
                           <span className={statusClass[b.status]}>{statusLabel[b.status]}</span>
@@ -1603,6 +1615,10 @@ function InputStokModal({ batch, carryIn, carryFromDate, cfg, busy, onClose, onC
           {/* ── Header info ── */}
           <div className="bg-gray-50 rounded-xl p-3 space-y-1.5">
             <p className="font-semibold text-gray-800">{batch.produk_sku?.nama_brand} — {batch.produk_sku?.varian}</p>
+            <div className="flex items-center gap-1.5 rounded-lg bg-blue-50 border border-blue-100 px-2 py-1 text-xs">
+              <CalendarDays size={12} className="text-blue-500 shrink-0" />
+              <span className="text-blue-600">Masuk Tanggal Produksi: <b className="text-blue-700">{formatTanggal(batch.tanggal_produksi)}</b></span>
+            </div>
             <div className="flex items-center justify-between text-sm">
               <span className="text-gray-500">Total Direndam</span>
               <span className="font-semibold text-gray-800">{formatAngka(direndam)} pcs</span>
@@ -1828,10 +1844,11 @@ function InputStokModal({ batch, carryIn, carryFromDate, cfg, busy, onClose, onC
 }
 
 // ── StageList: kartu batch per stage ──────────────────────────
-function StageList({ title, batches, renderActions }: {
+function StageList({ title, batches, renderActions, emphasizeDate }: {
   title: string;
   batches: Batch[];
   renderActions: (b: Batch) => React.ReactNode;
+  emphasizeDate?: boolean;
 }) {
   return (
     <div className="card">
@@ -1851,6 +1868,12 @@ function StageList({ title, batches, renderActions }: {
                   </div>
                   <span className={statusClass[b.status]}>{statusLabel[b.status]}</span>
                 </div>
+                {emphasizeDate && (
+                  <div className="flex items-center gap-1.5 mb-2 rounded-lg bg-blue-50 border border-blue-100 px-2.5 py-1.5 text-xs">
+                    <CalendarDays size={13} className="text-blue-500 shrink-0" />
+                    <span className="text-blue-600">Batch Tanggal Produksi: <b className="text-blue-700">{formatTanggal(b.tanggal_produksi)}</b></span>
+                  </div>
+                )}
                 <div className="flex flex-wrap gap-2 mb-3 text-xs">
                   <span className="bg-gray-50 rounded px-2.5 py-1.5"><span className="text-gray-400">Adonan</span> <b className="text-gray-700">{formatAngka(b.jumlah_pack_rencana)} kg</b></span>
                   {b.jumlah_pack_adonan != null && (

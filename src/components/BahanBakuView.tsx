@@ -474,11 +474,13 @@ export default function BahanBakuView() {
     ...riwayatProsesBikin.map((r): PemakaianEntry => {
       let label = "Proses Bikin";
       let isReturn = false;
+      let tglProduksi: string | undefined;
       try {
         const jsonStr = r.keterangan.replace("proses_bikin::", "").split(" | ")[0];
         const json = JSON.parse(jsonStr);
         const brandLabels = PROSES_BIKIN_LABEL[json.brandKey] ?? {};
         const varianLabel = brandLabels[json.varianKey] ?? `Proses Bikin ${json.varianKey ?? ""}`;
+        tglProduksi = json.tanggal;   // tanggal_produksi warisan dari batch
         if (json.koreksi) {
           const s = json.selisih as number;
           label = `Koreksi Packing ${s > 0 ? "+" : ""}${s} pcs ${varianLabel}`;
@@ -495,6 +497,7 @@ export default function BahanBakuView() {
         jumlah:     r.jumlah,
         satuan:     r.satuan,
         created_at: r.created_at,
+        tanggal:    tglProduksi,
         label,
         namaUser:   r.users?.nama ?? "",
         isReturn,
@@ -503,7 +506,8 @@ export default function BahanBakuView() {
   ].sort((a, b) => b.created_at.localeCompare(a.created_at)); // terbaru di atas
 
   const pemakaianFiltered = allPemakaian.filter((r) => {
-    const d = toWIBDate(r.created_at);
+    // Opsi B: filter pakai tanggal_produksi (warisan batch), fallback created_at
+    const d = r.tanggal ?? toWIBDate(r.created_at);
     if (d < paRange.start || d > paRange.end) return false;
     if (filterPemakaianBahan && !r.namaBahan.toLowerCase().includes(filterPemakaianBahan.toLowerCase())) return false;
     return true;
