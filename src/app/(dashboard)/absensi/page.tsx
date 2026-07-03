@@ -1067,6 +1067,13 @@ function ReviewFlag({ karyawanList, shifts, userName }: {
         <div className="flex items-center justify-between gap-2 flex-wrap mb-3">
           <h2 className="font-semibold text-gray-700 text-sm">Semua Absensi ({filteredRows.length})</h2>
           <div className="flex items-center gap-2 flex-wrap">
+            <select className="input py-1.5 text-sm" value={month} onChange={(e) => { setFTanggal(""); setMonth(Number(e.target.value)); }} title="Pilih bulan">
+              {ID_MONTHS.map((nm, i) => <option key={nm} value={i + 1}>{nm}</option>)}
+            </select>
+            <select className="input py-1.5 text-sm" value={year} onChange={(e) => { setFTanggal(""); setYear(Number(e.target.value)); }} title="Pilih tahun">
+              {Array.from({ length: 5 }, (_, i) => now.getFullYear() - 2 + i).map((y) => <option key={y} value={y}>{y}</option>)}
+            </select>
+            <span className="text-gray-200">|</span>
             <input type="date" className="input py-1.5 text-sm" min={mStart} max={mEnd}
               value={fTanggal} onChange={(e) => setFTanggal(e.target.value)} title="Filter tanggal (dalam bulan ini)" />
             {fTanggal && (
