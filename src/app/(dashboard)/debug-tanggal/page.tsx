@@ -185,6 +185,61 @@ export default function DebugTanggalPage() {
             )}
           </div>
 
+          {/* Audit packing_input: input lewat tengah malam */}
+          {(() => {
+            const piRows = packing
+              .filter((p) => {
+                const cw = wibDate(p.created_at);
+                const hit = (d: string) => d >= FROM && d <= TO;
+                return hit(p.tanggal) || hit(cw);
+              })
+              .sort((a, b) => b.created_at.localeCompare(a.created_at));
+            const bedaHari = piRows.filter((p) => p.tanggal !== wibDate(p.created_at)).length;
+            return (
+              <div>
+                <h2 className="font-bold text-gray-800 mb-1">Audit Packing Input (input vs tanggal produksi)</h2>
+                <p className="text-xs text-gray-500 mb-2">
+                  {bedaHari} baris diinput di hari berbeda dari tanggal produksinya (biasanya input lewat tengah malam).
+                  Ini <b>normal untuk Opsi B</b> — cek saja apakah tanggal produksinya sudah benar.
+                </p>
+                <div className="rounded-xl border border-gray-100 overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50 text-left text-gray-500">
+                      <tr>
+                        <th className="px-3 py-2 font-semibold">Brand — Varian</th>
+                        <th className="px-3 py-2 font-semibold">Tanggal Produksi</th>
+                        <th className="px-3 py-2 font-semibold">Diinput (WIB)</th>
+                        <th className="px-3 py-2 font-semibold">Flag</th>
+                        <th className="px-3 py-2 font-semibold text-[10px] text-gray-300">batch id</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {piRows.length === 0 ? (
+                        <tr><td colSpan={5} className="px-3 py-6 text-center text-gray-400">Tidak ada data</td></tr>
+                      ) : piRows.map((p) => {
+                        const cw = wibDate(p.created_at);
+                        const beda = p.tanggal !== cw;
+                        return (
+                          <tr key={p.id} className={`border-t border-gray-50 ${beda ? "bg-amber-50/50" : ""}`}>
+                            <td className="px-3 py-2 whitespace-nowrap font-medium text-gray-800">{p.brand} — {p.varian}</td>
+                            <td className="px-3 py-2 whitespace-nowrap font-semibold text-gray-700">{p.tanggal}</td>
+                            <td className="px-3 py-2 whitespace-nowrap text-gray-500">{wibFull(p.created_at)}</td>
+                            <td className="px-3 py-2 whitespace-nowrap">
+                              {beda
+                                ? <span className="text-amber-700 font-semibold">⚠️ beda hari (input {cw})</span>
+                                : <span className="text-green-600">✓ sama</span>}
+                            </td>
+                            <td className="px-3 py-2 whitespace-nowrap text-[10px] text-gray-300 font-mono">{p.batch_produksi_id?.slice(0, 8) ?? "—"}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            );
+          })()}
+
           <p className="text-xs text-gray-400 border-t border-gray-100 pt-3">
             Halaman audit sementara. Belum ada perubahan data. Beri tahu baris mana (batch id) yang perlu dikoreksi dan ke tanggal berapa.
           </p>
