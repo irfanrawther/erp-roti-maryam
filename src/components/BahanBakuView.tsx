@@ -165,6 +165,8 @@ export default function BahanBakuView() {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
   });
   const [rBahanId, setRBahanId] = useState(""); // "" = semua bahan
+  const [editTglId, setEditTglId] = useState<string | null>(null);
+  const [editTglVal, setEditTglVal] = useState("");
 
   // Adjustment inline (per-row in Riwayat tab)
   const [adjustments,  setAdjustments]  = useState<AdjustmentEntry[]>([]);
@@ -246,6 +248,26 @@ export default function BahanBakuView() {
     const { error } = await supabase.from("bahan_baku").update({ stok_saat_ini: nilai }).eq("id", bahanId);
     if (!error) fetchData();
     return !error;
+  }
+
+  // Super Admin: hapus entry penerimaan/pengurangan + balikkan stok (kebalikan trigger insert)
+  async function deleteRiwayatEntry(r: Riwayat) {
+    if (!confirm(`Hapus ${r.tipe === "masuk" ? "penambahan" : "pengurangan"} ${formatAngka(r.jumlah)} ${r.satuan} ${r.bahan_baku?.nama}?\n\nStok akan disesuaikan otomatis.`)) return;
+    const { data } = await supabase.from("bahan_baku").select("stok_saat_ini").eq("id", r.bahan_baku_id).single();
+    const cur = (data as { stok_saat_ini: number } | null)?.stok_saat_ini ?? 0;
+    // masuk dulu menambah stok → hapus = kurangi; keluar dulu mengurangi → hapus = tambah
+    const nextStok = Math.max(0, r.tipe === "masuk" ? cur - r.jumlah : cur + r.jumlah);
+    await supabase.from("bahan_baku").update({ stok_saat_ini: nextStok, updated_at: new Date().toISOString() }).eq("id", r.bahan_baku_id);
+    await supabase.from("penerimaan_bahan_baku").delete().eq("id", r.id);
+    fetchData();
+  }
+
+  // Super Admin: koreksi tanggal (PIC telat input / salah tanggal) — tidak mengubah stok
+  async function saveEditTanggal(id: string, tanggal: string) {
+    if (!tanggal) return;
+    await supabase.from("penerimaan_bahan_baku").update({ tanggal }).eq("id", id);
+    setEditTglId(null);
+    fetchData();
   }
 
   function openEditPemakaian(entry: PemakaianEntry) {
@@ -563,6 +585,7 @@ export default function BahanBakuView() {
   // PIC = terbatas: bisa Tambah stok & adjustment Sisa/Over, tapi tidak bisa Kurangi/Reset
   const readOnly = user?.role === "pic";
   const isPic    = user?.role === "pic";
+  const isSuperAdmin = canAccessAdmin(user?.role ?? "");
   const bolehAdjust = !readOnly || isPic; // PIC boleh edit Sisa/Over di tab Pemakaian
 
   const TABS: { key: ActiveTab; label: string }[] = [
@@ -703,9 +726,26 @@ export default function BahanBakuView() {
                             <p className={`text-sm font-bold ${masuk ? "text-green-600" : "text-red-500"}`}>
                               {masuk ? "+" : "−"} {formatAngka(r.jumlah)} {r.satuan} — {r.bahan_baku?.nama}
                             </p>
-                            <p className="text-xs text-gray-500">
-                              {formatTanggal(r.tanggal)} · Oleh: <span className="font-medium text-gray-600">{r.users?.nama ?? "—"}</span>
-                            </p>
+                            {editTglId === r.id ? (
+                              <div className="flex items-center gap-1.5 my-1">
+                                <input type="date" value={editTglVal} onChange={(e) => setEditTglVal(e.target.value)}
+                                  className="input py-1 text-xs w-36" autoFocus />
+                                <button type="button" onClick={() => saveEditTanggal(r.id, editTglVal)}
+                                  className="flex items-center justify-center w-6 h-6 rounded-md bg-amber-500 text-white hover:bg-amber-600 shrink-0"><Check size={12} /></button>
+                                <button type="button" onClick={() => setEditTglId(null)}
+                                  className="flex items-center justify-center w-6 h-6 rounded-md bg-gray-100 text-gray-500 hover:bg-gray-200 shrink-0"><X size={12} /></button>
+                              </div>
+                            ) : (
+                              <p className="text-xs text-gray-500">
+                                {formatTanggal(r.tanggal)} · Oleh: <span className="font-medium text-gray-600">{r.users?.nama ?? "—"}</span>
+                                {isSuperAdmin && (
+                                  <button type="button" onClick={() => { setEditTglId(r.id); setEditTglVal(r.tanggal); }}
+                                    className="ml-1.5 text-gray-300 hover:text-amber-500 transition-colors" title="Koreksi tanggal">
+                                    <Pencil size={10} className="inline" />
+                                  </button>
+                                )}
+                              </p>
+                            )}
                             <p className="text-xs text-gray-300">{formatTanggalWaktu(r.created_at)}</p>
                             {rowAdjs.length > 0 && (
                               <div className="mt-1 space-y-0.5">
@@ -725,9 +765,17 @@ export default function BahanBakuView() {
                               </div>
                             )}
                           </div>
-                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium shrink-0 ${masuk ? "bg-green-50 text-green-600" : "bg-red-50 text-red-500"}`}>
-                            {masuk ? "Penerimaan" : "Pengurangan"}
-                          </span>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${masuk ? "bg-green-50 text-green-600" : "bg-red-50 text-red-500"}`}>
+                              {masuk ? "Penerimaan" : "Pengurangan"}
+                            </span>
+                            {isSuperAdmin && (
+                              <button type="button" onClick={() => deleteRiwayatEntry(r)}
+                                className="p-1 rounded-md text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors" title="Hapus & sesuaikan stok">
+                                <Trash2 size={13} />
+                              </button>
+                            )}
+                          </div>
                         </div>
                       </div>
                     );
