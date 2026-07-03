@@ -887,6 +887,8 @@ function ReviewFlag({ karyawanList, shifts, userName }: {
   const [rows, setRows]   = useState<AbsRow[]>([]);
   const [catatanMap, setCatatanMap] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
+  const [fTanggal, setFTanggal] = useState("");     // filter Semua Absensi: "" = semua tanggal di bulan ini
+  const [fStatus,  setFStatus]  = useState("semua"); // semua | K1 | K2 | K3 | alpha | izin | izin_sakit
 
   const daysInMonth = new Date(year, month, 0).getDate();
   const mStart = `${year}-${String(month).padStart(2, "0")}-01`;
@@ -964,10 +966,20 @@ function ReviewFlag({ karyawanList, shifts, userName }: {
     refresh();
   }
 
-  function prevMonth() { if (month === 1) { setMonth(12); setYear((y) => y - 1); } else setMonth((m) => m - 1); }
-  function nextMonth() { if (month === 12) { setMonth(1); setYear((y) => y + 1); } else setMonth((m) => m + 1); }
+  function prevMonth() { setFTanggal(""); if (month === 1) { setMonth(12); setYear((y) => y - 1); } else setMonth((m) => m - 1); }
+  function nextMonth() { setFTanggal(""); if (month === 12) { setMonth(1); setYear((y) => y + 1); } else setMonth((m) => m + 1); }
 
   const flagged = rows.filter((r) => r.is_flagged && !r.is_override);
+  // Filter untuk tabel "Semua Absensi"
+  const filteredRows = rows.filter((r) => {
+    if (fTanggal && r.tanggal !== fTanggal) return false;
+    if (fStatus !== "semua") {
+      if (fStatus === "K1" || fStatus === "K2" || fStatus === "K3") {
+        if (r.kategori_telat !== fStatus) return false;
+      } else if (r.status_kehadiran !== fStatus) return false;
+    }
+    return true;
+  });
   const alphaRows = rows.filter((r) => r.status_kehadiran === "alpha" && !r.is_override);
   const totalDenda = rows.reduce((s, r) => s + (r.denda || 0), 0);
   const shiftLabel = (id: string | null) => { const i = shifts.findIndex((s) => s.id === id); return i < 0 ? "—" : `S${i + 1}`; };
@@ -1052,8 +1064,26 @@ function ReviewFlag({ karyawanList, shifts, userName }: {
 
       {/* RINGKASAN bulan */}
       <div className="card overflow-x-auto">
-        <h2 className="font-semibold text-gray-700 text-sm mb-2">Semua Absensi ({rows.length})</h2>
-        {rows.length === 0 ? <p className="text-gray-400 text-sm text-center py-4">Belum ada data</p> : (
+        <div className="flex items-center justify-between gap-2 flex-wrap mb-3">
+          <h2 className="font-semibold text-gray-700 text-sm">Semua Absensi ({filteredRows.length})</h2>
+          <div className="flex items-center gap-2 flex-wrap">
+            <input type="date" className="input py-1.5 text-sm" min={mStart} max={mEnd}
+              value={fTanggal} onChange={(e) => setFTanggal(e.target.value)} title="Filter tanggal (dalam bulan ini)" />
+            {fTanggal && (
+              <button onClick={() => setFTanggal("")} className="text-xs text-gray-400 hover:text-gray-600" title="Semua tanggal">✕ semua tgl</button>
+            )}
+            <select className="input py-1.5 text-sm" value={fStatus} onChange={(e) => setFStatus(e.target.value)}>
+              <option value="semua">Semua status</option>
+              <option value="K1">Telat K1</option>
+              <option value="K2">Telat K2</option>
+              <option value="K3">Telat K3</option>
+              <option value="alpha">Alpha</option>
+              <option value="izin">Izin</option>
+              <option value="izin_sakit">Izin Sakit</option>
+            </select>
+          </div>
+        </div>
+        {filteredRows.length === 0 ? <p className="text-gray-400 text-sm text-center py-4">{rows.length === 0 ? "Belum ada data" : "Tidak ada data untuk filter ini"}</p> : (
           <table className="w-full text-sm min-w-[640px]">
             <thead>
               <tr className="text-left text-xs text-gray-400 uppercase border-b border-gray-100">
@@ -1062,7 +1092,7 @@ function ReviewFlag({ karyawanList, shifts, userName }: {
               </tr>
             </thead>
             <tbody>
-              {rows.map((r) => (
+              {filteredRows.map((r) => (
                 <tr key={r.id} className="border-b border-gray-50 last:border-0">
                   <td className="py-2 pr-3 text-gray-600">{formatTglID(r.tanggal)}</td>
                   <td className="py-2 pr-3 font-medium text-gray-800">{r.karyawan?.nama}</td>
@@ -1089,15 +1119,17 @@ function OverrideManual({ karyawanList, shifts, userName, onDone, countK1Ampun }
   const [karyawanId, setKaryawanId] = useState("");
   const [tanggal, setTanggal] = useState("");
   const [mode, setMode] = useState<"hadir" | "izin" | "izin_sakit">("hadir");
-  const [jamMasuk, setJamMasuk] = useState("");
+  const [jam, setJam] = useState("");
+  const [menit, setMenit] = useState("");
   const [catatan, setCatatan] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(""); const [err, setErr] = useState("");
+  const jamMasuk = jam !== "" && menit !== "" ? `${jam}:${menit}` : "";
 
   async function submit() {
     setErr(""); setMsg("");
     if (!karyawanId || !tanggal) { setErr("Pilih karyawan & tanggal"); return; }
-    if (mode === "hadir" && !/^\d{2}:\d{2}$/.test(jamMasuk)) { setErr("Isi jam masuk (HH:MM)"); return; }
+    if (mode === "hadir" && !jamMasuk) { setErr("Pilih jam & menit masuk"); return; }
     setBusy(true);
     try {
       // shift ter-assign tanggal itu
@@ -1129,7 +1161,7 @@ function OverrideManual({ karyawanList, shifts, userName, onDone, countK1Ampun }
 
       const { error } = await supabase.from("absensi").upsert(payload, { onConflict: "karyawan_id,tanggal" });
       if (error) throw new Error(error.message);
-      setMsg("✓ Tersimpan"); setJamMasuk(""); setCatatan("");
+      setMsg("✓ Tersimpan"); setJam(""); setMenit(""); setCatatan("");
       onDone();
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Gagal menyimpan");
@@ -1161,8 +1193,18 @@ function OverrideManual({ karyawanList, shifts, userName, onDone, countK1Ampun }
         </div>
         {mode === "hadir" && (
           <div>
-            <label className="label">Jam Masuk (HH:MM)</label>
-            <input type="time" className="input" value={jamMasuk} onChange={(e) => setJamMasuk(e.target.value)} />
+            <label className="label">Jam Masuk</label>
+            <div className="flex items-center gap-2">
+              <select className="input" value={jam} onChange={(e) => setJam(e.target.value)}>
+                <option value="">Jam</option>
+                {Array.from({ length: 24 }, (_, i) => String(i).padStart(2, "0")).map((h) => <option key={h} value={h}>{h}</option>)}
+              </select>
+              <span className="font-bold text-gray-400">:</span>
+              <select className="input" value={menit} onChange={(e) => setMenit(e.target.value)}>
+                <option value="">Menit</option>
+                {Array.from({ length: 60 }, (_, i) => String(i).padStart(2, "0")).map((m) => <option key={m} value={m}>{m}</option>)}
+              </select>
+            </div>
           </div>
         )}
         <div className="sm:col-span-2">
