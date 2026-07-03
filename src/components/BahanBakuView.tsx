@@ -216,7 +216,7 @@ export default function BahanBakuView() {
         .order("created_at", { ascending: false }).limit(500),
       // Riwayat Pemakaian sumber 2: Proses Bikin (penerimaan_bahan_baku tipe keluar proses_bikin)
       supabase.from("penerimaan_bahan_baku")
-        .select("id,bahan_baku_id,jumlah,satuan,keterangan,created_at,bahan_baku:bahan_baku_id(nama),users:created_by(nama)")
+        .select("id,tipe,bahan_baku_id,jumlah,satuan,keterangan,created_at,bahan_baku:bahan_baku_id(nama),users:created_by(nama)")
         .like("keterangan","proses_bikin::%")
         .order("created_at", { ascending: false }).limit(500),
       // Adjustment history
