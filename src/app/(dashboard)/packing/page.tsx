@@ -1159,6 +1159,11 @@ export default function PackingPage() {
                         const aktual   = selisihRow?.total_aktual ?? (p5pcs + p10pcs + totalReject + totalLain + rawLebihan);
                         const selisih  = selisihRow?.selisih_pcs ?? (aktual - direndam);
                         const catatan  = selisihRow?.catatan ?? row?.catatan ?? null;
+                        // Kumpulkan alasan basi/hilang/dll dari semua packing_input batch ini
+                        const alasanLain = Array.from(new Set(
+                          pi.filter((p) => (p.reject_lain ?? 0) > 0 && p.alasan_reject_lain)
+                            .map((p) => p.alasan_reject_lain as string)
+                        ));
                         const DetRow = ({ label, val, sub }: { label: string; val: string; sub?: string }) => (
                           <div className="flex items-center justify-between py-1 border-b border-gray-50 last:border-0">
                             <span className="text-gray-500">{label}{sub && <span className="text-gray-300"> {sub}</span>}</span>
@@ -1172,7 +1177,7 @@ export default function PackingPage() {
                               <DetRow label={isMehana ? "Pack Isi 5" : "Pack"} sub={`(${formatAngka(pack5Orig)} × 5)`} val={`${formatAngka(p5pcs)} pcs`} />
                               {isMehana && totalPack10 > 0 && <DetRow label={`Pack Isi 10`} sub={`(${formatAngka(totalPack10)} × 10)`} val={`${formatAngka(p10pcs)} pcs`} />}
                               <DetRow label="Reject Packing" sub="(termasuk kekurangan)" val={`${formatAngka(totalReject)} pcs`} />
-                              {totalLain > 0 && <DetRow label="Basi / Hilang / dll" val={`${formatAngka(totalLain)} pcs`} />}
+                              {totalLain > 0 && <DetRow label="Basi / Hilang / dll" sub={alasanLain.length > 0 ? `(${alasanLain.join(", ")})` : undefined} val={`${formatAngka(totalLain)} pcs`} />}
                               <DetRow label="Lebihan" val={`${formatAngka(rawLebihan)} pcs`} />
                             </div>
 
