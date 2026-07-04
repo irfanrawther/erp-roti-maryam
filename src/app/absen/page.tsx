@@ -10,7 +10,23 @@ interface ShiftInfo { nama_shift: string; jam_masuk: string; jam_pulang: string 
 interface AbsensiRow {
   id: string; jam_checkin: string | null; jam_checkout: string | null;
 }
+interface OpenSession {
+  id: string; tanggal: string; jam_checkin: string;
+  shift: { nama_shift: string; jam_pulang: string } | null;
+}
 interface Setting { latitude_dapur: number; longitude_dapur: number; radius_meter: number }
+
+// Window checkout wajar = sampai N jam setelah jam_pulang shift
+const CHECKOUT_WINDOW_JAM = 8;
+// Batas akhir window checkout (ms epoch) untuk sebuah sesi open
+function checkoutWindowEnd(s: OpenSession): number {
+  if (s.shift?.jam_pulang) {
+    const end = new Date(`${s.tanggal}T${s.shift.jam_pulang}+07:00`).getTime();
+    return end + CHECKOUT_WINDOW_JAM * 3600_000;
+  }
+  // tanpa shift: 12 jam sejak check-in
+  return new Date(s.jam_checkin).getTime() + 12 * 3600_000;
+}
 
 // Haversine — jarak antara 2 koordinat dalam meter
 function hitungJarak(lat1: number, lng1: number, lat2: number, lng2: number) {
@@ -24,6 +40,8 @@ function hitungJarak(lat1: number, lng1: number, lat2: number, lng2: number) {
 }
 
 function todayWIB() { return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" }); }
+const ID_BULAN = ["Jan","Feb","Mar","Apr","Mei","Jun","Jul","Agu","Sep","Okt","Nov","Des"];
+function tglLabel(iso: string) { const [y,m,d] = iso.split("-").map(Number); return `${d} ${ID_BULAN[m-1]} ${y}`; }
 function jamWIB(iso?: string | null) {
   const d = iso ? new Date(iso) : new Date();
   return d.toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta", hour: "2-digit", minute: "2-digit" });
@@ -38,6 +56,7 @@ export default function AbsenPage() {
   const [karyawan, setKaryawan]   = useState<Karyawan | null>(null);
   const [shift, setShift]         = useState<ShiftInfo | null>(null);
   const [absensi, setAbsensi]     = useState<AbsensiRow | null>(null);
+  const [openSession, setOpenSession] = useState<OpenSession | null>(null);
   const [setting, setSetting]     = useState<Setting | null>(null);
 
   // jam real-time
@@ -66,7 +85,7 @@ export default function AbsenPage() {
 
   async function loadStatus(karyawanId: string) {
     const today = todayWIB();
-    const [sa, ab, st] = await Promise.all([
+    const [sa, ab, st, open] = await Promise.all([
       supabase.from("shift_assignment")
         .select("is_libur, shift_master:shift_id(nama_shift, jam_masuk, jam_pulang)")
         .eq("karyawan_id", karyawanId).eq("tanggal", today).maybeSingle(),
@@ -74,20 +93,41 @@ export default function AbsenPage() {
         .select("id, jam_checkin, jam_checkout")
         .eq("karyawan_id", karyawanId).eq("tanggal", today).maybeSingle(),
       supabase.from("pengaturan_absensi").select("latitude_dapur, longitude_dapur, radius_meter").limit(1).maybeSingle(),
+      // Sesi open terakhir (sudah check-in, belum checkout, belum di-flag) — lintas tanggal
+      supabase.from("absensi")
+        .select("id, tanggal, jam_checkin, shift_master:shift_id(nama_shift, jam_pulang)")
+        .eq("karyawan_id", karyawanId)
+        .not("jam_checkin", "is", null).is("jam_checkout", null).eq("is_checkout_flagged", false)
+        .order("tanggal", { ascending: false }).limit(1).maybeSingle(),
     ]);
     const saData = sa.data as { is_libur: boolean; shift_master: ShiftInfo | null } | null;
     setShift(saData?.is_libur ? null : (saData?.shift_master ?? null));
     setAbsensi((ab.data as AbsensiRow | null) ?? null);
     setSetting((st.data as Setting | null) ?? null);
+
+    // Evaluasi sesi open
+    const openRow = open.data as { id: string; tanggal: string; jam_checkin: string; shift_master: { nama_shift: string; jam_pulang: string } | null } | null;
+    if (openRow) {
+      const sess: OpenSession = { id: openRow.id, tanggal: openRow.tanggal, jam_checkin: openRow.jam_checkin, shift: openRow.shift_master };
+      if (Date.now() <= checkoutWindowEnd(sess)) {
+        // Masih dalam window → wajib checkout dulu
+        setOpenSession(sess);
+        return;
+      }
+      // Lewat window → lupa checkout: flag sesi lama, izinkan check-in baru
+      await supabase.from("absensi")
+        .update({ is_checkout_flagged: true, flag_reason_checkout: "lupa_checkout" })
+        .eq("id", sess.id);
+    }
+    setOpenSession(null);
   }
 
   function reset() {
-    setStep("pin"); setPin(""); setPinErr(""); setKaryawan(null); setShift(null); setAbsensi(null);
+    setStep("pin"); setPin(""); setPinErr(""); setKaryawan(null); setShift(null); setAbsensi(null); setOpenSession(null);
   }
 
-  // status hari ini
-  const sudahCheckin  = !!absensi?.jam_checkin;
-  const sudahCheckout = !!absensi?.jam_checkout;
+  // status hari ini (sesi open ditangani lewat openSession)
+  const sudahCheckout = !!absensi?.jam_checkin && !!absensi?.jam_checkout;
 
   return (
     <div className="min-h-screen bg-amber-50 flex flex-col items-center justify-center p-4">
@@ -131,22 +171,29 @@ export default function AbsenPage() {
               </div>
             </div>
 
-            {sudahCheckin && sudahCheckout ? (
-              <div className="rounded-xl bg-green-50 border border-green-200 p-4 text-center space-y-1">
-                <CheckCircle2 size={28} className="text-green-500 mx-auto" />
-                <p className="font-semibold text-green-700">Absensi hari ini sudah lengkap</p>
-                <p className="text-sm text-gray-600">Masuk <b>{jamWIB(absensi!.jam_checkin)}</b> · Pulang <b>{jamWIB(absensi!.jam_checkout)}</b></p>
-              </div>
-            ) : sudahCheckin ? (
+            {openSession ? (
               <>
-                <div className="rounded-xl bg-blue-50 border border-blue-100 p-3 text-center text-sm text-gray-600">
-                  Sudah check-in jam <b>{jamWIB(absensi!.jam_checkin)}</b>
-                </div>
+                {openSession.tanggal === todayWIB() ? (
+                  <div className="rounded-xl bg-blue-50 border border-blue-100 p-3 text-center text-sm text-gray-600">
+                    Sudah check-in jam <b>{jamWIB(openSession.jam_checkin)}</b>. Jangan lupa check-out.
+                  </div>
+                ) : (
+                  <div className="rounded-xl bg-amber-50 border border-amber-200 p-3 text-center text-sm text-amber-700">
+                    Kamu belum <b>check-out</b> dari shift <b>{tglLabel(openSession.tanggal)}</b>
+                    {openSession.shift ? ` (${openSession.shift.nama_shift})` : ""}. Silakan check-out dulu.
+                  </div>
+                )}
                 <button onClick={() => setStep("checkout")}
                   className="w-full py-3 rounded-xl bg-red-500 text-white font-semibold hover:bg-red-600 flex items-center justify-center gap-2">
                   <LogOut size={18} /> Check Out
                 </button>
               </>
+            ) : sudahCheckout ? (
+              <div className="rounded-xl bg-green-50 border border-green-200 p-4 text-center space-y-1">
+                <CheckCircle2 size={28} className="text-green-500 mx-auto" />
+                <p className="font-semibold text-green-700">Absensi hari ini sudah lengkap</p>
+                <p className="text-sm text-gray-600">Masuk <b>{jamWIB(absensi!.jam_checkin)}</b> · Pulang <b>{jamWIB(absensi!.jam_checkout)}</b></p>
+              </div>
             ) : (
               <button onClick={() => setStep("checkin")}
                 className="w-full py-3 rounded-xl bg-green-500 text-white font-semibold hover:bg-green-600 flex items-center justify-center gap-2">
@@ -165,9 +212,9 @@ export default function AbsenPage() {
             onDone={async () => { await loadStatus(karyawan.id); setStep("status"); }} />
         )}
 
-        {/* STEP 3b — CHECK OUT */}
-        {step === "checkout" && karyawan && absensi && (
-          <CheckOutView absensiId={absensi.id} setting={setting}
+        {/* STEP 3b — CHECK OUT (menutup sesi open, boleh lintas tengah malam) */}
+        {step === "checkout" && karyawan && openSession && (
+          <CheckOutView absensiId={openSession.id} setting={setting}
             onCancel={() => setStep("status")}
             onDone={async () => { await loadStatus(karyawan.id); setStep("status"); }} />
         )}

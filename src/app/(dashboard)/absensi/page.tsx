@@ -6,7 +6,7 @@ import { getUserSession, canAccessAdmin, hashPin, type UserSession } from "@/lib
 import { homeRoute } from "@/lib/permissions";
 import { ID_MONTHS } from "@/components/RiwayatFilter";
 import { hitungDenda, bulanRange, wibMinutesOfDay, DENDA, JAM_ALPHA, STATUS_LABEL } from "@/lib/absensi";
-import { CalendarClock, Plus, X, Pencil, Trash2, ChevronLeft, ChevronRight, Layers, MapPin, Crosshair, Flag, AlertTriangle, Check } from "lucide-react";
+import { CalendarClock, Plus, X, Pencil, Trash2, ChevronLeft, ChevronRight, Layers, MapPin, Crosshair, Flag, AlertTriangle, Check, LogOut } from "lucide-react";
 
 interface Karyawan {
   id: string;
@@ -869,6 +869,7 @@ interface AbsRow {
   denda: number; denda_dihapus_ampun: boolean; status_kehadiran: string;
   is_flagged: boolean; flag_reason: string | null; shift_id_koreksi: string | null;
   is_override: boolean; catatan_super_admin: string | null;
+  is_checkout_flagged?: boolean; flag_reason_checkout?: string | null;
   karyawan: { nama: string } | null;
   shift_master: { nama_shift: string; jam_masuk: string; jam_pulang: string } | null;
 }
@@ -889,6 +890,8 @@ function ReviewFlag({ karyawanList, shifts, userName }: {
   const [loading, setLoading] = useState(false);
   const [fTanggal, setFTanggal] = useState("");     // filter Semua Absensi: "" = semua tanggal di bulan ini
   const [fStatus,  setFStatus]  = useState("semua"); // semua | K1 | K2 | K3 | alpha | izin | izin_sakit
+  const [coJam,   setCoJam]   = useState<Record<string, string>>({});   // jam pulang manual (lupa checkout)
+  const [coMenit, setCoMenit] = useState<Record<string, string>>({});
 
   const daysInMonth = new Date(year, month, 0).getDate();
   const mStart = `${year}-${String(month).padStart(2, "0")}-01`;
@@ -914,7 +917,7 @@ function ReviewFlag({ karyawanList, shifts, userName }: {
 
     // 2) Fetch rows lengkap
     const { data } = await supabase.from("absensi")
-      .select("id, karyawan_id, tanggal, shift_id, jam_checkin, menit_telat, kategori_telat, denda, denda_dihapus_ampun, status_kehadiran, is_flagged, flag_reason, shift_id_koreksi, is_override, catatan_super_admin, karyawan:karyawan_id(nama), shift_master:shift_id(nama_shift, jam_masuk, jam_pulang)")
+      .select("id, karyawan_id, tanggal, shift_id, jam_checkin, jam_checkout, menit_telat, kategori_telat, denda, denda_dihapus_ampun, status_kehadiran, is_flagged, flag_reason, shift_id_koreksi, is_override, catatan_super_admin, is_checkout_flagged, flag_reason_checkout, karyawan:karyawan_id(nama), shift_master:shift_id(nama_shift, jam_masuk, jam_pulang)")
       .gte("tanggal", mStart).lte("tanggal", mEnd).order("tanggal", { ascending: false });
     setRows((data as unknown as AbsRow[]) ?? []);
     setLoading(false);
@@ -957,6 +960,19 @@ function ReviewFlag({ karyawanList, shifts, userName }: {
     }).eq("id", row.id);
     refresh();
   }
+  // Koreksi lupa check-out: isi jam pulang manual (di tanggal shift), hapus flag
+  async function simpanCheckoutManual(row: AbsRow) {
+    const jam = coJam[row.id], menit = coMenit[row.id];
+    if (!jam || !menit) return;
+    const iso = new Date(`${row.tanggal}T${jam}:${menit}:00+07:00`).toISOString();
+    await supabase.from("absensi").update({
+      jam_checkout: iso, is_checkout_flagged: false, flag_reason_checkout: null,
+      checkout_override_by: userName, checkout_override_at: new Date().toISOString(),
+    }).eq("id", row.id);
+    setCoJam((m) => { const n = { ...m }; delete n[row.id]; return n; });
+    setCoMenit((m) => { const n = { ...m }; delete n[row.id]; return n; });
+    refresh();
+  }
   async function setStatusIzin(row: AbsRow, status: "izin" | "izin_sakit") {
     await supabase.from("absensi").update({
       status_kehadiran: status, denda: 0, is_flagged: false, is_override: true,
@@ -970,6 +986,7 @@ function ReviewFlag({ karyawanList, shifts, userName }: {
   function nextMonth() { setFTanggal(""); if (month === 12) { setMonth(1); setYear((y) => y + 1); } else setMonth((m) => m + 1); }
 
   const flagged = rows.filter((r) => r.is_flagged && !r.is_override);
+  const lupaCheckout = rows.filter((r) => r.is_checkout_flagged);
   // Filter untuk tabel "Semua Absensi"
   const filteredRows = rows.filter((r) => {
     if (fTanggal && r.tanggal !== fTanggal) return false;
@@ -1054,6 +1071,45 @@ function ReviewFlag({ karyawanList, shifts, userName }: {
             <div className="flex flex-wrap gap-2">
               <button onClick={() => setStatusIzin(r, "izin")} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-blue-100 text-blue-700 hover:bg-blue-200">Ubah → Izin</button>
               <button onClick={() => setStatusIzin(r, "izin_sakit")} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-purple-100 text-purple-700 hover:bg-purple-200">Ubah → Izin Sakit</button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* SECTION — LUPA CHECK-OUT */}
+      <div className="card space-y-3">
+        <div className="flex items-center gap-2">
+          <LogOut size={16} className="text-orange-500" />
+          <h2 className="font-semibold text-gray-700 text-sm">Lupa Check-out ({lupaCheckout.length})</h2>
+        </div>
+        {lupaCheckout.length === 0 ? (
+          <p className="text-gray-400 text-sm text-center py-4">Tidak ada sesi yang lupa check-out</p>
+        ) : lupaCheckout.map((r) => (
+          <div key={r.id} className="rounded-xl border border-orange-100 bg-orange-50/40 p-3 space-y-2">
+            <div>
+              <p className="font-semibold text-sm text-gray-800">{r.karyawan?.nama} · shift {formatTglID(r.tanggal)}</p>
+              <p className="text-xs text-gray-500">
+                {r.shift_master?.nama_shift ?? "—"} · Check-in <b>{jamDari(r.jam_checkin)}</b>
+                {r.shift_master?.jam_pulang && <> · Pulang seharusnya <b>{r.shift_master.jam_pulang.slice(0, 5)}</b></>}
+              </p>
+            </div>
+            <div className="flex items-end gap-2 flex-wrap">
+              <div>
+                <label className="text-[11px] text-gray-500">Jam pulang manual</label>
+                <div className="flex items-center gap-1.5">
+                  <select className="input py-1.5 text-sm" value={coJam[r.id] ?? ""} onChange={(e) => setCoJam((m) => ({ ...m, [r.id]: e.target.value }))}>
+                    <option value="">Jam</option>
+                    {Array.from({ length: 24 }, (_, i) => String(i).padStart(2, "0")).map((h) => <option key={h} value={h}>{h}</option>)}
+                  </select>
+                  <span className="font-bold text-gray-400">:</span>
+                  <select className="input py-1.5 text-sm" value={coMenit[r.id] ?? ""} onChange={(e) => setCoMenit((m) => ({ ...m, [r.id]: e.target.value }))}>
+                    <option value="">Menit</option>
+                    {Array.from({ length: 60 }, (_, i) => String(i).padStart(2, "0")).map((mm) => <option key={mm} value={mm}>{mm}</option>)}
+                  </select>
+                </div>
+              </div>
+              <button onClick={() => simpanCheckoutManual(r)} disabled={!coJam[r.id] || !coMenit[r.id]}
+                className="btn-primary text-sm py-2 disabled:opacity-40">Simpan Check-out</button>
             </div>
           </div>
         ))}
