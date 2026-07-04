@@ -57,6 +57,7 @@ interface ProdRow {
 
 interface SelisihPacking {
   id: string;
+  batch_packing_id: string | null;
   brand: string;
   varian: string;
   total_direndam: number;
@@ -65,6 +66,10 @@ interface SelisihPacking {
   catatan: string | null;
   nama_user: string | null;
   created_at: string;
+}
+interface SelisihDetailRow {
+  pack5: number; pack10: number; reject: number; reject_lain: number;
+  alasan_reject_lain: string | null; lebihan: number; catatan: string | null;
 }
 
 export default function DashboardPage() {
@@ -84,6 +89,8 @@ export default function DashboardPage() {
   const [batchBerjalan, setBatchBerjalan] = useState<BatchBerjalan[]>([]);
   const [pengirimanHariIni, setPengirimanHariIni] = useState<PengirimanHariIni[]>([]);
   const [selisihPacking, setSelisihPacking] = useState<SelisihPacking[]>([]);
+  const [detailSelisih, setDetailSelisih] = useState<SelisihPacking | null>(null);
+  const [detailRows, setDetailRows] = useState<SelisihDetailRow[] | null>(null);
   const [prodRows, setProdRows] = useState<ProdRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModalBahan, setShowModalBahan] = useState(false);
@@ -123,7 +130,7 @@ export default function DashboardPage() {
       supabase.from("produk_sku").select("id, brand, nama_brand, varian, isi_per_pack, kode_sku, stok_saat_ini").eq("aktif", true),
       supabase.from("batch_produksi").select("id, tanggal_produksi, shift, status, jumlah_pack_rencana, jumlah_pack_adonan, produk_sku:produk_sku_id(nama_brand, varian, isi_per_pack), users:created_by(nama)").neq("status", "selesai").order("created_at", { ascending: false }),
       supabase.from("pengiriman").select("id, jumlah_pack, produk_sku:produk_sku_id(brand, varian, isi_per_pack)").eq("tanggal_keluar", today),
-      supabase.from("selisih_packing").select("id, brand, varian, total_direndam, total_aktual, selisih_pcs, catatan, nama_user, created_at").eq("status_review", "pending").order("created_at", { ascending: false }),
+      supabase.from("selisih_packing").select("id, batch_packing_id, brand, varian, total_direndam, total_aktual, selisih_pcs, catatan, nama_user, created_at").eq("status_review", "pending").order("created_at", { ascending: false }),
       supabase.from("packing_input").select("brand, varian, tanggal, pack5, pack10, reject, reject_lain, lebihan"),
     ]);
     if (selisihRes.data) setSelisihPacking(selisihRes.data as unknown as SelisihPacking[]);
@@ -160,6 +167,17 @@ export default function DashboardPage() {
       .update({ status_review: "reviewed", reviewed_by: user?.nama ?? "", reviewed_at: new Date().toISOString() })
       .eq("id", id);
     setSelisihPacking((list) => list.filter((s) => s.id !== id));
+    setDetailSelisih(null);
+  }
+
+  async function openSelisihDetail(s: SelisihPacking) {
+    setDetailSelisih(s);
+    setDetailRows(null);
+    if (!s.batch_packing_id) { setDetailRows([]); return; }
+    const { data } = await supabase.from("packing_input")
+      .select("pack5, pack10, reject, reject_lain, alasan_reject_lain, lebihan, catatan")
+      .eq("batch_produksi_id", s.batch_packing_id);
+    setDetailRows((data as SelisihDetailRow[]) ?? []);
   }
 
   function openEditStok(p: StokProduk) {
@@ -260,17 +278,20 @@ export default function DashboardPage() {
               return (
                 <div key={s.id} className="bg-white rounded-xl border border-amber-100 p-3">
                   <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0 flex-1">
-                      <p className="font-semibold text-sm text-gray-800">{brandLabel} — {s.varian}</p>
+                    <button onClick={() => openSelisihDetail(s)} className="min-w-0 flex-1 text-left group">
+                      <p className="font-semibold text-sm text-gray-800 group-hover:text-amber-700 transition-colors">
+                        {brandLabel} — {s.varian}
+                        <ArrowUpRight size={13} className="inline ml-1 text-amber-400 group-hover:text-amber-600" />
+                      </p>
                       <p className="text-xs text-gray-500 mt-0.5">
                         Direndam {formatAngka(s.total_direndam)} → Aktual {formatAngka(s.total_aktual)} pcs ·{" "}
                         <span className={`font-bold ${lebih ? "text-blue-600" : "text-amber-600"}`}>
                           {lebih ? `Lebih ${formatAngka(s.selisih_pcs)}` : `Kurang ${formatAngka(-s.selisih_pcs)}`} pcs
                         </span>
                       </p>
-                      {s.catatan && <p className="text-xs text-gray-600 mt-1 italic">"{s.catatan}"</p>}
-                      <p className="text-[11px] text-gray-400 mt-0.5">oleh {s.nama_user || "—"} · {formatTanggal(s.created_at)}</p>
-                    </div>
+                      {s.catatan && <p className="text-xs text-gray-600 mt-1 italic">&quot;{s.catatan}&quot;</p>}
+                      <p className="text-[11px] text-gray-400 mt-0.5">oleh {s.nama_user || "—"} · {formatTanggal(s.created_at)} · <span className="text-amber-500 font-medium">ketuk untuk detail</span></p>
+                    </button>
                     <button onClick={() => markSelisihReviewed(s.id)}
                       className="shrink-0 text-xs font-semibold px-2.5 py-1.5 rounded-lg bg-green-100 text-green-700 hover:bg-green-200 transition-colors">
                       Sudah Direview
@@ -282,6 +303,79 @@ export default function DashboardPage() {
           </div>
         </div>
       )}
+
+      {/* Modal detail selisih packing */}
+      {detailSelisih && (() => {
+        const s = detailSelisih;
+        const lebih = s.selisih_pcs > 0;
+        const brandLabel = s.brand === "cane" ? "Cane RawtheR" : "Mehana Boga Utama";
+        const isMehana = s.brand === "mehana";
+        const sum = (f: (r: SelisihDetailRow) => number) => (detailRows ?? []).reduce((a, r) => a + f(r), 0);
+        const p5 = sum((r) => r.pack5), p10 = sum((r) => r.pack10);
+        const rej = sum((r) => r.reject), lain = sum((r) => r.reject_lain), leb = sum((r) => r.lebihan);
+        const alasan = Array.from(new Set((detailRows ?? []).filter((r) => (r.reject_lain ?? 0) > 0 && r.alasan_reject_lain).map((r) => r.alasan_reject_lain as string)));
+        const Det = ({ label, val, sub }: { label: string; val: string; sub?: string }) => (
+          <div className="flex items-center justify-between py-1 border-b border-gray-50 last:border-0">
+            <span className="text-gray-500">{label}{sub && <span className="text-gray-300"> {sub}</span>}</span>
+            <span className="font-semibold text-gray-700 tabular-nums">{val}</span>
+          </div>
+        );
+        return (
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setDetailSelisih(null)}>
+            <div className="bg-white rounded-2xl w-full max-w-sm max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 sticky top-0 bg-white">
+                <div>
+                  <p className="font-bold text-gray-800">Detail Selisih Packing</p>
+                  <p className="text-xs text-gray-500">{brandLabel} — {s.varian} · {formatTanggal(s.created_at)}</p>
+                </div>
+                <button onClick={() => setDetailSelisih(null)} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
+              </div>
+              <div className="p-4 space-y-3 text-sm">
+                {detailRows === null ? (
+                  <p className="text-gray-400 text-center py-4">Memuat…</p>
+                ) : (
+                  <>
+                    <div>
+                      <p className="font-bold text-gray-500 uppercase tracking-wider text-[10px] mb-1">Rincian Hasil</p>
+                      <Det label={isMehana ? "Pack Isi 5" : "Pack"} sub={`(${formatAngka(p5)} × 5)`} val={`${formatAngka(p5 * 5)} pcs`} />
+                      {isMehana && p10 > 0 && <Det label="Pack Isi 10" sub={`(${formatAngka(p10)} × 10)`} val={`${formatAngka(p10 * 10)} pcs`} />}
+                      <Det label="Reject Packing" sub="(termasuk kekurangan)" val={`${formatAngka(rej)} pcs`} />
+                      {lain > 0 && <Det label="Basi / Hilang / dll" sub={alasan.length ? `(${alasan.join(", ")})` : undefined} val={`${formatAngka(lain)} pcs`} />}
+                      <Det label="Lebihan" val={`${formatAngka(leb)} pcs`} />
+                    </div>
+                    <div className="pt-1">
+                      <p className="font-bold text-gray-500 uppercase tracking-wider text-[10px] mb-1">Analisa Selisih</p>
+                      <Det label="Total Direndam" val={`${formatAngka(s.total_direndam)} pcs`} />
+                      <Det label="Total Aktual (fisik)" val={`${formatAngka(s.total_aktual)} pcs`} />
+                      <div className="flex items-center justify-between pt-1.5">
+                        <span className="text-gray-500">Selisih</span>
+                        <span className={`font-bold ${lebih ? "text-blue-600" : "text-amber-600"}`}>
+                          {lebih ? `Adonan LEBIH +${formatAngka(s.selisih_pcs)}` : `Adonan KURANG ${formatAngka(s.selisih_pcs)}`} pcs
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-gray-400 mt-1">
+                        {lebih ? "Aktual fisik lebih dari yang direndam — bahan baku dikoreksi (dikurangi lagi otomatis)."
+                               : "Aktual fisik kurang dari yang direndam — kekurangan otomatis masuk Reject & bahan dikembalikan."}
+                      </p>
+                    </div>
+                    {s.catatan && (
+                      <div className="pt-1 border-t border-gray-100">
+                        <p className="font-bold text-gray-500 uppercase tracking-wider text-[10px] mb-1">Catatan PIC</p>
+                        <p className="text-gray-600 italic">&ldquo;{s.catatan}&rdquo;</p>
+                      </div>
+                    )}
+                    <p className="text-[11px] text-gray-400">Diinput oleh {s.nama_user || "—"}</p>
+                    <button onClick={() => markSelisihReviewed(s.id)}
+                      className="w-full py-2.5 rounded-xl bg-green-100 text-green-700 font-semibold text-sm hover:bg-green-200 transition-colors">
+                      Tandai Sudah Direview
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Summary Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
