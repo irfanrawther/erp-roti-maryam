@@ -144,15 +144,15 @@ export default function LoginPage() {
 
             {/* Divider + Izin */}
             <div className="pt-4 mt-2 border-t border-gray-100">
-              <p className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-2.5">Izin</p>
+              <p className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-2.5">Lapor Izin</p>
               <button onClick={() => router.push("/izin")}
                 className="w-full flex items-center gap-3 p-4 rounded-2xl border-2 border-sky-200 bg-sky-50 hover:border-sky-400 hover:bg-sky-100 transition-all text-left">
                 <div className="flex items-center justify-center w-11 h-11 rounded-xl bg-sky-500 text-white shrink-0">
                   <FileText size={22} />
                 </div>
                 <div>
-                  <p className="text-base font-bold text-sky-700 leading-tight">IZIN</p>
-                  <p className="text-xs text-sky-500 mt-0.5">Pengajuan izin tidak masuk</p>
+                  <p className="text-base font-bold text-sky-700 leading-tight">LAPOR IZIN</p>
+                  <p className="text-xs text-sky-500 mt-0.5">Lapor izin tidak masuk</p>
                 </div>
               </button>
             </div>

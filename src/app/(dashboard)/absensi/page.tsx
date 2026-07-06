@@ -91,7 +91,7 @@ export default function AbsensiPage() {
 
       {/* Tabs */}
       <div className="flex bg-white rounded-xl border border-gray-100 p-1 gap-1 max-w-3xl overflow-x-auto">
-        {([["karyawan", "Data Karyawan"], ["shift", "Atur Jadwal Shift"], ["review", "Review & Flag"], ["izin", "Pengajuan Izin"], ["rekap", "Rekap Absensi"], ["pengaturan", "Pengaturan Lokasi"]] as const).map(([k, label]) => (
+        {([["karyawan", "Data Karyawan"], ["shift", "Atur Jadwal Shift"], ["review", "Review & Flag"], ["izin", "Lapor Izin"], ["rekap", "Rekap Absensi"], ["pengaturan", "Pengaturan Lokasi"]] as const).map(([k, label]) => (
           <button key={k} onClick={() => setTab(k)}
             className={`flex-1 whitespace-nowrap py-2 px-3 rounded-lg text-sm font-medium transition-colors ${tab === k ? "bg-amber-500 text-white" : "text-gray-600 hover:bg-gray-50"}`}>
             {label}
@@ -1290,6 +1290,12 @@ function formatTglID(iso: string) {
   const [y, m, d] = iso.split("-").map(Number);
   return `${d} ${ID_MONTHS[m - 1]?.slice(0, 3)} ${y}`;
 }
+// "Rabu, 2 Juli 2026" — dengan nama hari
+function hariTglID(iso: string) {
+  return new Date(`${iso}T00:00:00+07:00`).toLocaleDateString("id-ID", {
+    timeZone: "Asia/Jakarta", weekday: "long", day: "numeric", month: "long", year: "numeric",
+  });
+}
 
 // jam WIB (HH:MM) dari timestamptz ISO
 function jamWIB(iso: string | null): string {
@@ -1584,7 +1590,7 @@ function PengajuanIzin({ userName }: { userName: string }) {
   useEffect(() => { fetchRows(); }, [fetchRows]);
 
   async function batalkan(r: IzinRow) {
-    const catatan = prompt(`Batalkan izin ${r.karyawan?.nama} (${formatTglID(r.tanggal_izin)})?\n\nStatus jadi ALPHA + denda Rp 50.000.\nAlasan pembatalan (opsional):`, "");
+    const catatan = prompt(`Tandai bukti izin ini tidak sah? Status karyawan akan menjadi Alpha dengan denda Rp 50.000.\n\n${r.karyawan?.nama} · ${hariTglID(r.tanggal_izin)}\n\nCatatan (opsional):`, "");
     if (catatan === null) return; // cancel
     setBusyId(r.id);
     await supabase.from("pengajuan_izin").update({
@@ -1616,8 +1622,8 @@ function PengajuanIzin({ userName }: { userName: string }) {
           ) : <div className="w-14 h-14 rounded-lg bg-gray-100 flex items-center justify-center text-gray-300 text-xs shrink-0">no foto</div>}
           <div className="min-w-0">
             <p className="font-semibold text-sm text-gray-800">{r.karyawan?.nama ?? "—"}</p>
-            <p className="text-xs text-gray-500">Izin {formatTglID(r.tanggal_izin)} · {r.jenis === "izin_biasa" ? "Izin Biasa" : r.jenis}</p>
-            <p className="text-[11px] text-gray-400">Diajukan {formatTglID(r.created_at.slice(0, 10))}</p>
+            <p className="text-xs text-gray-500">Izin {hariTglID(r.tanggal_izin)} · {r.jenis === "izin_biasa" ? "Izin Biasa" : r.jenis}</p>
+            <p className="text-[11px] text-gray-400">Dilaporkan {formatTglID(r.created_at.slice(0, 10))}</p>
             {r.status === "dibatalkan" && (
               <p className="text-[11px] text-red-500 mt-0.5">Dibatalkan oleh {r.dibatalkan_oleh ?? "—"}{r.catatan_pembatalan ? ` · "${r.catatan_pembatalan}"` : ""}</p>
             )}
@@ -1626,7 +1632,7 @@ function PengajuanIzin({ userName }: { userName: string }) {
         {r.status === "aktif" ? (
           <button onClick={() => batalkan(r)} disabled={busyId === r.id}
             className="shrink-0 text-xs font-semibold px-2.5 py-1.5 rounded-lg bg-red-100 text-red-600 hover:bg-red-200 transition-colors disabled:opacity-40">
-            Batalkan (jadi Alpha)
+            Tandai Bukti Tidak Sah = Alpha
           </button>
         ) : (
           <span className="shrink-0 text-xs font-semibold px-2 py-0.5 rounded-full bg-gray-200 text-gray-500">Dibatalkan</span>

@@ -6,8 +6,12 @@ import { FileText, Camera, CheckCircle2, X, AlertTriangle } from "lucide-react";
 
 interface Karyawan { id: string; nama: string; jabatan: string | null }
 
-const ID_BULAN = ["Januari","Februari","Maret","April","Mei","Juni","Juli","Agustus","September","Oktober","November","Desember"];
-function labelTgl(iso: string) { const [y, m, d] = iso.split("-").map(Number); return `${d} ${ID_BULAN[m - 1]} ${y}`; }
+// "Rabu, 2 Juli 2026" — sertakan nama hari
+function labelTgl(iso: string) {
+  return new Date(`${iso}T00:00:00+07:00`).toLocaleDateString("id-ID", {
+    timeZone: "Asia/Jakarta", weekday: "long", day: "numeric", month: "long", year: "numeric",
+  });
+}
 function todayWIB() { return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" }); }
 function addDaysStr(iso: string, n: number) {
   const d = new Date(`${iso}T00:00:00+07:00`); d.setDate(d.getDate() + n);
@@ -122,7 +126,7 @@ export default function IzinPage() {
       <div className="w-full max-w-sm">
         <div className="text-center mb-5">
           <img src="/logo-cane.png" alt="Cane RawtheR" className="w-14 h-14 object-contain rounded-full mx-auto mb-2" />
-          <h1 className="text-xl font-bold text-gray-800">Pengajuan Izin</h1>
+          <h1 className="text-xl font-bold text-gray-800">Lapor Izin</h1>
           <p className="text-sm text-gray-500">Cane RawtheR</p>
         </div>
 
@@ -163,7 +167,7 @@ export default function IzinPage() {
                 </div>
 
                 <div className="rounded-xl bg-gray-50 border border-gray-100 p-3 text-xs text-gray-600">
-                  Tuliskan di kertas: <b>alasan izin, keperluan, dan berapa hari</b>. Lalu foto tulisan tersebut sebagai bukti.
+                  Tuliskan di kertas: <b>alasan izin dan keperluan kamu untuk hari ini saja</b>, lalu foto tulisan tersebut. Jika ingin izin lebih dari 1 hari, kamu harus lapor lagi di hari berikutnya.
                 </div>
 
                 {/* Foto bukti */}
@@ -191,7 +195,7 @@ export default function IzinPage() {
 
                 <button onClick={submit} disabled={busy || !fotoFile}
                   className="w-full py-3 rounded-xl bg-sky-500 text-white font-semibold hover:bg-sky-600 disabled:opacity-40 flex items-center justify-center gap-2">
-                  <FileText size={18} /> {busy ? "Mengirim..." : "Submit Izin"}
+                  <FileText size={18} /> {busy ? "Mengirim..." : "Lapor Izin"}
                 </button>
                 {!fotoFile && <p className="text-[11px] text-gray-400 text-center">Foto bukti wajib sebelum submit</p>}
               </>
