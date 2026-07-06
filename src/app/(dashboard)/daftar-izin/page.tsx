@@ -7,7 +7,7 @@ import { getCapabilities, homeRoute } from "@/lib/permissions";
 import { CalendarClock } from "lucide-react";
 
 interface IzinRow {
-  id: string; tanggal_izin: string;
+  id: string; tanggal_izin: string; jenis: string; status_surat: string | null;
   karyawan: { nama: string } | null;
 }
 
@@ -47,11 +47,13 @@ export default function DaftarIzinPage() {
   const fetchRows = useCallback(async () => {
     setLoading(true);
     const { data } = await supabase.from("pengajuan_izin")
-      .select("id, tanggal_izin, karyawan:karyawan_id(nama)")
+      .select("id, tanggal_izin, jenis, status_surat, karyawan:karyawan_id(nama)")
       .eq("status", "aktif")
       .gte("tanggal_izin", range.start).lte("tanggal_izin", range.end)
       .order("tanggal_izin", { ascending: true });
-    setRows((data as unknown as IzinRow[]) ?? []);
+    // Sembunyikan sakit yang suratnya telat (sudah jadi alpha)
+    const list = ((data as unknown as IzinRow[]) ?? []).filter((r) => r.status_surat !== "surat_telat");
+    setRows(list);
     setLoading(false);
   }, [range.start, range.end]);
 
@@ -97,7 +99,9 @@ export default function DaftarIzinPage() {
                 <td className="px-4 py-2.5 font-medium text-gray-800">{r.karyawan?.nama ?? "—"}</td>
                 <td className="px-4 py-2.5 text-gray-600">{labelHariTgl(r.tanggal_izin)}</td>
                 <td className="px-4 py-2.5">
-                  <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-sky-100 text-sky-700">Izin</span>
+                  {r.jenis === "izin_sakit"
+                    ? <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-teal-100 text-teal-700">Izin Sakit</span>
+                    : <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-sky-100 text-sky-700">Izin</span>}
                 </td>
               </tr>
             ))}

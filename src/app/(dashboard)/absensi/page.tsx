@@ -1569,7 +1569,9 @@ function RekapAbsensi({ karyawanList, shifts }: { karyawanList: Karyawan[]; shif
 // ── Tab: Pengajuan Izin (Super Admin review + veto) ──
 interface IzinRow {
   id: string; karyawan_id: string; tanggal_izin: string; jenis: string;
-  foto_bukti_url: string | null; status: string;
+  foto_bukti_url: string | null; foto_surat_url: string | null;
+  status: string; status_surat: string | null; batas_upload_surat: string | null;
+  override_by: string | null;
   dibatalkan_oleh: string | null; catatan_pembatalan: string | null; created_at: string;
   karyawan: { nama: string } | null;
 }
@@ -1581,23 +1583,45 @@ function PengajuanIzin({ userName }: { userName: string }) {
 
   const fetchRows = useCallback(async () => {
     setLoading(true);
+    // 1) Deadline surat 20:00: sakit menunggu_surat yg lewat batas → surat_telat + alpha
+    const nowIso = new Date().toISOString();
+    const { data: telat } = await supabase.from("pengajuan_izin")
+      .select("id, karyawan_id, tanggal_izin")
+      .eq("jenis", "izin_sakit").eq("status", "aktif").eq("status_surat", "menunggu_surat")
+      .lt("batas_upload_surat", nowIso);
+    for (const t of ((telat as { id: string; karyawan_id: string; tanggal_izin: string }[] | null) ?? [])) {
+      await supabase.from("pengajuan_izin").update({ status_surat: "surat_telat" }).eq("id", t.id);
+      await supabase.from("absensi").upsert({
+        karyawan_id: t.karyawan_id, tanggal: t.tanggal_izin,
+        status_kehadiran: "alpha", denda: DENDA.ALPHA,
+      }, { onConflict: "karyawan_id,tanggal" });
+    }
+    // 2) Fetch lengkap
     const { data } = await supabase.from("pengajuan_izin")
-      .select("id, karyawan_id, tanggal_izin, jenis, foto_bukti_url, status, dibatalkan_oleh, catatan_pembatalan, created_at, karyawan:karyawan_id(nama)")
+      .select("id, karyawan_id, tanggal_izin, jenis, foto_bukti_url, foto_surat_url, status, status_surat, batas_upload_surat, override_by, dibatalkan_oleh, catatan_pembatalan, created_at, karyawan:karyawan_id(nama)")
       .order("tanggal_izin", { ascending: false }).limit(200);
     setRows((data as unknown as IzinRow[]) ?? []);
     setLoading(false);
   }, []);
   useEffect(() => { fetchRows(); }, [fetchRows]);
 
-  async function batalkan(r: IzinRow) {
-    const catatan = prompt(`Tandai bukti izin ini tidak sah? Status karyawan akan menjadi Alpha dengan denda Rp 50.000.\n\n${r.karyawan?.nama} · ${hariTglID(r.tanggal_izin)}\n\nCatatan (opsional):`, "");
-    if (catatan === null) return; // cancel
+  const jenisLabel = (j: string) => j === "izin_sakit" ? "Izin Sakit" : "Izin Biasa";
+  const suratBadge = (r: IzinRow): { text: string; cls: string } | null => {
+    if (r.jenis !== "izin_sakit") return null;
+    if (r.status_surat === "surat_masuk") return { text: "Surat masuk", cls: "bg-green-100 text-green-700" };
+    if (r.status_surat === "surat_telat") return { text: "Surat telat → Alpha", cls: "bg-red-100 text-red-600" };
+    return { text: "Menunggu surat", cls: "bg-amber-100 text-amber-700" };
+  };
+
+  async function tandaiTidakSah(r: IzinRow) {
+    const apa = r.jenis === "izin_sakit" ? "surat" : "bukti izin";
+    const catatan = prompt(`Tandai ${apa} ini tidak sah? Status karyawan akan menjadi Alpha dengan denda Rp 50.000.\n\n${r.karyawan?.nama} · ${hariTglID(r.tanggal_izin)}\n\nCatatan (opsional):`, "");
+    if (catatan === null) return;
     setBusyId(r.id);
     await supabase.from("pengajuan_izin").update({
       status: "dibatalkan", dibatalkan_oleh: userName,
       dibatalkan_at: new Date().toISOString(), catatan_pembatalan: catatan || null,
     }).eq("id", r.id);
-    // Set absensi tanggal itu jadi alpha
     await supabase.from("absensi").upsert({
       karyawan_id: r.karyawan_id, tanggal: r.tanggal_izin,
       status_kehadiran: "alpha", denda: DENDA.ALPHA, is_override: true,
@@ -1607,39 +1631,73 @@ function PengajuanIzin({ userName }: { userName: string }) {
     fetchRows();
   }
 
+  // Override: surat telat tapi alasan wajar → tetapkan sebagai sakit, denda 0
+  async function overrideSakit(r: IzinRow) {
+    const catatan = prompt(`Tetapkan sebagai Sakit (override)?\nStatus kembali ke Izin Sakit, denda Rp 0.\n\n${r.karyawan?.nama} · ${hariTglID(r.tanggal_izin)}\n\nCatatan (opsional):`, "");
+    if (catatan === null) return;
+    setBusyId(r.id);
+    await supabase.from("pengajuan_izin").update({
+      status_surat: "surat_masuk", override_by: userName,
+      override_at: new Date().toISOString(), catatan_override: catatan || null,
+    }).eq("id", r.id);
+    await supabase.from("absensi").upsert({
+      karyawan_id: r.karyawan_id, tanggal: r.tanggal_izin,
+      status_kehadiran: "izin_sakit", denda: 0, is_override: true,
+      override_by: userName, override_at: new Date().toISOString(),
+    }, { onConflict: "karyawan_id,tanggal" });
+    setBusyId(null);
+    fetchRows();
+  }
+
   const aktif = rows.filter((r) => r.status === "aktif");
   const lain  = rows.filter((r) => r.status !== "aktif");
 
-  const Card = ({ r }: { r: IzinRow }) => (
-    <div className={`rounded-xl border p-3 ${r.status === "aktif" ? "border-sky-100 bg-sky-50/40" : "border-gray-100 bg-gray-50/60"}`}>
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex items-start gap-3 min-w-0">
-          {r.foto_bukti_url ? (
-            <button onClick={() => setFotoModal(r.foto_bukti_url)} className="w-14 h-14 rounded-lg overflow-hidden border border-gray-200 hover:ring-2 hover:ring-sky-400 shrink-0">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={r.foto_bukti_url} alt="bukti" className="w-full h-full object-cover" />
-            </button>
-          ) : <div className="w-14 h-14 rounded-lg bg-gray-100 flex items-center justify-center text-gray-300 text-xs shrink-0">no foto</div>}
-          <div className="min-w-0">
-            <p className="font-semibold text-sm text-gray-800">{r.karyawan?.nama ?? "—"}</p>
-            <p className="text-xs text-gray-500">Izin {hariTglID(r.tanggal_izin)} · {r.jenis === "izin_biasa" ? "Izin Biasa" : r.jenis}</p>
-            <p className="text-[11px] text-gray-400">Dilaporkan {formatTglID(r.created_at.slice(0, 10))}</p>
-            {r.status === "dibatalkan" && (
-              <p className="text-[11px] text-red-500 mt-0.5">Dibatalkan oleh {r.dibatalkan_oleh ?? "—"}{r.catatan_pembatalan ? ` · "${r.catatan_pembatalan}"` : ""}</p>
+  const Card = ({ r }: { r: IzinRow }) => {
+    const fotoUrl = r.jenis === "izin_sakit" ? r.foto_surat_url : r.foto_bukti_url;
+    const badge = suratBadge(r);
+    const isTelat = r.jenis === "izin_sakit" && r.status_surat === "surat_telat";
+    return (
+      <div className={`rounded-xl border p-3 ${r.status === "aktif" ? (r.jenis === "izin_sakit" ? "border-teal-100 bg-teal-50/40" : "border-sky-100 bg-sky-50/40") : "border-gray-100 bg-gray-50/60"}`}>
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-start gap-3 min-w-0">
+            {fotoUrl ? (
+              <button onClick={() => setFotoModal(fotoUrl)} className="w-14 h-14 rounded-lg overflow-hidden border border-gray-200 hover:ring-2 hover:ring-teal-400 shrink-0">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={fotoUrl} alt="bukti" className="w-full h-full object-cover" />
+              </button>
+            ) : <div className="w-14 h-14 rounded-lg bg-gray-100 flex items-center justify-center text-gray-300 text-[10px] text-center shrink-0">belum ada</div>}
+            <div className="min-w-0">
+              <p className="font-semibold text-sm text-gray-800">{r.karyawan?.nama ?? "—"}</p>
+              <p className="text-xs text-gray-500">{hariTglID(r.tanggal_izin)} · {jenisLabel(r.jenis)}</p>
+              {badge && <span className={`inline-block mt-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${badge.cls}`}>{badge.text}</span>}
+              {r.override_by && <p className="text-[11px] text-green-600 mt-0.5">Override sakit oleh {r.override_by}</p>}
+              {r.status === "dibatalkan" && (
+                <p className="text-[11px] text-red-500 mt-0.5">Tidak sah · {r.dibatalkan_oleh ?? "—"}{r.catatan_pembatalan ? ` · "${r.catatan_pembatalan}"` : ""}</p>
+              )}
+            </div>
+          </div>
+          <div className="flex flex-col gap-1.5 shrink-0">
+            {r.status === "aktif" ? (
+              <>
+                <button onClick={() => tandaiTidakSah(r)} disabled={busyId === r.id}
+                  className="text-xs font-semibold px-2.5 py-1.5 rounded-lg bg-red-100 text-red-600 hover:bg-red-200 transition-colors disabled:opacity-40">
+                  {r.jenis === "izin_sakit" ? "Tandai Surat Tidak Sah = Alpha" : "Tandai Bukti Tidak Sah = Alpha"}
+                </button>
+                {isTelat && (
+                  <button onClick={() => overrideSakit(r)} disabled={busyId === r.id}
+                    className="text-xs font-semibold px-2.5 py-1.5 rounded-lg bg-teal-100 text-teal-700 hover:bg-teal-200 transition-colors disabled:opacity-40">
+                    Tetapkan sebagai Sakit (override)
+                  </button>
+                )}
+              </>
+            ) : (
+              <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-gray-200 text-gray-500">Tidak sah</span>
             )}
           </div>
         </div>
-        {r.status === "aktif" ? (
-          <button onClick={() => batalkan(r)} disabled={busyId === r.id}
-            className="shrink-0 text-xs font-semibold px-2.5 py-1.5 rounded-lg bg-red-100 text-red-600 hover:bg-red-200 transition-colors disabled:opacity-40">
-            Tandai Bukti Tidak Sah = Alpha
-          </button>
-        ) : (
-          <span className="shrink-0 text-xs font-semibold px-2 py-0.5 rounded-full bg-gray-200 text-gray-500">Dibatalkan</span>
-        )}
       </div>
-    </div>
-  );
+    );
+  };
 
   return (
     <div className="space-y-4">
@@ -1655,7 +1713,7 @@ function PengajuanIzin({ userName }: { userName: string }) {
 
       {lain.length > 0 && (
         <div className="card space-y-3">
-          <h2 className="font-semibold text-gray-700 text-sm">Riwayat Dibatalkan ({lain.length})</h2>
+          <h2 className="font-semibold text-gray-700 text-sm">Riwayat Tidak Sah ({lain.length})</h2>
           {lain.map((r) => <Card key={r.id} r={r} />)}
         </div>
       )}

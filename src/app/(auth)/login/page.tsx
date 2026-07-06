@@ -3,7 +3,7 @@ import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { loginWithPin, saveUserSession, getUserSession } from "@/lib/auth";
 import { homeRoute } from "@/lib/permissions";
-import { ChevronLeft, UserCog, Factory, Truck, ShieldCheck, ClipboardList, MapPin, FileText } from "lucide-react";
+import { ChevronLeft, UserCog, Factory, Truck, ShieldCheck, ClipboardList, MapPin, FileText, Stethoscope } from "lucide-react";
 
 type RoleChoice = {
   role: "spv" | "staff_produksi" | "pic" | "staff_packing_pengiriman" | "super_admin";
@@ -153,6 +153,16 @@ export default function LoginPage() {
                 <div>
                   <p className="text-base font-bold text-sky-700 leading-tight">LAPOR IZIN</p>
                   <p className="text-xs text-sky-500 mt-0.5">Lapor izin tidak masuk</p>
+                </div>
+              </button>
+              <button onClick={() => router.push("/izin-sakit")}
+                className="w-full mt-2 flex items-center gap-3 p-4 rounded-2xl border-2 border-teal-200 bg-teal-50 hover:border-teal-400 hover:bg-teal-100 transition-all text-left">
+                <div className="flex items-center justify-center w-11 h-11 rounded-xl bg-teal-500 text-white shrink-0">
+                  <Stethoscope size={22} />
+                </div>
+                <div>
+                  <p className="text-base font-bold text-teal-700 leading-tight">LAPOR IZIN SAKIT</p>
+                  <p className="text-xs text-teal-500 mt-0.5">Sakit + surat dokter</p>
                 </div>
               </button>
             </div>
