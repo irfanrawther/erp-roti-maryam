@@ -37,6 +37,7 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
     { href: "/pengiriman",    label: "Pengiriman",    icon: Truck,           show: caps.pengiriman },
     { href: "/produk-reject", label: "Produk Reject", icon: AlertTriangle,   show: caps.produkReject },
     { href: "/stock-opname",  label: "Stock Opname",  icon: ClipboardList,   show: caps.stockOpname },
+    { href: "/daftar-izin",   label: "Daftar Izin",   icon: CalendarClock,   show: caps.daftarIzin },
   ].filter((i) => i.show);
 
   const adminItems = [

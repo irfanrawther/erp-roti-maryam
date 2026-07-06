@@ -20,6 +20,7 @@ export interface Capabilities {
   masterResep: boolean;
   stockOpname: boolean;   // halaman Stock Opname (PIC + Super Admin)
   absensi: boolean;       // halaman Absensi (Super Admin only, tahap 1)
+  daftarIzin: boolean;    // halaman Daftar Izin read-only (SPV)
   isSuperAdmin: boolean;
 }
 
@@ -27,7 +28,7 @@ const NONE: Capabilities = {
   dashboard: false, bahanBaku: false, produksiFlow: false,
   adonan: false, rendam: false, packingFreezer: false, produksiRiwayat: false,
   pengiriman: false, produkReject: false, kelolaUser: false, masterResep: false,
-  stockOpname: false, absensi: false, isSuperAdmin: false,
+  stockOpname: false, absensi: false, daftarIzin: false, isSuperAdmin: false,
 };
 
 export function getCapabilities(user: UserSession | null): Capabilities {
@@ -40,7 +41,7 @@ export function getCapabilities(user: UserSession | null): Capabilities {
       dashboard: true, bahanBaku: true, produksiFlow: true,
       adonan: true, rendam: true, packingFreezer: true, produksiRiwayat: true,
       pengiriman: true, produkReject: true, kelolaUser: true, masterResep: true,
-      stockOpname: true, absensi: true, isSuperAdmin: true,
+      stockOpname: true, absensi: true, daftarIzin: false, isSuperAdmin: true,
     };
   }
 
@@ -60,9 +61,9 @@ export function getCapabilities(user: UserSession | null): Capabilities {
   if (role === "spv") {
     // SPV: + Dashboard (card Stok Cane saja) + Stok Produk Reject (read-only)
     if (scope === "packing") {
-      return { ...NONE, dashboard: true, produkReject: true, produksiFlow: true, packingFreezer: true, produksiRiwayat: true };
+      return { ...NONE, dashboard: true, produkReject: true, produksiFlow: true, packingFreezer: true, produksiRiwayat: true, daftarIzin: true };
     }
-    return { ...NONE, dashboard: true, produkReject: true, produksiFlow: true, adonan: true, rendam: true, produksiRiwayat: true };
+    return { ...NONE, dashboard: true, produkReject: true, produksiFlow: true, adonan: true, rendam: true, produksiRiwayat: true, daftarIzin: true };
   }
 
   return { ...NONE };
