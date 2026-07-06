@@ -6,7 +6,7 @@ import { getUserSession, canAccessAdmin, hashPin, type UserSession } from "@/lib
 import { homeRoute } from "@/lib/permissions";
 import { ID_MONTHS } from "@/components/RiwayatFilter";
 import { hitungDenda, bulanRange, wibMinutesOfDay, DENDA, JAM_ALPHA, STATUS_LABEL } from "@/lib/absensi";
-import { CalendarClock, Plus, X, Pencil, Trash2, ChevronLeft, ChevronRight, Layers, MapPin, Crosshair, Flag, AlertTriangle, Check, LogOut } from "lucide-react";
+import { CalendarClock, Plus, X, Pencil, Trash2, ChevronLeft, ChevronRight, Layers, MapPin, Crosshair, Flag, AlertTriangle, Check, LogOut, FileText } from "lucide-react";
 
 interface Karyawan {
   id: string;
@@ -55,7 +55,7 @@ const LIBUR_COLOR = "bg-gray-200 text-gray-500 border-gray-300";
 export default function AbsensiPage() {
   const router = useRouter();
   const [user, setUser] = useState<UserSession | null>(null);
-  const [tab, setTab] = useState<"karyawan" | "shift" | "review" | "rekap" | "pengaturan">("karyawan");
+  const [tab, setTab] = useState<"karyawan" | "shift" | "review" | "izin" | "rekap" | "pengaturan">("karyawan");
 
   const [karyawanList, setKaryawanList] = useState<Karyawan[]>([]);
   const [erpUsers,     setErpUsers]     = useState<ErpUser[]>([]);
@@ -91,7 +91,7 @@ export default function AbsensiPage() {
 
       {/* Tabs */}
       <div className="flex bg-white rounded-xl border border-gray-100 p-1 gap-1 max-w-3xl overflow-x-auto">
-        {([["karyawan", "Data Karyawan"], ["shift", "Atur Jadwal Shift"], ["review", "Review & Flag"], ["rekap", "Rekap Absensi"], ["pengaturan", "Pengaturan Lokasi"]] as const).map(([k, label]) => (
+        {([["karyawan", "Data Karyawan"], ["shift", "Atur Jadwal Shift"], ["review", "Review & Flag"], ["izin", "Pengajuan Izin"], ["rekap", "Rekap Absensi"], ["pengaturan", "Pengaturan Lokasi"]] as const).map(([k, label]) => (
           <button key={k} onClick={() => setTab(k)}
             className={`flex-1 whitespace-nowrap py-2 px-3 rounded-lg text-sm font-medium transition-colors ${tab === k ? "bg-amber-500 text-white" : "text-gray-600 hover:bg-gray-50"}`}>
             {label}
@@ -107,6 +107,9 @@ export default function AbsensiPage() {
       )}
       {tab === "review" && (
         <ReviewFlag karyawanList={karyawanList} shifts={shifts} userName={user?.nama ?? ""} />
+      )}
+      {tab === "izin" && (
+        <PengajuanIzin userName={user?.nama ?? ""} />
       )}
       {tab === "rekap" && (
         <RekapAbsensi karyawanList={karyawanList} shifts={shifts} />
@@ -1551,6 +1554,110 @@ function RekapAbsensi({ karyawanList, shifts }: { karyawanList: Karyawan[]; shif
               )}
             </div>
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Tab: Pengajuan Izin (Super Admin review + veto) ──
+interface IzinRow {
+  id: string; karyawan_id: string; tanggal_izin: string; jenis: string;
+  foto_bukti_url: string | null; status: string;
+  dibatalkan_oleh: string | null; catatan_pembatalan: string | null; created_at: string;
+  karyawan: { nama: string } | null;
+}
+function PengajuanIzin({ userName }: { userName: string }) {
+  const [rows, setRows] = useState<IzinRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [fotoModal, setFotoModal] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const fetchRows = useCallback(async () => {
+    setLoading(true);
+    const { data } = await supabase.from("pengajuan_izin")
+      .select("id, karyawan_id, tanggal_izin, jenis, foto_bukti_url, status, dibatalkan_oleh, catatan_pembatalan, created_at, karyawan:karyawan_id(nama)")
+      .order("tanggal_izin", { ascending: false }).limit(200);
+    setRows((data as unknown as IzinRow[]) ?? []);
+    setLoading(false);
+  }, []);
+  useEffect(() => { fetchRows(); }, [fetchRows]);
+
+  async function batalkan(r: IzinRow) {
+    const catatan = prompt(`Batalkan izin ${r.karyawan?.nama} (${formatTglID(r.tanggal_izin)})?\n\nStatus jadi ALPHA + denda Rp 50.000.\nAlasan pembatalan (opsional):`, "");
+    if (catatan === null) return; // cancel
+    setBusyId(r.id);
+    await supabase.from("pengajuan_izin").update({
+      status: "dibatalkan", dibatalkan_oleh: userName,
+      dibatalkan_at: new Date().toISOString(), catatan_pembatalan: catatan || null,
+    }).eq("id", r.id);
+    // Set absensi tanggal itu jadi alpha
+    await supabase.from("absensi").upsert({
+      karyawan_id: r.karyawan_id, tanggal: r.tanggal_izin,
+      status_kehadiran: "alpha", denda: DENDA.ALPHA, is_override: true,
+      override_by: userName, override_at: new Date().toISOString(),
+    }, { onConflict: "karyawan_id,tanggal" });
+    setBusyId(null);
+    fetchRows();
+  }
+
+  const aktif = rows.filter((r) => r.status === "aktif");
+  const lain  = rows.filter((r) => r.status !== "aktif");
+
+  const Card = ({ r }: { r: IzinRow }) => (
+    <div className={`rounded-xl border p-3 ${r.status === "aktif" ? "border-sky-100 bg-sky-50/40" : "border-gray-100 bg-gray-50/60"}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-start gap-3 min-w-0">
+          {r.foto_bukti_url ? (
+            <button onClick={() => setFotoModal(r.foto_bukti_url)} className="w-14 h-14 rounded-lg overflow-hidden border border-gray-200 hover:ring-2 hover:ring-sky-400 shrink-0">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={r.foto_bukti_url} alt="bukti" className="w-full h-full object-cover" />
+            </button>
+          ) : <div className="w-14 h-14 rounded-lg bg-gray-100 flex items-center justify-center text-gray-300 text-xs shrink-0">no foto</div>}
+          <div className="min-w-0">
+            <p className="font-semibold text-sm text-gray-800">{r.karyawan?.nama ?? "—"}</p>
+            <p className="text-xs text-gray-500">Izin {formatTglID(r.tanggal_izin)} · {r.jenis === "izin_biasa" ? "Izin Biasa" : r.jenis}</p>
+            <p className="text-[11px] text-gray-400">Diajukan {formatTglID(r.created_at.slice(0, 10))}</p>
+            {r.status === "dibatalkan" && (
+              <p className="text-[11px] text-red-500 mt-0.5">Dibatalkan oleh {r.dibatalkan_oleh ?? "—"}{r.catatan_pembatalan ? ` · "${r.catatan_pembatalan}"` : ""}</p>
+            )}
+          </div>
+        </div>
+        {r.status === "aktif" ? (
+          <button onClick={() => batalkan(r)} disabled={busyId === r.id}
+            className="shrink-0 text-xs font-semibold px-2.5 py-1.5 rounded-lg bg-red-100 text-red-600 hover:bg-red-200 transition-colors disabled:opacity-40">
+            Batalkan (jadi Alpha)
+          </button>
+        ) : (
+          <span className="shrink-0 text-xs font-semibold px-2 py-0.5 rounded-full bg-gray-200 text-gray-500">Dibatalkan</span>
+        )}
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="space-y-4">
+      {loading && <p className="text-sm text-gray-400">Memuat…</p>}
+      <div className="card space-y-3">
+        <div className="flex items-center gap-2">
+          <FileText size={16} className="text-sky-500" />
+          <h2 className="font-semibold text-gray-700 text-sm">Izin Aktif ({aktif.length})</h2>
+        </div>
+        {aktif.length === 0 ? <p className="text-gray-400 text-sm text-center py-4">Tidak ada izin aktif</p>
+          : aktif.map((r) => <Card key={r.id} r={r} />)}
+      </div>
+
+      {lain.length > 0 && (
+        <div className="card space-y-3">
+          <h2 className="font-semibold text-gray-700 text-sm">Riwayat Dibatalkan ({lain.length})</h2>
+          {lain.map((r) => <Card key={r.id} r={r} />)}
+        </div>
+      )}
+
+      {fotoModal && (
+        <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4" onClick={() => setFotoModal(null)}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={fotoModal} alt="bukti izin" className="max-w-full max-h-[90vh] object-contain rounded-lg" />
         </div>
       )}
     </div>
