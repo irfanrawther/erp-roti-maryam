@@ -6,7 +6,7 @@ import { getUserSession, canAccessAdmin, hashPin, type UserSession } from "@/lib
 import { homeRoute } from "@/lib/permissions";
 import { ID_MONTHS } from "@/components/RiwayatFilter";
 import { hitungDenda, bulanRange, wibMinutesOfDay, DENDA, JAM_ALPHA, STATUS_LABEL } from "@/lib/absensi";
-import { CalendarClock, Plus, X, Pencil, Trash2, ChevronLeft, ChevronRight, Layers, MapPin, Crosshair, Flag, AlertTriangle, Check, LogOut, FileText } from "lucide-react";
+import { CalendarClock, Plus, X, Pencil, Trash2, ChevronLeft, ChevronRight, Layers, MapPin, Crosshair, Flag, AlertTriangle, Check, LogOut, FileText, ClipboardList } from "lucide-react";
 
 interface Karyawan {
   id: string;
@@ -117,6 +117,7 @@ export default function AbsensiPage() {
       {tab === "pengaturan" && (
         <>
           <PengaturanLokasi userName={user?.nama ?? ""} />
+          <JobdeskEditor shifts={shifts} userName={user?.nama ?? ""} />
           {/* TEMPORARY - REMOVE BEFORE PRODUCTION */}
           <ResetAbsensiTesting onDone={fetchAll} />
         </>
@@ -1724,6 +1725,64 @@ function PengajuanIzin({ userName }: { userName: string }) {
           <img src={fotoModal} alt="bukti izin" className="max-w-full max-h-[90vh] object-contain rounded-lg" />
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Editor Jobdesk per Shift (Super Admin) ──
+interface JobdeskRow { shift_id: string; jobdesk_awal: string | null; jobdesk_akhir: string | null }
+function JobdeskEditor({ shifts, userName }: { shifts: Shift[]; userName: string }) {
+  const [map, setMap] = useState<Record<string, { awal: string; akhir: string }>>({});
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [msg, setMsg] = useState("");
+
+  const load = useCallback(async () => {
+    const { data } = await supabase.from("jobdesk_shift").select("shift_id, jobdesk_awal, jobdesk_akhir");
+    const m: Record<string, { awal: string; akhir: string }> = {};
+    for (const j of ((data as JobdeskRow[] | null) ?? [])) m[j.shift_id] = { awal: j.jobdesk_awal ?? "", akhir: j.jobdesk_akhir ?? "" };
+    setMap(m);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  async function simpan(shiftId: string) {
+    setBusyId(shiftId); setMsg("");
+    const v = map[shiftId] ?? { awal: "", akhir: "" };
+    await supabase.from("jobdesk_shift").upsert({
+      shift_id: shiftId, jobdesk_awal: v.awal || null, jobdesk_akhir: v.akhir || null,
+      updated_by: userName, updated_at: new Date().toISOString(),
+    }, { onConflict: "shift_id" });
+    setBusyId(null); setMsg("✓ Jobdesk tersimpan");
+    setTimeout(() => setMsg(""), 2500);
+  }
+
+  return (
+    <div className="card space-y-3">
+      <h2 className="font-semibold text-gray-700 text-sm flex items-center gap-2"><ClipboardList size={15} className="text-amber-500" /> Jobdesk per Shift</h2>
+      <p className="text-xs text-gray-400">Tugas awal & akhir shift yang tampil di Dashboard karyawan.</p>
+      {msg && <p className="text-sm text-green-600">{msg}</p>}
+      {shifts.map((s, i) => {
+        const v = map[s.id] ?? { awal: "", akhir: "" };
+        return (
+          <div key={s.id} className="rounded-xl border border-gray-100 p-3 space-y-2">
+            <p className="font-semibold text-sm text-gray-700">Shift {i + 1} · {s.jam_masuk.slice(0, 5)}-{s.jam_pulang.slice(0, 5)}</p>
+            <div>
+              <label className="text-[11px] text-gray-500">Tugas Awal Shift</label>
+              <textarea className="input" rows={2} value={v.awal}
+                onChange={(e) => setMap((m) => ({ ...m, [s.id]: { ...v, awal: e.target.value } }))}
+                placeholder="mis. Cek suhu freezer, siapkan adonan" />
+            </div>
+            <div>
+              <label className="text-[11px] text-gray-500">Tugas Akhir Shift</label>
+              <textarea className="input" rows={2} value={v.akhir}
+                onChange={(e) => setMap((m) => ({ ...m, [s.id]: { ...v, akhir: e.target.value } }))}
+                placeholder="mis. Bersihkan area, matikan mesin" />
+            </div>
+            <button onClick={() => simpan(s.id)} disabled={busyId === s.id} className="btn-primary text-sm py-1.5">
+              {busyId === s.id ? "Menyimpan…" : "Simpan"}
+            </button>
+          </div>
+        );
+      })}
     </div>
   );
 }

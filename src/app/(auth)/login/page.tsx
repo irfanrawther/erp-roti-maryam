@@ -3,7 +3,7 @@ import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { loginWithPin, saveUserSession, getUserSession } from "@/lib/auth";
 import { homeRoute } from "@/lib/permissions";
-import { ChevronLeft, UserCog, Factory, Truck, ShieldCheck, ClipboardList, MapPin, FileText, Stethoscope, FileSignature } from "lucide-react";
+import { ChevronLeft, UserCog, Factory, Truck, ShieldCheck, ClipboardList, MapPin, FileText, Stethoscope, FileSignature, UserCircle } from "lucide-react";
 
 type RoleChoice = {
   role: "spv" | "staff_produksi" | "pic" | "staff_packing_pengiriman" | "super_admin";
@@ -178,6 +178,16 @@ export default function LoginPage() {
                 <div>
                   <p className="text-base font-bold text-indigo-700 leading-tight">DOKUMEN</p>
                   <p className="text-xs text-indigo-500 mt-0.5">Baca & tanda tangan dokumen</p>
+                </div>
+              </button>
+              <button onClick={() => router.push("/dashboard-saya")}
+                className="w-full mt-2 flex items-center gap-3 p-4 rounded-2xl border-2 border-violet-200 bg-violet-50 hover:border-violet-400 hover:bg-violet-100 transition-all text-left">
+                <div className="flex items-center justify-center w-11 h-11 rounded-xl bg-violet-500 text-white shrink-0">
+                  <UserCircle size={22} />
+                </div>
+                <div>
+                  <p className="text-base font-bold text-violet-700 leading-tight">DASHBOARD SAYA</p>
+                  <p className="text-xs text-violet-500 mt-0.5">Jadwal, kehadiran & dokumen saya</p>
                 </div>
               </button>
             </div>
