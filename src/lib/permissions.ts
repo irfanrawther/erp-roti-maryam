@@ -21,6 +21,7 @@ export interface Capabilities {
   stockOpname: boolean;   // halaman Stock Opname (PIC + Super Admin)
   absensi: boolean;       // halaman Absensi (Super Admin only, tahap 1)
   daftarIzin: boolean;    // halaman Daftar Izin read-only (SPV)
+  dokumen: boolean;       // halaman Dokumen & e-signature (Super Admin)
   isSuperAdmin: boolean;
 }
 
@@ -28,7 +29,7 @@ const NONE: Capabilities = {
   dashboard: false, bahanBaku: false, produksiFlow: false,
   adonan: false, rendam: false, packingFreezer: false, produksiRiwayat: false,
   pengiriman: false, produkReject: false, kelolaUser: false, masterResep: false,
-  stockOpname: false, absensi: false, daftarIzin: false, isSuperAdmin: false,
+  stockOpname: false, absensi: false, daftarIzin: false, dokumen: false, isSuperAdmin: false,
 };
 
 export function getCapabilities(user: UserSession | null): Capabilities {
@@ -41,7 +42,7 @@ export function getCapabilities(user: UserSession | null): Capabilities {
       dashboard: true, bahanBaku: true, produksiFlow: true,
       adonan: true, rendam: true, packingFreezer: true, produksiRiwayat: true,
       pengiriman: true, produkReject: true, kelolaUser: true, masterResep: true,
-      stockOpname: true, absensi: true, daftarIzin: false, isSuperAdmin: true,
+      stockOpname: true, absensi: true, daftarIzin: false, dokumen: true, isSuperAdmin: true,
     };
   }
 

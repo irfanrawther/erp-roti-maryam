@@ -14,6 +14,7 @@ import {
   ClipboardList,
   AlertTriangle,
   CalendarClock,
+  FileText,
   LogOut,
   X,
 } from "lucide-react";
@@ -42,6 +43,7 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
 
   const adminItems = [
     { href: "/absensi",     label: "Absensi",             icon: CalendarClock, show: caps.absensi },
+    { href: "/kelola-dokumen", label: "Dokumen",          icon: FileText, show: caps.dokumen },
     { href: "/admin/users", label: "Kelola User",         icon: Users,    show: caps.kelolaUser },
     { href: "/admin/resep", label: "Master Resep Adonan", icon: BookOpen, show: caps.masterResep },
   ].filter((i) => i.show);

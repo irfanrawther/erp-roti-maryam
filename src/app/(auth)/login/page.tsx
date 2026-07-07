@@ -3,7 +3,7 @@ import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { loginWithPin, saveUserSession, getUserSession } from "@/lib/auth";
 import { homeRoute } from "@/lib/permissions";
-import { ChevronLeft, UserCog, Factory, Truck, ShieldCheck, ClipboardList, MapPin, FileText, Stethoscope } from "lucide-react";
+import { ChevronLeft, UserCog, Factory, Truck, ShieldCheck, ClipboardList, MapPin, FileText, Stethoscope, FileSignature } from "lucide-react";
 
 type RoleChoice = {
   role: "spv" | "staff_produksi" | "pic" | "staff_packing_pengiriman" | "super_admin";
@@ -163,6 +163,21 @@ export default function LoginPage() {
                 <div>
                   <p className="text-base font-bold text-teal-700 leading-tight">LAPOR IZIN SAKIT</p>
                   <p className="text-xs text-teal-500 mt-0.5">Sakit + surat dokter</p>
+                </div>
+              </button>
+            </div>
+
+            {/* Divider + Dokumen */}
+            <div className="pt-4 mt-2 border-t border-gray-100">
+              <p className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-2.5">Dokumen</p>
+              <button onClick={() => router.push("/dokumen")}
+                className="w-full flex items-center gap-3 p-4 rounded-2xl border-2 border-indigo-200 bg-indigo-50 hover:border-indigo-400 hover:bg-indigo-100 transition-all text-left">
+                <div className="flex items-center justify-center w-11 h-11 rounded-xl bg-indigo-500 text-white shrink-0">
+                  <FileSignature size={22} />
+                </div>
+                <div>
+                  <p className="text-base font-bold text-indigo-700 leading-tight">DOKUMEN</p>
+                  <p className="text-xs text-indigo-500 mt-0.5">Baca & tanda tangan dokumen</p>
                 </div>
               </button>
             </div>
