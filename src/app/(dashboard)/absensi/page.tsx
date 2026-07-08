@@ -5,6 +5,7 @@ import { supabase } from "@/lib/supabase";
 import { getUserSession, canAccessAdmin, hashPin, type UserSession } from "@/lib/auth";
 import { homeRoute } from "@/lib/permissions";
 import { ID_MONTHS } from "@/components/RiwayatFilter";
+import IndonesianDatePicker from "@/components/IndonesianDatePicker";
 import { hitungDenda, bulanRange, wibMinutesOfDay, DENDA, DENDA_IZIN_MANUAL, JAM_ALPHA, STATUS_LABEL } from "@/lib/absensi";
 import { CalendarClock, Plus, X, Pencil, Trash2, ChevronLeft, ChevronRight, Layers, MapPin, Crosshair, Flag, AlertTriangle, Check, LogOut, FileText, ClipboardList, Clock } from "lucide-react";
 
@@ -932,6 +933,7 @@ function ReviewFlag({ karyawanList, shifts, userName }: {
   const [lmMasuk,  setLmMasuk]  = useState<Record<string, string>>({}); // lembur: jam masuk seharusnya per flag
   const [lmPulang, setLmPulang] = useState<Record<string, string>>({});
   const [lemburMap, setLemburMap] = useState<Record<string, { jam: number; nominal: number }>>({});
+  const [showCal, setShowCal] = useState(false);
 
   const daysInMonth = new Date(year, month, 0).getDate();
   const mStart = `${year}-${String(month).padStart(2, "0")}-01`;
@@ -1223,30 +1225,50 @@ function ReviewFlag({ karyawanList, shifts, userName }: {
 
       {/* RINGKASAN bulan */}
       <div className="card overflow-x-auto">
-        <div className="flex items-center justify-between gap-2 flex-wrap mb-3">
-          <h2 className="font-semibold text-gray-700 text-sm">Semua Absensi ({filteredRows.length})</h2>
-          <div className="flex items-center gap-2 flex-wrap">
-            <select className="input py-1.5 text-sm" value={month} onChange={(e) => { setFTanggal(""); setMonth(Number(e.target.value)); }} title="Pilih bulan">
-              {ID_MONTHS.map((nm, i) => <option key={nm} value={i + 1}>{nm}</option>)}
-            </select>
-            <select className="input py-1.5 text-sm" value={year} onChange={(e) => { setFTanggal(""); setYear(Number(e.target.value)); }} title="Pilih tahun">
-              {Array.from({ length: 5 }, (_, i) => now.getFullYear() - 2 + i).map((y) => <option key={y} value={y}>{y}</option>)}
-            </select>
-            <span className="text-gray-200">|</span>
-            <input type="date" className="input py-1.5 text-sm" min={mStart} max={mEnd}
-              value={fTanggal} onChange={(e) => setFTanggal(e.target.value)} title="Filter tanggal (dalam bulan ini)" />
-            {fTanggal && (
-              <button onClick={() => setFTanggal("")} className="text-xs text-gray-400 hover:text-gray-600" title="Semua tanggal">✕ semua tgl</button>
-            )}
-            <select className="input py-1.5 text-sm" value={fStatus} onChange={(e) => setFStatus(e.target.value)}>
-              <option value="semua">Semua status</option>
-              <option value="K1">Telat K1</option>
-              <option value="K2">Telat K2</option>
-              <option value="K3">Telat K3</option>
-              <option value="alpha">Alpha</option>
-              <option value="izin">Izin</option>
-              <option value="izin_sakit">Izin Sakit</option>
-            </select>
+        <h2 className="font-semibold text-gray-700 text-sm mb-3">Semua Absensi ({filteredRows.length})</h2>
+
+        {/* Filter panel */}
+        <div className="rounded-xl bg-gray-50 border border-gray-100 p-3 mb-3">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div>
+              <label className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Bulan</label>
+              <select className="input py-1.5 text-sm mt-1" value={month} onChange={(e) => { setFTanggal(""); setMonth(Number(e.target.value)); }}>
+                {ID_MONTHS.map((nm, i) => <option key={nm} value={i + 1}>{nm}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Tahun</label>
+              <select className="input py-1.5 text-sm mt-1" value={year} onChange={(e) => { setFTanggal(""); setYear(Number(e.target.value)); }}>
+                {Array.from({ length: 5 }, (_, i) => now.getFullYear() - 2 + i).map((y) => <option key={y} value={y}>{y}</option>)}
+              </select>
+            </div>
+            <div className="relative">
+              <label className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Tanggal</label>
+              <button type="button" onClick={() => setShowCal((v) => !v)}
+                className="input py-1.5 text-sm mt-1 w-full text-left flex items-center justify-between">
+                <span className={fTanggal ? "text-gray-800" : "text-gray-400"}>{fTanggal ? hariTglID(fTanggal) : "Semua tanggal"}</span>
+                <CalendarClock size={14} className="text-gray-400 shrink-0" />
+              </button>
+              {showCal && (
+                <div className="absolute z-30 mt-1 w-72 right-0 sm:left-0">
+                  <IndonesianDatePicker value={fTanggal || `${year}-${String(month).padStart(2, "0")}-01`}
+                    onChange={(v) => { const [y, m] = v.split("-").map(Number); setYear(y); setMonth(m); setFTanggal(v); setShowCal(false); }} />
+                  <button onClick={() => { setFTanggal(""); setShowCal(false); }} className="mt-1 w-full text-xs text-gray-500 hover:text-gray-700 py-1">Tampilkan semua tanggal</button>
+                </div>
+              )}
+            </div>
+            <div>
+              <label className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Status</label>
+              <select className="input py-1.5 text-sm mt-1" value={fStatus} onChange={(e) => setFStatus(e.target.value)}>
+                <option value="semua">Semua status</option>
+                <option value="K1">Telat K1</option>
+                <option value="K2">Telat K2</option>
+                <option value="K3">Telat K3</option>
+                <option value="alpha">Alpha</option>
+                <option value="izin">Izin</option>
+                <option value="izin_sakit">Izin Sakit</option>
+              </select>
+            </div>
           </div>
         </div>
         {filteredRows.length === 0 ? <p className="text-gray-400 text-sm text-center py-4">{rows.length === 0 ? "Belum ada data" : "Tidak ada data untuk filter ini"}</p> : (
