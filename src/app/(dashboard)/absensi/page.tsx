@@ -739,7 +739,7 @@ function AturShift({ karyawanList, shifts, shiftIndex, userName }: {
         const shift = shifts.find((s) => s.id === asg?.shift_id) ?? null;
         const nama = karyawanList.find((k) => k.id === detailCell.karyawanId)?.nama ?? "—";
         return (
-          <AbsenDetailModal abs={abs} shift={shift} nama={nama} tanggal={detailCell.tanggal} userName={userName}
+          <AbsenDetailModal abs={abs} shift={shift} nama={nama} tanggal={detailCell.tanggal} userName={userName} assign={asg ?? null}
             onClose={() => setDetailCell(null)} onSaved={() => { setDetailCell(null); fetchAssign(); }} />
         );
       })()}
@@ -931,6 +931,7 @@ function ReviewFlag({ karyawanList, shifts, userName }: {
   const [coMenit, setCoMenit] = useState<Record<string, string>>({});
   const [lmMasuk,  setLmMasuk]  = useState<Record<string, string>>({}); // lembur: jam masuk seharusnya per flag
   const [lmPulang, setLmPulang] = useState<Record<string, string>>({});
+  const [lemburMap, setLemburMap] = useState<Record<string, { jam: number; nominal: number }>>({});
 
   const daysInMonth = new Date(year, month, 0).getDate();
   const mStart = `${year}-${String(month).padStart(2, "0")}-01`;
@@ -939,10 +940,14 @@ function ReviewFlag({ karyawanList, shifts, userName }: {
   const refresh = useCallback(async () => {
     setLoading(true);
     // 1) Alpha on-demand: assignment (non-libur) yg tanggalnya sudah lewat 17:00 & belum ada absensi
-    const [asgRes, absExist] = await Promise.all([
+    const [asgRes, absExist, lemburRes] = await Promise.all([
       supabase.from("shift_assignment").select("karyawan_id, tanggal, shift_id, is_libur").eq("is_libur", false).not("shift_id", "is", null).gte("tanggal", mStart).lte("tanggal", mEnd),
       supabase.from("absensi").select("karyawan_id, tanggal").gte("tanggal", mStart).lte("tanggal", mEnd),
+      supabase.from("shift_assignment").select("karyawan_id, tanggal, jam_lembur, nominal_lembur").gt("jam_lembur", 0).gte("tanggal", mStart).lte("tanggal", mEnd),
     ]);
+    const lMap: Record<string, { jam: number; nominal: number }> = {};
+    for (const l of ((lemburRes.data as { karyawan_id: string; tanggal: string; jam_lembur: number; nominal_lembur: number }[] | null) ?? [])) lMap[`${l.karyawan_id}|${l.tanggal}`] = { jam: l.jam_lembur, nominal: l.nominal_lembur };
+    setLemburMap(lMap);
     const have = new Set(((absExist.data as { karyawan_id: string; tanggal: string }[] | null) ?? []).map((a) => `${a.karyawan_id}|${a.tanggal}`));
     const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" });
     const nowMin = wibMinutesOfDay(new Date());
@@ -1247,11 +1252,13 @@ function ReviewFlag({ karyawanList, shifts, userName }: {
             <thead>
               <tr className="text-left text-xs text-gray-400 uppercase border-b border-gray-100">
                 <th className="py-2 pr-3">Tanggal</th><th className="py-2 pr-3">Karyawan</th><th className="py-2 pr-3">Shift</th>
-                <th className="py-2 pr-3">Masuk</th><th className="py-2 pr-3">Telat</th><th className="py-2 pr-3">Status</th><th className="py-2 pr-3 text-right">Denda</th>
+                <th className="py-2 pr-3">Masuk</th><th className="py-2 pr-3">Telat</th><th className="py-2 pr-3">Status</th><th className="py-2 pr-3 text-right">Denda</th><th className="py-2 pr-3 text-right">Lembur</th>
               </tr>
             </thead>
             <tbody>
-              {filteredRows.map((r) => (
+              {filteredRows.map((r) => {
+                const lem = lemburMap[`${r.karyawan_id}|${r.tanggal}`];
+                return (
                 <tr key={r.id} className="border-b border-gray-50 last:border-0">
                   <td className="py-2 pr-3 text-gray-600">{formatTglID(r.tanggal)}</td>
                   <td className="py-2 pr-3 font-medium text-gray-800">{r.karyawan?.nama}</td>
@@ -1260,8 +1267,10 @@ function ReviewFlag({ karyawanList, shifts, userName }: {
                   <td className="py-2 pr-3">{r.kategori_telat ? <span className="text-red-500 font-medium">{r.kategori_telat} ({r.menit_telat}′)</span> : <span className="text-gray-300">—</span>}</td>
                   <td className="py-2 pr-3">{STATUS_LABEL[r.status_kehadiran] ?? r.status_kehadiran}{r.denda_dihapus_ampun && <span className="text-green-500 text-[10px]"> (ampun)</span>}</td>
                   <td className="py-2 pr-3 text-right font-semibold text-gray-800">{r.denda ? rupiah(r.denda) : "—"}</td>
+                  <td className="py-2 pr-3 text-right whitespace-nowrap">{lem ? <span className="text-teal-700 font-semibold">{lem.jam}j · Rp {lem.nominal.toLocaleString("id-ID")}</span> : <span className="text-gray-300">—</span>}</td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         )}
@@ -1397,8 +1406,9 @@ function jamWIB(iso: string | null): string {
 }
 
 // ── Modal detail absensi + ubah status manual (dari grid jadwal) ──
-function AbsenDetailModal({ abs, shift, nama, tanggal, userName, onClose, onSaved }: {
+function AbsenDetailModal({ abs, shift, nama, tanggal, userName, assign, onClose, onSaved }: {
   abs: AbsRow | undefined; shift: Shift | null; nama: string; tanggal: string; userName: string;
+  assign?: Assignment | null;
   onClose: () => void; onSaved: () => void;
 }) {
   const [status, setStatus]   = useState(abs?.status_kehadiran ?? "hadir");
@@ -1470,6 +1480,14 @@ function AbsenDetailModal({ abs, shift, nama, tanggal, userName, onClose, onSave
                         : <span className="text-red-600">Rp {abs.denda.toLocaleString("id-ID")}</span>)
                     : "Rp 0"
                 } />
+                {(assign?.jam_lembur ?? 0) > 0 && (
+                  <>
+                    {(assign?.jam_masuk_custom || assign?.jam_pulang_custom) && (
+                      <Row label="Jadwal Lembur" value={`${(assign?.jam_masuk_custom ?? shift?.jam_masuk ?? "").slice(0,5)}-${(assign?.jam_pulang_custom ?? shift?.jam_pulang ?? "").slice(0,5)}`} />
+                    )}
+                    <Row label="Lembur" value={<span className="text-teal-700 font-bold">{assign!.jam_lembur} jam · Rp {(assign!.nominal_lembur ?? 0).toLocaleString("id-ID")}</span>} />
+                  </>
+                )}
               </div>
 
               {/* Foto + lokasi */}
