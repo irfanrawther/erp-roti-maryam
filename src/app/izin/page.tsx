@@ -2,7 +2,8 @@
 import { useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { hashPin } from "@/lib/auth";
-import { FileText, Camera, CheckCircle2, X, AlertTriangle } from "lucide-react";
+import { FileText, Camera, CheckCircle2, X } from "lucide-react";
+import IndonesianDatePicker from "@/components/IndonesianDatePicker";
 
 interface Karyawan { id: string; nama: string; jabatan: string | null }
 
@@ -24,20 +25,16 @@ function wibHM(): { h: number; m: number } {
   if (h === 24) h = 0;
   return { h, m };
 }
-// Tentukan window pengajuan izin
-function evalWindow(): { valid: boolean; tanggalIzin: string | null; pesan: string } {
+// Tanggal izin: default per window (17:00 H-1 → 05:00 H), bisa dipilih hingga 7 hari ke depan.
+function computeDates(): { defaultDate: string; minDate: string; maxDate: string } {
   const { h, m } = wibHM();
   const today = todayWIB();
-  if (h >= 17) {
-    return { valid: true, tanggalIzin: addDaysStr(today, 1), pesan: "" };
-  }
-  if (h < 5 || (h === 5 && m === 0)) {
-    return { valid: true, tanggalIzin: today, pesan: "" };
-  }
-  return {
-    valid: false, tanggalIzin: null,
-    pesan: "Pengajuan izin hanya bisa dilakukan antara jam 17:00 (H-1) sampai 05:00 pagi. Saat ini di luar jam pengajuan izin.",
-  };
+  const besok = addDaysStr(today, 1);
+  const diniHari = h < 5 || (h === 5 && m === 0); // 00:00-05:00 → masih bisa lapor untuk hari ini
+  const defaultDate = diniHari ? today : besok;
+  const minDate     = diniHari ? today : besok;   // sebelum jam 5 pagi bisa untuk hari ini, selain itu mulai besok
+  const maxDate     = addDaysStr(today, 7);        // sampai 7 hari ke depan
+  return { defaultDate, minDate, maxDate };
 }
 
 export default function IzinPage() {
@@ -52,7 +49,9 @@ export default function IzinPage() {
   const [err, setErr] = useState("");
   const [doneTgl, setDoneTgl] = useState("");
 
-  const win = evalWindow();
+  const { defaultDate, minDate, maxDate } = computeDates();
+  const [tglIzin, setTglIzin] = useState(defaultDate);
+  const [showCal, setShowCal] = useState(false);
 
   async function submitPin() {
     setPinErr("");
@@ -77,14 +76,14 @@ export default function IzinPage() {
   }
 
   async function submit() {
-    if (!karyawan || !win.valid || !win.tanggalIzin || !fotoFile) return;
+    if (!karyawan || !tglIzin || !fotoFile) return;
     setErr(""); setBusy(true);
     try {
-      const tgl = win.tanggalIzin;
+      const tgl = tglIzin;
       // Cek duplikat izin aktif
       const { data: dup } = await supabase.from("pengajuan_izin")
         .select("id").eq("karyawan_id", karyawan.id).eq("tanggal_izin", tgl).eq("status", "aktif").maybeSingle();
-      if (dup) { setErr("Kamu sudah mengajukan izin untuk tanggal ini."); setBusy(false); return; }
+      if (dup) { setErr("Kamu sudah lapor izin untuk tanggal ini."); setBusy(false); return; }
 
       // Upload foto bukti
       const path = `izin/${karyawan.id}/${tgl}_${Date.now()}.jpg`;
@@ -115,11 +114,11 @@ export default function IzinPage() {
       setDoneTgl(tgl);
       setStep("done");
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Gagal mengajukan izin");
+      setErr(e instanceof Error ? e.message : "Gagal lapor izin");
     } finally { setBusy(false); }
   }
 
-  function reset() { setStep("pin"); setPin(""); setPinErr(""); setKaryawan(null); setFoto(null); setFotoFile(null); setErr(""); }
+  function reset() { setStep("pin"); setPin(""); setPinErr(""); setKaryawan(null); setFoto(null); setFotoFile(null); setErr(""); setTglIzin(defaultDate); setShowCal(false); }
 
   return (
     <div className="min-h-screen bg-sky-50 flex flex-col items-center justify-center p-4">
@@ -154,20 +153,24 @@ export default function IzinPage() {
               <p className="text-xs text-gray-500">{karyawan.jabatan ?? "—"}</p>
             </div>
 
-            {!win.valid ? (
-              <div className="rounded-xl bg-amber-50 border border-amber-200 p-4 text-center space-y-2">
-                <AlertTriangle size={24} className="text-amber-500 mx-auto" />
-                <p className="text-sm text-amber-700">{win.pesan}</p>
-              </div>
-            ) : (
+            {(
               <>
                 <div className="rounded-xl bg-sky-50 border border-sky-100 p-3 text-center">
-                  <p className="text-xs text-gray-500">Izin akan diajukan untuk tanggal</p>
-                  <p className="text-lg font-bold text-sky-700">{labelTgl(win.tanggalIzin!)}</p>
+                  <p className="text-xs text-gray-500">Izin untuk tanggal</p>
+                  <p className="text-lg font-bold text-sky-700">{labelTgl(tglIzin)}</p>
+                  <button type="button" onClick={() => setShowCal((v) => !v)} className="text-xs font-semibold text-sky-600 hover:text-sky-700 mt-1">
+                    {showCal ? "Tutup kalender" : "Ubah tanggal (bisa sampai 7 hari ke depan)"}
+                  </button>
+                  {showCal && (
+                    <div className="mt-2 text-left">
+                      <IndonesianDatePicker value={tglIzin} accent="sky" minDate={minDate} maxDate={maxDate}
+                        onChange={(v) => { setTglIzin(v); setShowCal(false); }} />
+                    </div>
+                  )}
                 </div>
 
                 <div className="rounded-xl bg-gray-50 border border-gray-100 p-3 text-xs text-gray-600">
-                  Tuliskan di kertas: <b>alasan izin dan keperluan kamu untuk hari ini saja</b>, lalu foto tulisan tersebut. Jika ingin izin lebih dari 1 hari, kamu harus lapor lagi di hari berikutnya.
+                  Tuliskan di kertas: <b>alasan izin dan keperluan kamu untuk hari itu saja</b>, lalu foto tulisan tersebut. Jika ingin izin lebih dari 1 hari, kamu harus lapor lagi untuk tiap tanggalnya.
                 </div>
 
                 {/* Foto bukti */}
@@ -209,8 +212,8 @@ export default function IzinPage() {
         {step === "done" && (
           <div className="bg-white rounded-2xl shadow-sm p-6 text-center space-y-3">
             <CheckCircle2 size={40} className="text-green-500 mx-auto" />
-            <p className="font-bold text-gray-800">Izin Berhasil Diajukan</p>
-            <p className="text-sm text-gray-600">Izin untuk tanggal <b>{labelTgl(doneTgl)}</b> sudah tercatat. Menunggu verifikasi Super Admin.</p>
+            <p className="font-bold text-gray-800">Izin Berhasil Di Submit</p>
+            <p className="text-sm text-gray-600">Izin untuk hari <b>{labelTgl(doneTgl)}</b> sudah tercatat. Menunggu verifikasi Super Admin.</p>
             <button onClick={reset} className="w-full py-3 rounded-xl bg-sky-500 text-white font-semibold hover:bg-sky-600">Selesai</button>
           </div>
         )}

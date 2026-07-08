@@ -6,8 +6,9 @@ const NAMA_BULAN = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Jul
 const HARI_PENDEK = ["Sen", "Sel", "Rab", "Kam", "Jum", "Sab", "Min"]; // mulai Senin
 
 // Kalender Indonesia (hari pertama Senin). value = "YYYY-MM-DD".
-export default function IndonesianDatePicker({ value, onChange, accent = "amber" }: {
-  value: string; onChange: (v: string) => void; accent?: "amber" | "indigo";
+export default function IndonesianDatePicker({ value, onChange, accent = "amber", minDate, maxDate }: {
+  value: string; onChange: (v: string) => void; accent?: "amber" | "indigo" | "sky";
+  minDate?: string; maxDate?: string;
 }) {
   const todayDate = new Date();
   const initDate = value ? new Date(value + "T00:00:00") : todayDate;
@@ -15,8 +16,10 @@ export default function IndonesianDatePicker({ value, onChange, accent = "amber"
   const [viewMonth, setViewMonth] = useState(initDate.getMonth());
   const selected = value ? new Date(value + "T00:00:00") : null;
 
-  const selBg = accent === "indigo" ? "bg-indigo-500" : "bg-amber-500";
-  const todayBg = accent === "indigo" ? "bg-indigo-100 text-indigo-700" : "bg-amber-100 text-amber-700";
+  const selBg = accent === "indigo" ? "bg-indigo-500" : accent === "sky" ? "bg-sky-500" : "bg-amber-500";
+  const todayBg = accent === "indigo" ? "bg-indigo-100 text-indigo-700" : accent === "sky" ? "bg-sky-100 text-sky-700" : "bg-amber-100 text-amber-700";
+  const iso = (day: number) => `${viewYear}-${String(viewMonth + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  const disabled = (day: number) => { const d = iso(day); return (minDate && d < minDate) || (maxDate && d > maxDate); };
 
   function prevMonth() { if (viewMonth === 0) { setViewMonth(11); setViewYear((y) => y - 1); } else setViewMonth((m) => m - 1); }
   function nextMonth() { if (viewMonth === 11) { setViewMonth(0); setViewYear((y) => y + 1); } else setViewMonth((m) => m + 1); }
@@ -47,8 +50,9 @@ export default function IndonesianDatePicker({ value, onChange, accent = "amber"
       <div className="grid grid-cols-7 gap-y-1">
         {cells.map((day, i) =>
           day === null ? <div key={`e-${i}`} /> : (
-            <button key={day} type="button" onClick={() => selectDay(day)}
+            <button key={day} type="button" disabled={disabled(day)} onClick={() => selectDay(day)}
               className={`text-center text-sm py-1.5 rounded-lg font-medium transition-colors ${
+                disabled(day) ? "text-gray-300 cursor-not-allowed" :
                 isSelected(day) ? `${selBg} text-white shadow-sm` :
                 isToday(day) ? todayBg :
                 isMinggu(i) ? "text-red-500 hover:bg-white hover:shadow-sm" : "hover:bg-white hover:shadow-sm text-gray-700"
