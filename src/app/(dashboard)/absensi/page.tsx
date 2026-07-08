@@ -6,7 +6,7 @@ import { getUserSession, canAccessAdmin, hashPin, type UserSession } from "@/lib
 import { homeRoute } from "@/lib/permissions";
 import { ID_MONTHS } from "@/components/RiwayatFilter";
 import { hitungDenda, bulanRange, wibMinutesOfDay, DENDA, JAM_ALPHA, STATUS_LABEL } from "@/lib/absensi";
-import { CalendarClock, Plus, X, Pencil, Trash2, ChevronLeft, ChevronRight, Layers, MapPin, Crosshair, Flag, AlertTriangle, Check, LogOut, FileText, ClipboardList } from "lucide-react";
+import { CalendarClock, Plus, X, Pencil, Trash2, ChevronLeft, ChevronRight, Layers, MapPin, Crosshair, Flag, AlertTriangle, Check, LogOut, FileText, ClipboardList, Clock } from "lucide-react";
 
 interface Karyawan {
   id: string;
@@ -20,7 +20,11 @@ interface Karyawan {
 }
 interface ErpUser { id: string; nama: string }
 interface Shift   { id: string; nama_shift: string; jam_masuk: string; jam_pulang: string }
-interface Assignment { id: string; karyawan_id: string; tanggal: string; shift_id: string | null; is_libur: boolean }
+interface Assignment {
+  id: string; karyawan_id: string; tanggal: string; shift_id: string | null; is_libur: boolean;
+  jam_masuk_custom?: string | null; jam_pulang_custom?: string | null;
+  jam_lembur?: number; nominal_lembur?: number; lembur_catatan?: string | null;
+}
 interface AbsRow {
   id: string; karyawan_id: string; tanggal: string;
   jam_checkin: string | null; jam_checkout: string | null;
@@ -496,6 +500,7 @@ function AturShift({ karyawanList, shifts, shiftIndex, userName }: {
   const [absensi, setAbsensi] = useState<AbsRow[]>([]);
   const [detailCell, setDetailCell] = useState<{ karyawanId: string; tanggal: string } | null>(null);
   const [editCell, setEditCell] = useState<{ karyawanId: string; tanggal: string } | null>(null);
+  const [lemburAssign, setLemburAssign] = useState<Assignment | null>(null);
   const [showMassal, setShowMassal] = useState(false);
   const [busy, setBusy] = useState(false);
   // TEMPORARY - REMOVE BEFORE PRODUCTION
@@ -514,7 +519,7 @@ function AturShift({ karyawanList, shifts, shiftIndex, userName }: {
 
   const fetchAssign = useCallback(async () => {
     const [aRes, absRes] = await Promise.all([
-      supabase.from("shift_assignment").select("id, karyawan_id, tanggal, shift_id, is_libur")
+      supabase.from("shift_assignment").select("id, karyawan_id, tanggal, shift_id, is_libur, jam_masuk_custom, jam_pulang_custom, jam_lembur, nominal_lembur, lembur_catatan")
         .gte("tanggal", monthStart).lte("tanggal", monthEnd),
       supabase.from("absensi").select(ABS_SELECT)
         .gte("tanggal", monthStart).lte("tanggal", monthEnd),
@@ -650,6 +655,8 @@ function AturShift({ karyawanList, shifts, shiftIndex, userName }: {
                       ?? (isMinggu ? { text: "Libur", cls: LIBUR_COLOR } : null);
                     const abs = findAbsen(k.id, tgl);
                     const dot = statusDot(abs);
+                    const asg = findAssign(k.id, tgl);
+                    const adaLembur = (asg?.jam_lembur ?? 0) > 0;
                     return (
                       <td key={d} className={`p-0.5 border-b border-gray-50 text-center ${isMinggu ? "bg-red-50/50" : ""}`}>
                         <div className="relative">
@@ -665,6 +672,12 @@ function AturShift({ karyawanList, shifts, shiftIndex, userName }: {
                               {dot && <span className={`w-2.5 h-2.5 rounded-full border border-white ${dot.cls}`} />}
                               {abs?.is_flagged && <span className="text-[9px] leading-none">⚠️</span>}
                             </button>
+                          )}
+                          {adaLembur && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); if (asg) setLemburAssign(asg); }}
+                              title={`Lembur ${asg?.jam_lembur} jam`}
+                              className="absolute -bottom-1 -left-1 text-[8px] font-bold px-0.5 leading-none rounded bg-teal-500 text-white border border-white">+L</button>
                           )}
                         </div>
                       </td>
@@ -696,9 +709,29 @@ function AturShift({ karyawanList, shifts, shiftIndex, userName }: {
               <button disabled={busy} onClick={() => setCell(editCell.karyawanId, editCell.tanggal, "kosong")}
                 className="py-2 rounded-lg text-sm font-semibold border border-gray-200 text-gray-500 hover:bg-gray-50">Kosongkan</button>
             </div>
+            {(() => {
+              const a = findAssign(editCell.karyawanId, editCell.tanggal);
+              if (!a || a.is_libur || !a.shift_id) return null;
+              return (
+                <button onClick={() => { setLemburAssign(a); setEditCell(null); }}
+                  className="w-full mt-1 py-2 rounded-lg text-sm font-semibold border border-teal-200 bg-teal-50 text-teal-700 hover:bg-teal-100 flex items-center justify-center gap-1.5">
+                  <Clock size={14} /> Set Lembur / Jadwal Khusus
+                </button>
+              );
+            })()}
           </div>
         </div>
       )}
+
+      {lemburAssign && (() => {
+        const shift = shifts.find((s) => s.id === lemburAssign.shift_id) ?? null;
+        const nama = karyawanList.find((k) => k.id === lemburAssign.karyawan_id)?.nama ?? "—";
+        if (!shift) return null;
+        return (
+          <LemburModal assign={lemburAssign} shift={shift} nama={nama} userName={userName}
+            onClose={() => setLemburAssign(null)} onSaved={() => { setLemburAssign(null); fetchAssign(); }} />
+        );
+      })()}
 
       {detailCell && (() => {
         const abs = findAbsen(detailCell.karyawanId, detailCell.tanggal);
@@ -896,6 +929,7 @@ function ReviewFlag({ karyawanList, shifts, userName }: {
   const [fStatus,  setFStatus]  = useState("semua"); // semua | K1 | K2 | K3 | alpha | izin | izin_sakit
   const [coJam,   setCoJam]   = useState<Record<string, string>>({});   // jam pulang manual (lupa checkout)
   const [coMenit, setCoMenit] = useState<Record<string, string>>({});
+  const [pulangCustom, setPulangCustom] = useState<Record<string, string>>({}); // jam pulang custom (lembur)
 
   const daysInMonth = new Date(year, month, 0).getDate();
   const mStart = `${year}-${String(month).padStart(2, "0")}-01`;
@@ -904,10 +938,14 @@ function ReviewFlag({ karyawanList, shifts, userName }: {
   const refresh = useCallback(async () => {
     setLoading(true);
     // 1) Alpha on-demand: assignment (non-libur) yg tanggalnya sudah lewat 17:00 & belum ada absensi
-    const [asgRes, absExist] = await Promise.all([
+    const [asgRes, absExist, pulangRes] = await Promise.all([
       supabase.from("shift_assignment").select("karyawan_id, tanggal, shift_id, is_libur").eq("is_libur", false).not("shift_id", "is", null).gte("tanggal", mStart).lte("tanggal", mEnd),
       supabase.from("absensi").select("karyawan_id, tanggal").gte("tanggal", mStart).lte("tanggal", mEnd),
+      supabase.from("shift_assignment").select("karyawan_id, tanggal, jam_pulang_custom").not("jam_pulang_custom", "is", null).gte("tanggal", mStart).lte("tanggal", mEnd),
     ]);
+    const pMap: Record<string, string> = {};
+    for (const p of ((pulangRes.data as { karyawan_id: string; tanggal: string; jam_pulang_custom: string }[] | null) ?? [])) pMap[`${p.karyawan_id}|${p.tanggal}`] = p.jam_pulang_custom;
+    setPulangCustom(pMap);
     const have = new Set(((absExist.data as { karyawan_id: string; tanggal: string }[] | null) ?? []).map((a) => `${a.karyawan_id}|${a.tanggal}`));
     const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" });
     const nowMin = wibMinutesOfDay(new Date());
@@ -991,6 +1029,24 @@ function ReviewFlag({ karyawanList, shifts, userName }: {
 
   const flagged = rows.filter((r) => r.is_flagged && !r.is_override);
   const lupaCheckout = rows.filter((r) => r.is_checkout_flagged);
+  // Pengingat lembur: checkout > 30 menit dari jam pulang berlaku (custom/normal)
+  const pengingatLembur = rows.filter((r) => {
+    if (r.status_kehadiran !== "hadir" || !r.jam_checkout) return false;
+    const pulang = pulangCustom[`${r.karyawan_id}|${r.tanggal}`] || r.shift_master?.jam_pulang;
+    if (!pulang) return false;
+    const co = new Date(r.jam_checkout);
+    const coDate = co.toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" });
+    const coMin = wibMinutesOfDay(co);
+    const lateMin = coDate !== r.tanggal ? (1440 - jamStrToMin(pulang.slice(0, 5)) + coMin) : (coMin - jamStrToMin(pulang.slice(0, 5)));
+    return lateMin > 30;
+  }).map((r) => {
+    const pulang = (pulangCustom[`${r.karyawan_id}|${r.tanggal}`] || r.shift_master?.jam_pulang || "").slice(0, 5);
+    const co = new Date(r.jam_checkout!);
+    const coDate = co.toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" });
+    const coMin = wibMinutesOfDay(co);
+    const lateMin = coDate !== r.tanggal ? (1440 - jamStrToMin(pulang) + coMin) : (coMin - jamStrToMin(pulang));
+    return { r, pulang, lateMin };
+  });
   // Filter untuk tabel "Semua Absensi"
   const filteredRows = rows.filter((r) => {
     if (fTanggal && r.tanggal !== fTanggal) return false;
@@ -1079,6 +1135,23 @@ function ReviewFlag({ karyawanList, shifts, userName }: {
           </div>
         ))}
       </div>
+
+      {/* SECTION — PENGINGAT LEMBUR (checkout lewat 30 menit) */}
+      {pengingatLembur.length > 0 && (
+        <div className="card space-y-2">
+          <div className="flex items-center gap-2">
+            <Clock size={16} className="text-teal-500" />
+            <h2 className="font-semibold text-gray-700 text-sm">Pengingat Lembur ({pengingatLembur.length})</h2>
+          </div>
+          <p className="text-xs text-gray-400">Checkout lebih dari 30 menit dari jadwal. Perlu ditambah lembur? (tidak dihitung otomatis)</p>
+          {pengingatLembur.map(({ r, pulang, lateMin }) => (
+            <div key={r.id} className="rounded-xl border border-teal-100 bg-teal-50/40 p-3 text-sm">
+              <p className="font-semibold text-gray-800">{r.karyawan?.nama} · {formatTglID(r.tanggal)}</p>
+              <p className="text-xs text-gray-500">Checkout <b>{jamDari(r.jam_checkout)}</b>, jadwal pulang {pulang} — lebih <b className="text-teal-700">{lateMin} menit</b>. Set lembur di tab Atur Jadwal Shift bila perlu.</p>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* SECTION — LUPA CHECK-OUT */}
       <div className="card space-y-3">
@@ -1443,6 +1516,7 @@ function RekapAbsensi({ karyawanList, shifts }: { karyawanList: Karyawan[]; shif
   const [year, setYear]   = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [rows, setRows]   = useState<RekapRow[]>([]);
+  const [lembur, setLembur] = useState<{ karyawan_id: string; jam_lembur: number; nominal_lembur: number }[]>([]);
   const [loading, setLoading] = useState(false);
   const [fotoModal, setFotoModal] = useState<RekapRow | null>(null);
 
@@ -1454,11 +1528,15 @@ function RekapAbsensi({ karyawanList, shifts }: { karyawanList: Karyawan[]; shif
 
   const fetchRekap = useCallback(async () => {
     setLoading(true);
-    const { data } = await supabase.from("absensi")
-      .select("id, karyawan_id, tanggal, jam_checkin, jam_checkout, foto_checkin_url, lat_checkin, lng_checkin, status_kehadiran, denda, denda_dihapus_ampun, menit_telat, kategori_telat")
-      .gte("tanggal", mStart).lte("tanggal", mEnd)
-      .order("tanggal", { ascending: false });
-    setRows((data as RekapRow[]) ?? []);
+    const [aRes, lRes] = await Promise.all([
+      supabase.from("absensi")
+        .select("id, karyawan_id, tanggal, jam_checkin, jam_checkout, foto_checkin_url, lat_checkin, lng_checkin, status_kehadiran, denda, denda_dihapus_ampun, menit_telat, kategori_telat")
+        .gte("tanggal", mStart).lte("tanggal", mEnd).order("tanggal", { ascending: false }),
+      supabase.from("shift_assignment").select("karyawan_id, jam_lembur, nominal_lembur")
+        .gte("tanggal", mStart).lte("tanggal", mEnd).gt("jam_lembur", 0),
+    ]);
+    setRows((aRes.data as RekapRow[]) ?? []);
+    setLembur((lRes.data as { karyawan_id: string; jam_lembur: number; nominal_lembur: number }[]) ?? []);
     setLoading(false);
   }, [mStart, mEnd]);
 
@@ -1482,6 +1560,42 @@ function RekapAbsensi({ karyawanList, shifts }: { karyawanList: Karyawan[]; shif
           {rows.length} absensi · Total denda: <span className="font-bold text-red-600">Rp {totalDenda.toLocaleString("id-ID")}</span>
         </div>
       </div>
+
+      {/* Rekap Lembur per karyawan */}
+      {(() => {
+        const agg: Record<string, { jam: number; nominal: number }> = {};
+        for (const l of lembur) {
+          if (!agg[l.karyawan_id]) agg[l.karyawan_id] = { jam: 0, nominal: 0 };
+          agg[l.karyawan_id].jam += l.jam_lembur; agg[l.karyawan_id].nominal += l.nominal_lembur;
+        }
+        const list = Object.entries(agg).sort((a, b) => b[1].nominal - a[1].nominal);
+        const totalJam = list.reduce((s, [, v]) => s + v.jam, 0);
+        const totalNom = list.reduce((s, [, v]) => s + v.nominal, 0);
+        return (
+          <div className="card space-y-2">
+            <div className="flex items-center justify-between">
+              <h2 className="font-semibold text-gray-700 text-sm flex items-center gap-2"><Clock size={15} className="text-teal-500" /> Rekap Lembur</h2>
+              <span className="text-sm text-gray-500">Total: <b className="text-teal-700">{totalJam} jam · Rp {totalNom.toLocaleString("id-ID")}</b></span>
+            </div>
+            {list.length === 0 ? <p className="text-gray-400 text-sm text-center py-2">Tidak ada lembur bulan ini</p> : (
+              <table className="w-full text-sm">
+                <thead><tr className="text-left text-xs text-gray-400 uppercase border-b border-gray-100">
+                  <th className="py-1.5">Karyawan</th><th className="py-1.5 text-right">Jam Lembur</th><th className="py-1.5 text-right">Nominal</th>
+                </tr></thead>
+                <tbody>
+                  {list.map(([kid, v]) => (
+                    <tr key={kid} className="border-b border-gray-50 last:border-0">
+                      <td className="py-1.5 font-medium text-gray-800">{namaOf(kid)}</td>
+                      <td className="py-1.5 text-right tabular-nums text-gray-600">{v.jam} jam</td>
+                      <td className="py-1.5 text-right tabular-nums font-semibold text-teal-700">Rp {v.nominal.toLocaleString("id-ID")}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        );
+      })()}
 
       <div className="card overflow-x-auto p-0">
         <table className="w-full text-sm">
@@ -1783,6 +1897,101 @@ function JobdeskEditor({ shifts, userName }: { shifts: Shift[]; userName: string
           </div>
         );
       })}
+    </div>
+  );
+}
+
+// ── Modal Set Lembur / Jadwal Khusus (Super Admin) ──
+const RP_LEMBUR = 10000; // per jam
+function jamStrToMin(hhmm: string) { const [h, m] = hhmm.split(":").map(Number); return h * 60 + (m || 0); }
+function LemburModal({ assign, shift, nama, userName, onClose, onSaved }: {
+  assign: Assignment; shift: Shift; nama: string; userName: string;
+  onClose: () => void; onSaved: () => void;
+}) {
+  const normMasuk  = shift.jam_masuk.slice(0, 5);
+  const normPulang = shift.jam_pulang.slice(0, 5);
+  const [masuk,  setMasuk]  = useState(assign.jam_masuk_custom?.slice(0, 5) || normMasuk);
+  const [pulang, setPulang] = useState(assign.jam_pulang_custom?.slice(0, 5) || normPulang);
+  const [catatan, setCatatan] = useState(assign.lembur_catatan ?? "");
+  const [busy, setBusy] = useState(false);
+
+  // lembur depan = normMasuk - masuk (jika lebih awal); belakang = pulang - normPulang (jika lebih malam)
+  const depanMin    = Math.max(0, jamStrToMin(normMasuk) - jamStrToMin(masuk));
+  const belakangMin = Math.max(0, jamStrToMin(pulang) - jamStrToMin(normPulang));
+  const jamLembur   = Math.round((depanMin + belakangMin) / 60);
+  const nominal     = jamLembur * RP_LEMBUR;
+
+  const custom = masuk !== normMasuk || pulang !== normPulang;
+
+  async function simpan() {
+    setBusy(true);
+    await supabase.from("shift_assignment").update({
+      jam_masuk_custom:  custom ? masuk  : null,
+      jam_pulang_custom: custom ? pulang : null,
+      jam_lembur: jamLembur, nominal_lembur: nominal,
+      lembur_set_by: userName, lembur_catatan: catatan || null,
+    }).eq("id", assign.id);
+    setBusy(false);
+    onSaved();
+  }
+  async function hapusLembur() {
+    setBusy(true);
+    await supabase.from("shift_assignment").update({
+      jam_masuk_custom: null, jam_pulang_custom: null, jam_lembur: 0, nominal_lembur: 0, lembur_catatan: null,
+    }).eq("id", assign.id);
+    setBusy(false);
+    onSaved();
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl w-full max-w-sm p-5 space-y-3" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="font-bold text-gray-800">Set Lembur / Jadwal Khusus</h2>
+            <p className="text-xs text-gray-500">{nama} · {formatTglID(assign.tanggal)}</p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
+        </div>
+
+        <div className="rounded-lg bg-gray-50 p-2.5 text-sm">
+          <span className="text-gray-500">Shift normal:</span> <b className="text-gray-700">{shift.nama_shift} ({normMasuk}-{normPulang})</b>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="label">Jam Masuk Custom</label>
+            <input type="time" className="input" value={masuk} onChange={(e) => setMasuk(e.target.value)} />
+          </div>
+          <div>
+            <label className="label">Jam Pulang Custom</label>
+            <input type="time" className="input" value={pulang} onChange={(e) => setPulang(e.target.value)} />
+          </div>
+        </div>
+
+        <div className="rounded-xl bg-teal-50 border border-teal-100 p-3 text-center">
+          {jamLembur > 0 ? (
+            <p className="text-teal-700 font-bold">Lembur {jamLembur} jam = Rp {nominal.toLocaleString("id-ID")}</p>
+          ) : (
+            <p className="text-gray-400 text-sm">Belum ada jam lembur (jadwal masih normal)</p>
+          )}
+          {(depanMin > 0 || belakangMin > 0) && (
+            <p className="text-[11px] text-gray-500 mt-0.5">Depan {Math.round(depanMin / 60)} jam · Belakang {Math.round(belakangMin / 60)} jam</p>
+          )}
+        </div>
+
+        <div>
+          <label className="label">Catatan (opsional)</label>
+          <input className="input" value={catatan} onChange={(e) => setCatatan(e.target.value)} placeholder="mis. bantu produksi tambahan" />
+        </div>
+
+        <div className="flex gap-2 pt-1">
+          {(assign.jam_lembur ?? 0) > 0 && (
+            <button onClick={hapusLembur} disabled={busy} className="btn-secondary text-red-600">Hapus</button>
+          )}
+          <button onClick={simpan} disabled={busy} className="btn-primary flex-1">{busy ? "Menyimpan…" : "Simpan"}</button>
+        </div>
+      </div>
     </div>
   );
 }

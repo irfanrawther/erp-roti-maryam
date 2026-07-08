@@ -290,12 +290,14 @@ function CheckInView({ karyawan, shiftName, setting, onCancel, onDone }: {
       if (up.error) throw new Error("Gagal upload foto: " + up.error.message);
       const fotoUrl = supabase.storage.from("foto-absensi").getPublicUrl(path).data.publicUrl;
 
-      // shift hari ini (jika ada) + jam masuk
+      // shift hari ini (jika ada) + jam masuk (pakai custom lembur jika di-set)
       const { data: sa } = await supabase.from("shift_assignment")
-        .select("shift_id, is_libur, shift_master:shift_id(jam_masuk)")
+        .select("shift_id, is_libur, jam_masuk_custom, shift_master:shift_id(jam_masuk)")
         .eq("karyawan_id", karyawan.id).eq("tanggal", today).maybeSingle();
-      const saRow = sa as { shift_id: string | null; is_libur: boolean; shift_master: { jam_masuk: string } | null } | null;
+      const saRow = sa as { shift_id: string | null; is_libur: boolean; jam_masuk_custom: string | null; shift_master: { jam_masuk: string } | null } | null;
       const adaShift = !!saRow && !saRow.is_libur && !!saRow.shift_id && !!saRow.shift_master;
+      // Jam masuk resmi = custom (lembur depan) jika ada, kalau tidak jam normal
+      const jamMasukResmi = saRow?.jam_masuk_custom || saRow?.shift_master?.jam_masuk || "";
 
       const checkinDate = new Date();
       const payload: Record<string, unknown> = {
@@ -313,7 +315,7 @@ function CheckInView({ karyawan, shiftName, setting, onCancel, onDone }: {
           .select("id", { count: "exact", head: true })
           .eq("karyawan_id", karyawan.id).eq("kategori_telat", "K1").eq("denda_dihapus_ampun", true)
           .gte("tanggal", start).lte("tanggal", end);
-        const res = hitungDenda(saRow!.shift_master!.jam_masuk, checkinDate, count ?? 0);
+        const res = hitungDenda(jamMasukResmi, checkinDate, count ?? 0);
         payload.menit_telat         = res.menit_telat;
         payload.kategori_telat      = res.kategori_telat;
         payload.denda               = res.denda;
