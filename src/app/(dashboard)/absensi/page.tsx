@@ -929,7 +929,8 @@ function ReviewFlag({ karyawanList, shifts, userName }: {
   const [fStatus,  setFStatus]  = useState("semua"); // semua | K1 | K2 | K3 | alpha | izin | izin_sakit
   const [coJam,   setCoJam]   = useState<Record<string, string>>({});   // jam pulang manual (lupa checkout)
   const [coMenit, setCoMenit] = useState<Record<string, string>>({});
-  const [pulangCustom, setPulangCustom] = useState<Record<string, string>>({}); // jam pulang custom (lembur)
+  const [lmMasuk,  setLmMasuk]  = useState<Record<string, string>>({}); // lembur: jam masuk seharusnya per flag
+  const [lmPulang, setLmPulang] = useState<Record<string, string>>({});
 
   const daysInMonth = new Date(year, month, 0).getDate();
   const mStart = `${year}-${String(month).padStart(2, "0")}-01`;
@@ -938,14 +939,10 @@ function ReviewFlag({ karyawanList, shifts, userName }: {
   const refresh = useCallback(async () => {
     setLoading(true);
     // 1) Alpha on-demand: assignment (non-libur) yg tanggalnya sudah lewat 17:00 & belum ada absensi
-    const [asgRes, absExist, pulangRes] = await Promise.all([
+    const [asgRes, absExist] = await Promise.all([
       supabase.from("shift_assignment").select("karyawan_id, tanggal, shift_id, is_libur").eq("is_libur", false).not("shift_id", "is", null).gte("tanggal", mStart).lte("tanggal", mEnd),
       supabase.from("absensi").select("karyawan_id, tanggal").gte("tanggal", mStart).lte("tanggal", mEnd),
-      supabase.from("shift_assignment").select("karyawan_id, tanggal, jam_pulang_custom").not("jam_pulang_custom", "is", null).gte("tanggal", mStart).lte("tanggal", mEnd),
     ]);
-    const pMap: Record<string, string> = {};
-    for (const p of ((pulangRes.data as { karyawan_id: string; tanggal: string; jam_pulang_custom: string }[] | null) ?? [])) pMap[`${p.karyawan_id}|${p.tanggal}`] = p.jam_pulang_custom;
-    setPulangCustom(pMap);
     const have = new Set(((absExist.data as { karyawan_id: string; tanggal: string }[] | null) ?? []).map((a) => `${a.karyawan_id}|${a.tanggal}`));
     const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" });
     const nowMin = wibMinutesOfDay(new Date());
@@ -1024,29 +1021,40 @@ function ReviewFlag({ karyawanList, shifts, userName }: {
     refresh();
   }
 
+  // Set jam masuk/pulang sebenarnya (lembur) langsung dari flag → recalc telat + catat lembur
+  async function simpanLemburFlag(row: AbsRow) {
+    const sm = row.shift_master; if (!sm) return;
+    const normMasuk = sm.jam_masuk.slice(0, 5), normPulang = sm.jam_pulang.slice(0, 5);
+    const masuk  = lmMasuk[row.id]  || normMasuk;
+    const pulang = lmPulang[row.id] || normPulang;
+    const custom = masuk !== normMasuk || pulang !== normPulang;
+    const depan    = Math.max(0, jamStrToMin(normMasuk) - jamStrToMin(masuk));
+    const belakang = Math.max(0, jamStrToMin(pulang) - jamStrToMin(normPulang));
+    const jamLembur = Math.round((depan + belakang) / 60);
+    const nominal   = jamLembur * 10000;
+    // update shift_assignment (custom + lembur)
+    await supabase.from("shift_assignment").update({
+      jam_masuk_custom: custom ? masuk : null, jam_pulang_custom: custom ? pulang : null,
+      jam_lembur: jamLembur, nominal_lembur: nominal, lembur_set_by: userName,
+    }).eq("karyawan_id", row.karyawan_id).eq("tanggal", row.tanggal);
+    // recalc telat pakai jam masuk baru → flag "kepagian/telat" ikut update
+    if (row.jam_checkin) {
+      const k1 = await countK1Ampun(row.karyawan_id, row.tanggal, row.id);
+      const res = hitungDenda(masuk, new Date(row.jam_checkin), k1);
+      await supabase.from("absensi").update({
+        menit_telat: res.menit_telat, kategori_telat: res.kategori_telat,
+        denda: res.denda, denda_dihapus_ampun: res.denda_dihapus_ampun,
+        is_flagged: res.is_flagged, flag_reason: res.flag_reason,
+      }).eq("id", row.id);
+    }
+    refresh();
+  }
+
   function prevMonth() { setFTanggal(""); if (month === 1) { setMonth(12); setYear((y) => y - 1); } else setMonth((m) => m - 1); }
   function nextMonth() { setFTanggal(""); if (month === 12) { setMonth(1); setYear((y) => y + 1); } else setMonth((m) => m + 1); }
 
   const flagged = rows.filter((r) => r.is_flagged && !r.is_override);
   const lupaCheckout = rows.filter((r) => r.is_checkout_flagged);
-  // Pengingat lembur: checkout > 30 menit dari jam pulang berlaku (custom/normal)
-  const pengingatLembur = rows.filter((r) => {
-    if (r.status_kehadiran !== "hadir" || !r.jam_checkout) return false;
-    const pulang = pulangCustom[`${r.karyawan_id}|${r.tanggal}`] || r.shift_master?.jam_pulang;
-    if (!pulang) return false;
-    const co = new Date(r.jam_checkout);
-    const coDate = co.toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" });
-    const coMin = wibMinutesOfDay(co);
-    const lateMin = coDate !== r.tanggal ? (1440 - jamStrToMin(pulang.slice(0, 5)) + coMin) : (coMin - jamStrToMin(pulang.slice(0, 5)));
-    return lateMin > 30;
-  }).map((r) => {
-    const pulang = (pulangCustom[`${r.karyawan_id}|${r.tanggal}`] || r.shift_master?.jam_pulang || "").slice(0, 5);
-    const co = new Date(r.jam_checkout!);
-    const coDate = co.toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" });
-    const coMin = wibMinutesOfDay(co);
-    const lateMin = coDate !== r.tanggal ? (1440 - jamStrToMin(pulang) + coMin) : (coMin - jamStrToMin(pulang));
-    return { r, pulang, lateMin };
-  });
   // Filter untuk tabel "Semua Absensi"
   const filteredRows = rows.filter((r) => {
     if (fTanggal && r.tanggal !== fTanggal) return false;
@@ -1109,6 +1117,34 @@ function ReviewFlag({ karyawanList, shifts, userName }: {
                 <input className="input py-1.5 text-sm" value={catatanMap[r.id] ?? ""} onChange={(e) => setCatatanMap((m) => ({ ...m, [r.id]: e.target.value }))} placeholder="opsional" />
               </div>
             </div>
+            {/* Set jam sebenarnya / lembur */}
+            {r.shift_master && (() => {
+              const normMasuk = r.shift_master.jam_masuk.slice(0, 5), normPulang = r.shift_master.jam_pulang.slice(0, 5);
+              const masuk  = lmMasuk[r.id]  || normMasuk;
+              const pulang = lmPulang[r.id] || normPulang;
+              const depan    = Math.max(0, jamStrToMin(normMasuk) - jamStrToMin(masuk));
+              const belakang = Math.max(0, jamStrToMin(pulang) - jamStrToMin(normPulang));
+              const jamLembur = Math.round((depan + belakang) / 60);
+              return (
+                <div className="rounded-lg border border-teal-100 bg-teal-50/50 p-2.5 space-y-2">
+                  <p className="text-[11px] font-semibold text-teal-700 flex items-center gap-1"><Clock size={12} /> Set jam masuk/pulang sebenarnya (lembur)</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[10px] text-gray-500">Jam masuk seharusnya</label>
+                      <input type="time" className="input py-1 text-sm" value={masuk} onChange={(e) => setLmMasuk((m) => ({ ...m, [r.id]: e.target.value }))} />
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-gray-500">Jam pulang seharusnya</label>
+                      <input type="time" className="input py-1 text-sm" value={pulang} onChange={(e) => setLmPulang((m) => ({ ...m, [r.id]: e.target.value }))} />
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] text-gray-500">Normal {normMasuk}-{normPulang} · {jamLembur > 0 ? <b className="text-teal-700">Lembur {jamLembur} jam = Rp {(jamLembur * 10000).toLocaleString("id-ID")}</b> : "tanpa lembur"}</span>
+                    <button onClick={() => simpanLemburFlag(r)} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-teal-500 text-white hover:bg-teal-600">Simpan & Recalc</button>
+                  </div>
+                </div>
+              );
+            })()}
             <div className="flex flex-wrap gap-2">
               <button onClick={() => hapusDenda(r)} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-amber-100 text-amber-700 hover:bg-amber-200">Hapus Denda</button>
               <button onClick={() => selesaiReview(r)} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-green-500 text-white hover:bg-green-600">Selesai Review</button>
@@ -1135,23 +1171,6 @@ function ReviewFlag({ karyawanList, shifts, userName }: {
           </div>
         ))}
       </div>
-
-      {/* SECTION — PENGINGAT LEMBUR (checkout lewat 30 menit) */}
-      {pengingatLembur.length > 0 && (
-        <div className="card space-y-2">
-          <div className="flex items-center gap-2">
-            <Clock size={16} className="text-teal-500" />
-            <h2 className="font-semibold text-gray-700 text-sm">Pengingat Lembur ({pengingatLembur.length})</h2>
-          </div>
-          <p className="text-xs text-gray-400">Checkout lebih dari 30 menit dari jadwal. Perlu ditambah lembur? (tidak dihitung otomatis)</p>
-          {pengingatLembur.map(({ r, pulang, lateMin }) => (
-            <div key={r.id} className="rounded-xl border border-teal-100 bg-teal-50/40 p-3 text-sm">
-              <p className="font-semibold text-gray-800">{r.karyawan?.nama} · {formatTglID(r.tanggal)}</p>
-              <p className="text-xs text-gray-500">Checkout <b>{jamDari(r.jam_checkout)}</b>, jadwal pulang {pulang} — lebih <b className="text-teal-700">{lateMin} menit</b>. Set lembur di tab Atur Jadwal Shift bila perlu.</p>
-            </div>
-          ))}
-        </div>
-      )}
 
       {/* SECTION — LUPA CHECK-OUT */}
       <div className="card space-y-3">
