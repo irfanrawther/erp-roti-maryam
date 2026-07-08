@@ -5,7 +5,7 @@ import { supabase } from "@/lib/supabase";
 import { getUserSession, canAccessAdmin, hashPin, type UserSession } from "@/lib/auth";
 import { homeRoute } from "@/lib/permissions";
 import { ID_MONTHS } from "@/components/RiwayatFilter";
-import { hitungDenda, bulanRange, wibMinutesOfDay, DENDA, JAM_ALPHA, STATUS_LABEL } from "@/lib/absensi";
+import { hitungDenda, bulanRange, wibMinutesOfDay, DENDA, DENDA_IZIN_MANUAL, JAM_ALPHA, STATUS_LABEL } from "@/lib/absensi";
 import { CalendarClock, Plus, X, Pencil, Trash2, ChevronLeft, ChevronRight, Layers, MapPin, Crosshair, Flag, AlertTriangle, Check, LogOut, FileText, ClipboardList, Clock } from "lucide-react";
 
 interface Karyawan {
@@ -1018,8 +1018,10 @@ function ReviewFlag({ karyawanList, shifts, userName }: {
     refresh();
   }
   async function setStatusIzin(row: AbsRow, status: "izin" | "izin_sakit") {
+    // Sementara (sebelum fitur Lapor Izin jalan): Ubah → Izin kena denda 50rb; Izin Sakit denda 0
+    const denda = status === "izin" ? DENDA_IZIN_MANUAL : 0;
     await supabase.from("absensi").update({
-      status_kehadiran: status, denda: 0, is_flagged: false, is_override: true,
+      status_kehadiran: status, denda, is_flagged: false, is_override: true,
       override_by: userName, override_at: new Date().toISOString(),
       catatan_super_admin: catatanMap[row.id] || row.catatan_super_admin || null,
     }).eq("id", row.id);
@@ -1170,8 +1172,8 @@ function ReviewFlag({ karyawanList, shifts, userName }: {
           <div key={r.id} className="rounded-xl border border-orange-100 bg-orange-50/40 p-3 space-y-2">
             <p className="font-semibold text-sm text-gray-800">{r.karyawan?.nama} · {formatTglID(r.tanggal)} <span className="text-orange-600">· Alpha · Denda {rupiah(r.denda)}</span></p>
             <div className="flex flex-wrap gap-2">
-              <button onClick={() => setStatusIzin(r, "izin")} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-blue-100 text-blue-700 hover:bg-blue-200">Ubah → Izin</button>
-              <button onClick={() => setStatusIzin(r, "izin_sakit")} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-purple-100 text-purple-700 hover:bg-purple-200">Ubah → Izin Sakit</button>
+              <button onClick={() => setStatusIzin(r, "izin")} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-blue-100 text-blue-700 hover:bg-blue-200">Ubah → Izin (Denda Rp 50.000)</button>
+              <button onClick={() => setStatusIzin(r, "izin_sakit")} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-purple-100 text-purple-700 hover:bg-purple-200">Ubah → Izin Sakit (Denda Rp 0)</button>
             </div>
           </div>
         ))}
@@ -1286,7 +1288,7 @@ function OverrideManual({ karyawanList, shifts, userName, onDone, countK1Ampun }
 }) {
   const [karyawanId, setKaryawanId] = useState("");
   const [tanggal, setTanggal] = useState("");
-  const [mode, setMode] = useState<"hadir" | "izin" | "izin_sakit">("hadir");
+  const [mode, setMode] = useState<"hadir" | "izin" | "izin_sakit" | "alpha">("hadir");
   const [jam, setJam] = useState("");
   const [menit, setMenit] = useState("");
   const [catatan, setCatatan] = useState("");
@@ -1324,7 +1326,10 @@ function OverrideManual({ karyawanList, shifts, userName, onDone, countK1Ampun }
           payload.denda = res.denda; payload.denda_dihapus_ampun = res.denda_dihapus_ampun;
         } else { payload.denda = 0; payload.kategori_telat = null; payload.menit_telat = 0; }
       } else {
-        payload.status_kehadiran = mode; payload.denda = 0; payload.kategori_telat = null; payload.menit_telat = 0;
+        // izin → denda 50rb (sementara); izin_sakit → 0; alpha → 200rb
+        payload.status_kehadiran = mode;
+        payload.denda = mode === "alpha" ? DENDA.ALPHA : mode === "izin" ? DENDA_IZIN_MANUAL : 0;
+        payload.kategori_telat = null; payload.menit_telat = 0;
       }
 
       const { error } = await supabase.from("absensi").upsert(payload, { onConflict: "karyawan_id,tanggal" });
@@ -1355,8 +1360,9 @@ function OverrideManual({ karyawanList, shifts, userName, onDone, countK1Ampun }
           <label className="label">Mode</label>
           <select className="input" value={mode} onChange={(e) => setMode(e.target.value as typeof mode)}>
             <option value="hadir">Hadir (input jam masuk)</option>
-            <option value="izin">Izin</option>
-            <option value="izin_sakit">Izin Sakit</option>
+            <option value="izin">Izin (Denda Rp 50.000)</option>
+            <option value="izin_sakit">Izin Sakit (Denda Rp 0)</option>
+            <option value="alpha">Alpha (Denda Rp 200.000)</option>
           </select>
         </div>
         {mode === "hadir" && (

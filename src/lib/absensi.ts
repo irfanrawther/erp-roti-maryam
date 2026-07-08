@@ -2,7 +2,9 @@
 // Logika denda telat, kategori, flag anomali — Tahap 3 Absensi
 // ============================================================
 
-export const DENDA = { K1: 10000, K2: 20000, K3: 30000, ALPHA: 50000 } as const;
+export const DENDA = { K1: 10000, K2: 20000, K3: 30000, ALPHA: 200000 } as const;
+// Denda izin manual sementara (sebelum fitur Lapor Izin berjalan)
+export const DENDA_IZIN_MANUAL = 50000;
 export const JATAH_AMPUN_K1 = 3;       // jatah ampun K1 per bulan
 export const KEPAGIAN_LIMIT = 45;      // > 45 menit sebelum shift → flag kepagian
 export const JAM_ALPHA = 17;           // lewat 17:00 WIB & tidak check-in → alpha
