@@ -1931,6 +1931,24 @@ function LemburModal({ assign, shift, nama, userName, onClose, onSaved }: {
       jam_lembur: jamLembur, nominal_lembur: nominal,
       lembur_set_by: userName, lembur_catatan: catatan || null,
     }).eq("id", assign.id);
+
+    // Recompute telat/flag absensi yg sudah ada (retroaktif) pakai jam masuk baru
+    const { data: ab } = await supabase.from("absensi")
+      .select("id, jam_checkin, status_kehadiran").eq("karyawan_id", assign.karyawan_id).eq("tanggal", assign.tanggal).maybeSingle();
+    const abRow = ab as { id: string; jam_checkin: string | null; status_kehadiran: string } | null;
+    if (abRow?.jam_checkin && abRow.status_kehadiran === "hadir") {
+      const jamMasukResmi = custom ? masuk : normMasuk;
+      const { start, end } = bulanRange(assign.tanggal);
+      const { count } = await supabase.from("absensi").select("id", { count: "exact", head: true })
+        .eq("karyawan_id", assign.karyawan_id).eq("kategori_telat", "K1").eq("denda_dihapus_ampun", true)
+        .gte("tanggal", start).lte("tanggal", end).neq("id", abRow.id);
+      const res = hitungDenda(jamMasukResmi, new Date(abRow.jam_checkin), count ?? 0);
+      await supabase.from("absensi").update({
+        menit_telat: res.menit_telat, kategori_telat: res.kategori_telat,
+        denda: res.denda, denda_dihapus_ampun: res.denda_dihapus_ampun,
+        is_flagged: res.is_flagged, flag_reason: res.flag_reason,
+      }).eq("id", abRow.id);
+    }
     setBusy(false);
     onSaved();
   }
