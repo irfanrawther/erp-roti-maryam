@@ -234,7 +234,7 @@ export default function IzinSakitPage() {
                 </div>
 
                 <div className="rounded-xl bg-red-50 border border-red-100 p-3 text-xs text-red-600">
-                  Surat dokter/klinik/RS <b>wajib</b> diupload maksimal <b>jam 20:00 hari ini</b>. Jika tidak, status menjadi <b>Alpha + denda Rp 50.000</b>.
+                  Surat dokter/klinik/RS <b>wajib</b> diupload maksimal <b>jam 20:00 hari ini</b>. Jika tidak, status menjadi <b>Alpha</b>.
                 </div>
 
                 <FotoPicker label="Upload Surat Dokter (opsional sekarang)" />
