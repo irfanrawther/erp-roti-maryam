@@ -5,6 +5,7 @@ import { supabase } from "@/lib/supabase";
 import { getUserSession, canAccessAdmin } from "@/lib/auth";
 import { getCapabilities, homeRoute } from "@/lib/permissions";
 import { formatAngka, formatBahan, formatTanggal, formatTanggalWaktu } from "@/lib/utils";
+import { tambahPoin, pelanggaranOtomatisId } from "@/lib/poin";
 import { ChevronLeft, ChevronRight, X, CheckCircle, History, RotateCcw, AlertTriangle, Trash2, ChevronDown, CalendarDays } from "lucide-react";
 import BahanBakuView from "@/components/BahanBakuView";
 import { RiwayatFilter, getRiwayatRange } from "@/components/RiwayatFilter";
@@ -409,6 +410,21 @@ export default function PackingPage() {
     }
   }
 
+  // ── Poin otomatis reject basi: semua karyawan shift di tanggal produksi +0.5 ──
+  async function applyPoinRejectBasi(tglProduksi: string) {
+    const pid = await pelanggaranOtomatisId("Reject basi (bukan reject teknikal)");
+    if (!pid) return;
+    // guard duplikat: sudah diberikan untuk tanggal ini?
+    const { data: existing } = await supabase.from("poin_karyawan").select("id").eq("pelanggaran_id", pid).eq("tanggal", tglProduksi).limit(1);
+    if (existing && existing.length) return;
+    const { data: asg } = await supabase.from("shift_assignment").select("karyawan_id")
+      .eq("tanggal", tglProduksi).eq("is_libur", false).not("shift_id", "is", null);
+    const ids = Array.from(new Set(((asg as { karyawan_id: string }[] | null) ?? []).map((a) => a.karyawan_id)));
+    for (const kid of ids) {
+      await tambahPoin({ karyawan_id: kid, pelanggaran_id: pid, poin: 0.5, sumber: "otomatis", tanggal: tglProduksi, catatan: `Reject basi tanggal ${tglProduksi}` });
+    }
+  }
+
   // ── Catat selisih packing untuk review Super Admin ──────────
   async function recordSelisihPacking(batch: Batch, totalDirendam: number, totalAktual: number, selisihPcs: number, catatan: string) {
     if (!user) return;
@@ -661,6 +677,11 @@ export default function PackingPage() {
         catatan_reject: data.catatan || null, updated_by: user.id, status_updated_at: new Date().toISOString(),
       }).eq("id", batch.id);
       if (updateErr) throw new Error(updateErr.message);
+
+      // 4. Poin otomatis reject basi → semua karyawan yang shift di tanggal produksi +0.5
+      if (data.rejectLain > 0 && data.alasanRejectLain === "basi") {
+        await applyPoinRejectBasi(batch.tanggal_produksi);
+      }
 
       setInputStokModal(null);
       showToast("✓ Stok berhasil diinput");

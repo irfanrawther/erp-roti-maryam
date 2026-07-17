@@ -2,7 +2,8 @@
 import { useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { hashPin } from "@/lib/auth";
-import { UserCircle, Clock, ClipboardList, CalendarDays, FileText, CheckCircle2, AlertCircle, X, ExternalLink } from "lucide-react";
+import { UserCircle, Clock, ClipboardList, CalendarDays, FileText, CheckCircle2, AlertCircle, X, ExternalLink, ShieldAlert } from "lucide-react";
+import { kuartalSekarang, labelKuartal, POIN_PER_SP } from "@/lib/poin";
 
 interface Karyawan { id: string; nama: string; jabatan: string | null }
 interface ShiftInfo { nama_shift: string; jam_masuk: string; jam_pulang: string }
@@ -43,6 +44,9 @@ export default function DashboardSayaPage() {
   const [absensi, setAbsensi] = useState<AbsRow[]>([]);
   const [jobdesks, setJobdesks] = useState<Jobdesk[]>([]);
   const [docs, setDocs] = useState<DokItem[]>([]);
+  const [poinRows, setPoinRows] = useState<{ tanggal: string; poin: number; sumber: string; master_pelanggaran: { nama_pelanggaran: string } | null; catatan: string | null }[]>([]);
+  const [spLevel, setSpLevel] = useState(0);
+  const [spBefore, setSpBefore] = useState(0);
 
   const today = todayWIB();
   const monthStart = today.slice(0, 8) + "01";
@@ -59,7 +63,7 @@ export default function DashboardSayaPage() {
       const kar = k as Karyawan; setKaryawan(kar);
 
       const upTo = addDaysStr(today, 7);
-      const [asg, abs, jd, dk, pj] = await Promise.all([
+      const [asg, abs, jd, dk, pj, pn, spr] = await Promise.all([
         supabase.from("shift_assignment").select("tanggal, is_libur, shift_id, shift_master:shift_id(nama_shift, jam_masuk, jam_pulang)")
           .eq("karyawan_id", kar.id).gte("tanggal", monthStart).lte("tanggal", upTo).order("tanggal"),
         supabase.from("absensi").select("tanggal, jam_checkin, jam_checkout, menit_telat, status_kehadiran, is_flagged, is_override, shift_master:shift_id(nama_shift)")
@@ -67,6 +71,8 @@ export default function DashboardSayaPage() {
         supabase.from("jobdesk_shift").select("shift_id, jobdesk_awal, jobdesk_akhir"),
         supabase.from("dokumen").select("id, nama, versi, wajib_ttd, file_pdf_url").eq("is_aktif", true).order("created_at"),
         supabase.from("dokumen_persetujuan").select("dokumen_id, dokumen_versi, disetujui_at, tipe, tanda_tangan_url").eq("karyawan_id", kar.id),
+        supabase.from("poin_karyawan").select("tanggal, poin, sumber, catatan, master_pelanggaran:pelanggaran_id(nama_pelanggaran)").eq("karyawan_id", kar.id).eq("kuartal", kuartalSekarang()).order("tanggal", { ascending: false }),
+        supabase.from("status_sp_karyawan").select("level_sp, kuartal_kena").eq("karyawan_id", kar.id).eq("is_aktif", true),
       ]);
       setAssigns((asg.data as unknown as AssignRow[]) ?? []);
       setAbsensi((abs.data as unknown as AbsRow[]) ?? []);
@@ -75,6 +81,10 @@ export default function DashboardSayaPage() {
       setDocs(((dk.data as { id: string; nama: string; versi: number; wajib_ttd: boolean; file_pdf_url: string | null }[] | null) ?? []).map((d) => ({
         ...d, approved: persetujuan.find((p) => p.dokumen_id === d.id && p.dokumen_versi === d.versi) ?? null,
       })));
+      setPoinRows((pn.data as unknown as { tanggal: string; poin: number; sumber: string; master_pelanggaran: { nama_pelanggaran: string } | null; catatan: string | null }[]) ?? []);
+      const sps = (spr.data as { level_sp: number; kuartal_kena: string }[] | null) ?? [];
+      setSpLevel(sps.reduce((mx, s) => Math.max(mx, s.level_sp), 0));
+      setSpBefore(sps.filter((s) => s.kuartal_kena !== kuartalSekarang()).reduce((mx, s) => Math.max(mx, s.level_sp), 0));
       setStep("dash");
     } catch { setPinErr("Terjadi kesalahan, coba lagi"); }
     finally { setBusy(false); }
@@ -119,6 +129,44 @@ export default function DashboardSayaPage() {
               <div className="w-12 h-12 rounded-full bg-violet-100 flex items-center justify-center"><UserCircle size={28} className="text-violet-500" /></div>
               <div><p className="font-bold text-gray-800">{karyawan.nama}</p><p className="text-xs text-gray-500">{karyawan.jabatan ?? "Karyawan"}</p></div>
             </div>
+
+            {/* SECTION POIN */}
+            {(() => {
+              const totalPoin = poinRows.reduce((s, p) => s + Number(p.poin), 0);
+              const curSP = Math.min(3, spBefore + Math.floor(totalPoin / POIN_PER_SP));
+              const dalamLevel = totalPoin % POIN_PER_SP;
+              const nextSP = curSP + 1;
+              return (
+                <div className="bg-white rounded-2xl shadow-sm p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h2 className="font-bold text-gray-700 text-sm flex items-center gap-2"><ShieldAlert size={16} className="text-red-500" /> Poin Pelanggaran</h2>
+                    <span className="text-xs text-gray-400">{labelKuartal(kuartalSekarang())}</span>
+                  </div>
+                  <div className="flex items-end justify-between">
+                    <p className="text-3xl font-bold text-gray-800">{totalPoin} <span className="text-sm font-normal text-gray-400">poin</span></p>
+                    {spLevel > 0 && <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${spLevel >= 3 ? "bg-red-100 text-red-600" : "bg-orange-100 text-orange-600"}`}>Status: SP{spLevel}</span>}
+                  </div>
+                  {curSP < 3 ? (
+                    <div>
+                      <div className="h-2 rounded-full bg-gray-100 overflow-hidden">
+                        <div className="h-full bg-amber-400" style={{ width: `${(dalamLevel / POIN_PER_SP) * 100}%` }} />
+                      </div>
+                      <p className="text-xs text-gray-500 mt-1">{dalamLevel} dari {POIN_PER_SP} poin menuju SP{nextSP}</p>
+                    </div>
+                  ) : <p className="text-xs text-red-600 font-semibold">SP3 tercapai — perlu tindak lanjut manajemen.</p>}
+                  {poinRows.length > 0 && (
+                    <div className="pt-1 border-t border-gray-50 space-y-1">
+                      {poinRows.map((p, i) => (
+                        <div key={i} className="flex items-center justify-between gap-2 text-xs py-0.5">
+                          <span className="text-gray-600 truncate">{hariTglPendek(p.tanggal)} · {p.master_pelanggaran?.nama_pelanggaran ?? p.catatan ?? "Pelanggaran"}</span>
+                          <span className="font-semibold text-red-500 shrink-0">+{p.poin}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* SECTION 1 — Jadwal */}
             <div className="bg-white rounded-2xl shadow-sm p-4 space-y-3">

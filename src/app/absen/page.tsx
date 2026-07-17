@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { hashPin } from "@/lib/auth";
 import { hitungDenda, bulanRange } from "@/lib/absensi";
+import { poinTelat } from "@/lib/poin";
 import { Clock, MapPin, Camera, CheckCircle2, LogIn, LogOut, X, RefreshCw } from "lucide-react";
 
 interface Karyawan { id: string; nama: string; jabatan: string | null }
@@ -309,6 +310,8 @@ function CheckInView({ karyawan, shiftName, setting, onCancel, onDone }: {
       };
 
       // Hitung denda telat (hanya jika ada shift ter-assign)
+      let telatKategori: string | null = null;
+      let telatAmpun = false;
       if (adaShift) {
         const { start, end } = bulanRange(today);
         const { count } = await supabase.from("absensi")
@@ -322,10 +325,15 @@ function CheckInView({ karyawan, shiftName, setting, onCancel, onDone }: {
         payload.denda_dihapus_ampun = res.denda_dihapus_ampun;
         payload.is_flagged          = res.is_flagged;
         payload.flag_reason         = res.flag_reason;
+        telatKategori = res.kategori_telat;
+        telatAmpun = res.denda_dihapus_ampun;
       }
 
       const { error } = await supabase.from("absensi").upsert(payload, { onConflict: "karyawan_id,tanggal" });
       if (error) throw new Error(error.message);
+
+      // Poin otomatis telat (K1 non-ampun 0.5, K2 1, K3 3)
+      await poinTelat(karyawan.id, telatKategori, telatAmpun, today);
 
       streamRef.current?.getTracks().forEach((t) => t.stop());
       onDone();

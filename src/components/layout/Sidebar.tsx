@@ -15,6 +15,7 @@ import {
   AlertTriangle,
   CalendarClock,
   FileText,
+  ShieldAlert,
   LogOut,
   X,
 } from "lucide-react";
@@ -39,11 +40,13 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
     { href: "/produk-reject", label: "Produk Reject", icon: AlertTriangle,   show: caps.produkReject },
     { href: "/stock-opname",  label: "Stock Opname",  icon: ClipboardList,   show: caps.stockOpname },
     { href: "/daftar-izin",   label: "Daftar Izin",   icon: CalendarClock,   show: caps.daftarIzin },
+    { href: "/lapor-pelanggaran", label: "Lapor Pelanggaran", icon: ShieldAlert, show: caps.laporPelanggaran },
   ].filter((i) => i.show);
 
   const adminItems = [
     { href: "/absensi",     label: "Absensi",             icon: CalendarClock, show: caps.absensi },
     { href: "/kelola-dokumen", label: "Dokumen",          icon: FileText, show: caps.dokumen },
+    { href: "/pelanggaran",   label: "Pelanggaran & Poin", icon: ShieldAlert, show: caps.pelanggaran },
     { href: "/admin/users", label: "Kelola User",         icon: Users,    show: caps.kelolaUser },
     { href: "/admin/resep", label: "Master Resep Adonan", icon: BookOpen, show: caps.masterResep },
   ].filter((i) => i.show);
