@@ -1108,9 +1108,6 @@ export default function PackingPage() {
                         <div className="flex-1 min-w-0 pr-2">
                           <p className="font-semibold text-gray-800 text-sm">{sku?.nama_brand} — {sku?.varian}</p>
                           <p className="text-xs text-gray-400">{formatTanggal(b.tanggal_produksi)}</p>
-                          {caps.isSuperAdmin && (
-                            <p className="text-[10px] text-gray-300 mt-0.5">Diinput pada: {formatTanggalWaktu(b.created_at)}</p>
-                          )}
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
                           <span className={statusClass[b.status]}>{statusLabel[b.status]}</span>
@@ -1163,7 +1160,12 @@ export default function PackingPage() {
                           </>
                         )}
                       </div>
-                      <p className="text-xs text-gray-400 mt-1.5">Oleh: <span className="font-medium text-gray-500">{(b.users as { nama: string })?.nama ?? "—"}</span></p>
+                      <div className="mt-1.5 space-y-0.5">
+                        <p className="text-xs text-gray-400">Adonan &amp; Rendam · <span className="font-medium text-gray-500">{(b.users as { nama: string })?.nama ?? "—"}</span> · {formatTanggalWaktu(b.created_at)}</p>
+                        {hasPackingData && row && (
+                          <p className="text-xs text-gray-400">Packing · <span className="font-medium text-gray-500">{row.users?.nama ?? "—"}</span> · {formatTanggalWaktu(row.created_at)}</p>
+                        )}
+                      </div>
 
                       {/* Detail selisih (Super Admin) */}
                       {isExpanded && hasPackingData && (() => {
