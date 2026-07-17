@@ -51,9 +51,7 @@ export default function DaftarIzinPage() {
       .eq("status", "aktif")
       .gte("tanggal_izin", range.start).lte("tanggal_izin", range.end)
       .order("tanggal_izin", { ascending: true });
-    // Sembunyikan sakit yang suratnya telat (sudah jadi alpha)
-    const list = ((data as unknown as IzinRow[]) ?? []).filter((r) => r.status_surat !== "surat_telat");
-    setRows(list);
+    setRows((data as unknown as IzinRow[]) ?? []);
     setLoading(false);
   }, [range.start, range.end]);
 
