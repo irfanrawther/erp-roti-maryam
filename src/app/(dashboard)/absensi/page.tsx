@@ -7,6 +7,7 @@ import { homeRoute } from "@/lib/permissions";
 import { ID_MONTHS } from "@/components/RiwayatFilter";
 import IndonesianDatePicker from "@/components/IndonesianDatePicker";
 import { hitungDenda, bulanRange, wibMinutesOfDay, DENDA, DENDA_IZIN_MANUAL, JAM_ALPHA, STATUS_LABEL } from "@/lib/absensi";
+import { dendaIzinBiasa, type KatLapor } from "@/lib/izin";
 import { CalendarClock, Plus, X, Pencil, Trash2, ChevronLeft, ChevronRight, Layers, MapPin, Crosshair, Flag, AlertTriangle, Check, LogOut, FileText, ClipboardList, Clock } from "lucide-react";
 
 interface Karyawan {
@@ -1751,7 +1752,7 @@ interface IzinRow {
   id: string; karyawan_id: string; tanggal_izin: string; jenis: string;
   foto_bukti_url: string | null; foto_surat_url: string | null;
   status: string; status_surat: string | null; batas_upload_surat: string | null;
-  override_by: string | null;
+  override_by: string | null; denda?: number; kategori_lapor?: string | null; sakit_ke?: number | null;
   dibatalkan_oleh: string | null; catatan_pembatalan: string | null; created_at: string;
   karyawan: { nama: string } | null;
 }
@@ -1763,22 +1764,25 @@ function PengajuanIzin({ userName }: { userName: string }) {
 
   const fetchRows = useCallback(async () => {
     setLoading(true);
-    // 1) Deadline surat 20:00: sakit menunggu_surat yg lewat batas → surat_telat + alpha
+    // 1) Deadline surat 20:00 (Pasal 3b): surat tidak masuk → dianggap IZIN BIASA, denda mengikuti
+    //    waktu lapor (Pasal 3a) berdasarkan kategori_lapor yang tersimpan.
     const nowIso = new Date().toISOString();
     const { data: telat } = await supabase.from("pengajuan_izin")
-      .select("id, karyawan_id, tanggal_izin")
+      .select("id, karyawan_id, tanggal_izin, kategori_lapor")
       .eq("jenis", "izin_sakit").eq("status", "aktif").eq("status_surat", "menunggu_surat")
       .lt("batas_upload_surat", nowIso);
-    for (const t of ((telat as { id: string; karyawan_id: string; tanggal_izin: string }[] | null) ?? [])) {
-      await supabase.from("pengajuan_izin").update({ status_surat: "surat_telat" }).eq("id", t.id);
+    for (const t of ((telat as { id: string; karyawan_id: string; tanggal_izin: string; kategori_lapor: string | null }[] | null) ?? [])) {
+      const kat = (t.kategori_lapor as KatLapor) ?? "tepat_waktu";
+      const dendaBiasa = dendaIzinBiasa(kat, false);
+      await supabase.from("pengajuan_izin").update({ status_surat: "surat_telat", denda: dendaBiasa }).eq("id", t.id);
       await supabase.from("absensi").upsert({
         karyawan_id: t.karyawan_id, tanggal: t.tanggal_izin,
-        status_kehadiran: "alpha", denda: DENDA.ALPHA,
+        status_kehadiran: "izin", denda: dendaBiasa,
       }, { onConflict: "karyawan_id,tanggal" });
     }
     // 2) Fetch lengkap
     const { data } = await supabase.from("pengajuan_izin")
-      .select("id, karyawan_id, tanggal_izin, jenis, foto_bukti_url, foto_surat_url, status, status_surat, batas_upload_surat, override_by, dibatalkan_oleh, catatan_pembatalan, created_at, karyawan:karyawan_id(nama)")
+      .select("id, karyawan_id, tanggal_izin, jenis, foto_bukti_url, foto_surat_url, status, status_surat, batas_upload_surat, override_by, denda, kategori_lapor, sakit_ke, dibatalkan_oleh, catatan_pembatalan, created_at, karyawan:karyawan_id(nama)")
       .order("tanggal_izin", { ascending: false }).limit(200);
     setRows((data as unknown as IzinRow[]) ?? []);
     setLoading(false);
@@ -1789,7 +1793,7 @@ function PengajuanIzin({ userName }: { userName: string }) {
   const suratBadge = (r: IzinRow): { text: string; cls: string } | null => {
     if (r.jenis !== "izin_sakit") return null;
     if (r.status_surat === "surat_masuk") return { text: "Surat masuk", cls: "bg-green-100 text-green-700" };
-    if (r.status_surat === "surat_telat") return { text: "Surat telat → Alpha", cls: "bg-red-100 text-red-600" };
+    if (r.status_surat === "surat_telat") return { text: "Surat telat → Izin Biasa", cls: "bg-orange-100 text-orange-600" };
     return { text: "Menunggu surat", cls: "bg-amber-100 text-amber-700" };
   };
 
@@ -1848,7 +1852,11 @@ function PengajuanIzin({ userName }: { userName: string }) {
             ) : <div className="w-14 h-14 rounded-lg bg-gray-100 flex items-center justify-center text-gray-300 text-[10px] text-center shrink-0">belum ada</div>}
             <div className="min-w-0">
               <p className="font-semibold text-sm text-gray-800">{r.karyawan?.nama ?? "—"}</p>
-              <p className="text-xs text-gray-500">{hariTglID(r.tanggal_izin)} · {jenisLabel(r.jenis)}</p>
+              <p className="text-xs text-gray-500">{hariTglID(r.tanggal_izin)} · {jenisLabel(r.jenis)}{r.jenis === "izin_sakit" && r.sakit_ke ? ` (sakit ke-${r.sakit_ke})` : ""}</p>
+              <p className="text-xs mt-0.5">
+                {r.kategori_lapor && <span className="text-gray-400">{r.kategori_lapor === "tepat_waktu" ? "Tepat waktu" : r.kategori_lapor === "telat_sebelum_shift" ? "Telat (sblm shift)" : "Setelah shift"} · </span>}
+                <span className={`font-semibold ${(r.denda ?? 0) > 0 ? "text-red-600" : "text-green-600"}`}>Denda Rp {(r.denda ?? 0).toLocaleString("id-ID")}</span>
+              </p>
               {badge && <span className={`inline-block mt-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${badge.cls}`}>{badge.text}</span>}
               {r.override_by && <p className="text-[11px] text-green-600 mt-0.5">Override sakit oleh {r.override_by}</p>}
               {r.status === "dibatalkan" && (

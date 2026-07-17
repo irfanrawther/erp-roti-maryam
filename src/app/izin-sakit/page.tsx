@@ -3,10 +3,12 @@ import { useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { hashPin } from "@/lib/auth";
 import { Stethoscope, Camera, CheckCircle2, X, AlertTriangle, Clock } from "lucide-react";
+import { bulanRange } from "@/lib/absensi";
+import { katLapor, dendaIzinSakit } from "@/lib/izin";
 
 interface Karyawan { id: string; nama: string; jabatan: string | null }
 interface ShiftHari { nama_shift: string; jam_masuk: string; jam_pulang: string }
-interface SakitAktif { id: string; tanggal_izin: string; status_surat: string | null }
+interface SakitAktif { id: string; tanggal_izin: string; status_surat: string | null; kategori_lapor: string | null; sakit_ke: number | null; batas_upload_surat: string | null }
 
 function labelTgl(iso: string) {
   return new Date(`${iso}T00:00:00+07:00`).toLocaleDateString("id-ID", {
@@ -62,7 +64,7 @@ export default function IzinSakitPage() {
 
       // 1) Cek sakit aktif yang masih menunggu surat (susulan)
       const { data: sk } = await supabase.from("pengajuan_izin")
-        .select("id, tanggal_izin, status_surat")
+        .select("id, tanggal_izin, status_surat, kategori_lapor, sakit_ke, batas_upload_surat")
         .eq("karyawan_id", kar.id).eq("jenis", "izin_sakit").eq("status", "aktif")
         .eq("status_surat", "menunggu_surat").gte("tanggal_izin", todayWIB())
         .order("tanggal_izin", { ascending: true }).limit(1).maybeSingle();
@@ -122,10 +124,21 @@ export default function IzinSakitPage() {
       let statusSurat = "menunggu_surat";
       if (fotoFile) { fotoUrl = await uploadFotoSurat(karyawan.id, H); statusSurat = "surat_masuk"; }
 
+      // Pasal 3b: sakit ke-berapa bulan ini + kategori waktu lapor + denda
+      const { start, end } = bulanRange(H);
+      const { count: sakitSebelum } = await supabase.from("pengajuan_izin")
+        .select("id", { count: "exact", head: true })
+        .eq("karyawan_id", karyawan.id).eq("jenis", "izin_sakit").eq("status", "aktif")
+        .gte("tanggal_izin", start).lte("tanggal_izin", end);
+      const sakitKe = (sakitSebelum ?? 0) + 1;
+      const kat = katLapor(H, shiftHari.jam_masuk, Date.now());
+      const denda = dendaIzinSakit(kat, sakitKe, !!fotoFile);
+
       const { error: insErr } = await supabase.from("pengajuan_izin").insert({
         karyawan_id: karyawan.id, tanggal_izin: H, jenis: "izin_sakit", status: "aktif",
         foto_surat_url: fotoUrl, status_surat: statusSurat, batas_upload_surat: batas,
         surat_uploaded_at: fotoFile ? new Date().toISOString() : null,
+        denda, kategori_lapor: kat, sakit_ke: sakitKe,
       });
       if (insErr) throw new Error(insErr.message);
 
@@ -134,9 +147,9 @@ export default function IzinSakitPage() {
         .select("id, jam_checkin").eq("karyawan_id", karyawan.id).eq("tanggal", H).maybeSingle();
       const abRow = ab as { id: string; jam_checkin: string | null } | null;
       if (!abRow) {
-        await supabase.from("absensi").insert({ karyawan_id: karyawan.id, tanggal: H, status_kehadiran: "izin_sakit", denda: 0 });
+        await supabase.from("absensi").insert({ karyawan_id: karyawan.id, tanggal: H, status_kehadiran: "izin_sakit", denda });
       } else if (!abRow.jam_checkin) {
-        await supabase.from("absensi").update({ status_kehadiran: "izin_sakit", denda: 0 }).eq("id", abRow.id);
+        await supabase.from("absensi").update({ status_kehadiran: "izin_sakit", denda }).eq("id", abRow.id);
       }
 
       setDoneMsg(fotoFile
@@ -153,9 +166,14 @@ export default function IzinSakitPage() {
     setErr(""); setBusy(true);
     try {
       const fotoUrl = await uploadFotoSurat(karyawan.id, susulan.tanggal_izin);
+      // Surat masuk sebelum 20:00 → recompute denda (Pasal 3b: bisa jadi Rp0 jika sakit pertama & tepat waktu)
+      const suratOnTime = !susulan.batas_upload_surat || Date.now() <= new Date(susulan.batas_upload_surat).getTime();
+      const kat = (susulan.kategori_lapor as import("@/lib/izin").KatLapor) ?? "tepat_waktu";
+      const dendaBaru = dendaIzinSakit(kat, susulan.sakit_ke ?? 1, suratOnTime);
       await supabase.from("pengajuan_izin").update({
-        foto_surat_url: fotoUrl, status_surat: "surat_masuk", surat_uploaded_at: new Date().toISOString(),
+        foto_surat_url: fotoUrl, status_surat: "surat_masuk", surat_uploaded_at: new Date().toISOString(), denda: dendaBaru,
       }).eq("id", susulan.id);
+      await supabase.from("absensi").update({ denda: dendaBaru }).eq("karyawan_id", karyawan.id).eq("tanggal", susulan.tanggal_izin);
       setDoneMsg(`Surat dokter untuk ${labelTgl(susulan.tanggal_izin)} berhasil diupload.`);
       setStep("done");
     } catch (e) { setErr(e instanceof Error ? e.message : "Gagal upload surat"); }

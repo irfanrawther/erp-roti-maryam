@@ -1,9 +1,10 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
 import { hashPin } from "@/lib/auth";
-import { FileText, Camera, CheckCircle2, X } from "lucide-react";
+import { FileText, Camera, CheckCircle2, X, AlertTriangle } from "lucide-react";
 import IndonesianDatePicker from "@/components/IndonesianDatePicker";
+import { katLapor, dendaIzinBiasa } from "@/lib/izin";
 
 interface Karyawan { id: string; nama: string; jabatan: string | null }
 
@@ -52,6 +53,23 @@ export default function IzinPage() {
   const { defaultDate, minDate, maxDate } = computeDates();
   const [tglIzin, setTglIzin] = useState(defaultDate);
   const [showCal, setShowCal] = useState(false);
+  const [kuotaOleh, setKuotaOleh] = useState<string | null>(null); // nama karyawan lain yg sudah izin di tgl ini
+
+  // Cek kuota izin harian (maks 1 orang/hari, Pasal 3c)
+  useEffect(() => {
+    if (step !== "form" || !karyawan) { setKuotaOleh(null); return; }
+    let active = true;
+    supabase.from("pengajuan_izin")
+      .select("karyawan:karyawan_id(nama)")
+      .eq("tanggal_izin", tglIzin).eq("jenis", "izin_biasa").eq("status", "aktif")
+      .neq("karyawan_id", karyawan.id).limit(1)
+      .then(({ data }) => {
+        if (!active) return;
+        const row = data?.[0] as { karyawan: { nama: string } | null } | undefined;
+        setKuotaOleh(row?.karyawan?.nama ?? null);
+      });
+    return () => { active = false; };
+  }, [tglIzin, karyawan, step]);
 
   async function submitPin() {
     setPinErr("");
@@ -91,10 +109,23 @@ export default function IzinPage() {
       if (up.error) throw new Error("Gagal upload foto: " + up.error.message);
       const fotoUrl = supabase.storage.from("foto-absensi").getPublicUrl(path).data.publicUrl;
 
+      // Pasal 3a + 3c: hitung denda izin biasa berdasarkan waktu lapor vs shift pada tanggal izin
+      let denda = 0; let kategori: string | null = null;
+      const { data: sa } = await supabase.from("shift_assignment")
+        .select("is_libur, shift_master:shift_id(jam_masuk)")
+        .eq("karyawan_id", karyawan.id).eq("tanggal", tgl).maybeSingle();
+      const saRow = sa as { is_libur: boolean; shift_master: { jam_masuk: string } | null } | null;
+      if (saRow && !saRow.is_libur && saRow.shift_master) {
+        const kat = katLapor(tgl, saRow.shift_master.jam_masuk, Date.now());
+        kategori = kat;
+        denda = dendaIzinBiasa(kat, !!kuotaOleh);
+      }
+
       // Insert pengajuan izin
       const { error: insErr } = await supabase.from("pengajuan_izin").insert({
         karyawan_id: karyawan.id, tanggal_izin: tgl, jenis: "izin_biasa",
         foto_bukti_url: fotoUrl, status: "aktif",
+        denda, kategori_lapor: kategori, kuota_penuh: !!kuotaOleh,
       });
       if (insErr) throw new Error(insErr.message);
 
@@ -104,10 +135,10 @@ export default function IzinPage() {
       const abRow = ab as { id: string; jam_checkin: string | null } | null;
       if (!abRow) {
         await supabase.from("absensi").insert({
-          karyawan_id: karyawan.id, tanggal: tgl, status_kehadiran: "izin", denda: 0,
+          karyawan_id: karyawan.id, tanggal: tgl, status_kehadiran: "izin", denda,
         });
       } else if (!abRow.jam_checkin) {
-        await supabase.from("absensi").update({ status_kehadiran: "izin", denda: 0 }).eq("id", abRow.id);
+        await supabase.from("absensi").update({ status_kehadiran: "izin", denda }).eq("id", abRow.id);
       }
       // jika sudah check-in → biarkan hadir (check-in override izin)
 
@@ -169,6 +200,15 @@ export default function IzinPage() {
                   )}
                 </div>
 
+                {kuotaOleh && (
+                  <div className="rounded-xl bg-amber-50 border-2 border-amber-300 p-3 text-xs text-amber-800 space-y-1.5">
+                    <p className="font-bold flex items-center gap-1.5"><AlertTriangle size={14} className="text-amber-500" /> Kuota izin harian sudah terisi</p>
+                    <p>Sudah ada karyawan lain (<b>{kuotaOleh}</b>) yang izin di tanggal ini. Dalam 1 hari kerja hanya <b>1 orang</b> yang boleh izin biasa.</p>
+                    <p>Jika kamu tetap lapor izin, kamu <b>wajib masuk</b> — atau dikenakan <b>denda sesuai Pasal 3a + tambahan Rp100.000</b>.</p>
+                    <p className="text-amber-600">Disarankan pilih tanggal lain, atau tetap masuk kerja.</p>
+                  </div>
+                )}
+
                 <div className="rounded-xl bg-gray-50 border border-gray-100 p-3 text-xs text-gray-600">
                   Tuliskan di kertas: <b>alasan izin dan keperluan kamu untuk hari itu saja</b>, lalu foto tulisan tersebut. Jika ingin izin lebih dari 1 hari, kamu harus lapor lagi untuk tiap tanggalnya.
                 </div>
@@ -198,7 +238,7 @@ export default function IzinPage() {
 
                 <button onClick={submit} disabled={busy || !fotoFile}
                   className="w-full py-3 rounded-xl bg-sky-500 text-white font-semibold hover:bg-sky-600 disabled:opacity-40 flex items-center justify-center gap-2">
-                  <FileText size={18} /> {busy ? "Mengirim..." : "Lapor Izin"}
+                  <FileText size={18} /> {busy ? "Mengirim..." : (kuotaOleh ? "Tetap Lapor Izin" : "Lapor Izin")}
                 </button>
                 {!fotoFile && <p className="text-[11px] text-gray-400 text-center">Foto bukti wajib sebelum submit</p>}
               </>
