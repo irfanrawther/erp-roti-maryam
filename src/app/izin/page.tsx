@@ -73,7 +73,7 @@ export default function IzinPage() {
       const saRow = sRes.data as { is_libur: boolean; shift_master: { jam_masuk: string } | null } | null;
       if (saRow && !saRow.is_libur && saRow.shift_master) {
         const kat = katLapor(tglIzin, saRow.shift_master.jam_masuk, Date.now());
-        setDendaInfo({ denda: dendaIzinBiasa(kat, !!kuota), kat, adaShift: true });
+        setDendaInfo({ denda: dendaIzinBiasa(kat, false), kat, adaShift: true });
       } else {
         setDendaInfo({ denda: 0, kat: "tepat_waktu", adaShift: false });
       }
@@ -225,7 +225,7 @@ export default function IzinPage() {
                       , sehingga sesuai Pasal 3a denda kamu <b>Rp {dendaInfo.denda.toLocaleString("id-ID")}</b>.
                     </p>
                     {kuotaOleh && (
-                      <p className="text-red-700">⚠️ Sudah ada karyawan lain (<b>{kuotaOleh}</b>) yang izin di tanggal ini — kuota harian (1 orang) terisi, jadi ada <b>tambahan Rp100.000</b>. Disarankan pilih tanggal lain atau tetap masuk.</p>
+                      <p className="text-red-700">⚠️ Sudah ada karyawan lain (<b>{kuotaOleh}</b>) yang izin di tanggal ini — kuota harian (1 orang) terisi, jadi ada <b>tambahan Rp100.000</b>. Total denda kamu jadi <b>Rp {(dendaInfo.denda + 100000).toLocaleString("id-ID")}</b>. Disarankan pilih tanggal lain atau tetap masuk.</p>
                     )}
                     <p className="text-amber-600">Hindari lapor izin telat untuk menghindari denda yang lebih besar.</p>
                   </div>
