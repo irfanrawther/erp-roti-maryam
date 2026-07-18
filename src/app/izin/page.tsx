@@ -56,10 +56,11 @@ export default function IzinPage() {
   const [kuotaOleh, setKuotaOleh] = useState<string | null>(null); // nama karyawan lain yg sudah izin di tgl ini
   const [dendaInfo, setDendaInfo] = useState<{ denda: number; kat: KatLapor; adaShift: boolean } | null>(null);
   const [sudahIzin, setSudahIzin] = useState(false); // karyawan ini sudah lapor izin di tgl terpilih
+  const [lewatBatas, setLewatBatas] = useState(false); // hari ini & sudah >2 jam setelah shift mulai → tidak bisa izin, otomatis alpha
 
   // Cek kuota (Pasal 3c) + hitung preview denda izin biasa (Pasal 3a) sesuai waktu lapor
   useEffect(() => {
-    if (step !== "form" || !karyawan) { setKuotaOleh(null); setDendaInfo(null); setSudahIzin(false); return; }
+    if (step !== "form" || !karyawan) { setKuotaOleh(null); setDendaInfo(null); setSudahIzin(false); setLewatBatas(false); return; }
     let active = true;
     (async () => {
       const [kRes, sRes, dupRes] = await Promise.all([
@@ -78,8 +79,13 @@ export default function IzinPage() {
       if (saRow && !saRow.is_libur && saRow.shift_master) {
         const kat = katLapor(tglIzin, saRow.shift_master.jam_masuk, Date.now());
         setDendaInfo({ denda: dendaIzinBiasa(kat, false), kat, adaShift: true });
+        // Batas lapor izin di hari yang sama: maksimal 2 jam setelah shift mulai
+        const jm = saRow.shift_master.jam_masuk.slice(0, 8).padEnd(8, ":00");
+        const shiftStart = new Date(`${tglIzin}T${jm}+07:00`).getTime();
+        setLewatBatas(tglIzin === todayWIB() && Date.now() > shiftStart + 2 * 3600_000);
       } else {
         setDendaInfo({ denda: 0, kat: "tepat_waktu", adaShift: false });
+        setLewatBatas(false);
       }
     })();
     return () => { active = false; };
@@ -109,6 +115,7 @@ export default function IzinPage() {
 
   async function submit() {
     if (!karyawan || !tglIzin || !fotoFile) return;
+    if (lewatBatas) { setErr("Sudah lewat 2 jam setelah shift mulai — tidak bisa lapor izin untuk hari ini (otomatis Alpha)."); return; }
     setErr(""); setBusy(true);
     try {
       const tgl = tglIzin;
@@ -221,7 +228,14 @@ export default function IzinPage() {
                   </div>
                 )}
 
-                {!sudahIzin && dendaInfo?.adaShift && (
+                {!sudahIzin && lewatBatas && (
+                  <div className="rounded-xl bg-red-50 border-2 border-red-300 p-3 text-sm text-red-700 flex items-start gap-2">
+                    <AlertTriangle size={18} className="text-red-500 shrink-0 mt-0.5" />
+                    <span>Batas lapor izin untuk hari ini adalah <b>2 jam setelah shift mulai</b>. Waktu itu sudah lewat, jadi kamu <b>tidak bisa lapor izin</b> untuk hari ini dan otomatis dihitung <b>Alpha</b>. Untuk izin, pilih tanggal berikutnya.</span>
+                  </div>
+                )}
+
+                {!sudahIzin && !lewatBatas && dendaInfo?.adaShift && (
                   <div className="rounded-xl bg-amber-50 border-2 border-amber-300 p-3 text-xs text-amber-800 space-y-1.5">
                     <p className="font-bold flex items-center gap-1.5"><AlertTriangle size={14} className="text-amber-500" /> Izin biasa dikenakan denda</p>
                     <p>
@@ -242,12 +256,12 @@ export default function IzinPage() {
                   </div>
                 )}
 
-                {!sudahIzin && (
+                {!sudahIzin && !lewatBatas && (
                 <div className="rounded-xl bg-gray-50 border border-gray-100 p-3 text-xs text-gray-600">
                   Tuliskan di kertas: <b>alasan izin dan keperluan kamu untuk hari itu saja</b>, lalu foto tulisan tersebut. Jika ingin izin lebih dari 1 hari, kamu harus lapor lagi untuk tiap tanggalnya.
                 </div>
                 )}
-                {!sudahIzin && (
+                {!sudahIzin && !lewatBatas && (
                 <>
                 {/* Foto bukti */}
                 {foto ? (
