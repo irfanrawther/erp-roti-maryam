@@ -213,11 +213,21 @@ export default function IzinPage() {
                 {dendaInfo?.adaShift && (
                   <div className="rounded-xl bg-amber-50 border-2 border-amber-300 p-3 text-xs text-amber-800 space-y-1.5">
                     <p className="font-bold flex items-center gap-1.5"><AlertTriangle size={14} className="text-amber-500" /> Izin biasa dikenakan denda</p>
-                    <p>Berdasarkan waktu lapor kamu sekarang (<b>{labelKatLapor(dendaInfo.kat).toLowerCase()}</b>), izin ini dikenakan <b>Denda Rp {dendaInfo.denda.toLocaleString("id-ID")}</b>.</p>
+                    <p>
+                      Berdasarkan <b>Pasal 3a</b>, jika kamu submit izin sekarang masih terhitung{" "}
+                      <b>
+                        {dendaInfo.kat === "tepat_waktu"
+                          ? "sebelum deadline (tepat waktu)"
+                          : dendaInfo.kat === "telat_sebelum_shift"
+                          ? "telat (lewat deadline, tapi sebelum shift mulai)"
+                          : "telat (setelah shift mulai)"}
+                      </b>
+                      , sehingga sesuai Pasal 3a denda kamu <b>Rp {dendaInfo.denda.toLocaleString("id-ID")}</b>.
+                    </p>
                     {kuotaOleh && (
                       <p className="text-red-700">⚠️ Sudah ada karyawan lain (<b>{kuotaOleh}</b>) yang izin di tanggal ini — kuota harian (1 orang) terisi, jadi ada <b>tambahan Rp100.000</b>. Disarankan pilih tanggal lain atau tetap masuk.</p>
                     )}
-                    <p className="text-amber-600">Lapor lebih awal = denda lebih ringan. Denda diproses oleh Super Admin.</p>
+                    <p className="text-amber-600">Hindari lapor izin telat untuk menghindari denda yang lebih besar.</p>
                   </div>
                 )}
 
