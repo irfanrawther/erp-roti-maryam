@@ -31,9 +31,9 @@ function computeDates(): { defaultDate: string; minDate: string; maxDate: string
   const { h, m } = wibHM();
   const today = todayWIB();
   const besok = addDaysStr(today, 1);
-  const diniHari = h < 5 || (h === 5 && m === 0); // 00:00-05:00 → masih bisa lapor untuk hari ini
-  const defaultDate = diniHari ? today : besok;
-  const minDate     = diniHari ? today : besok;   // sebelum jam 5 pagi bisa untuk hari ini, selain itu mulai besok
+  void h; void m; void besok;
+  const defaultDate = today;                       // default ke hari ini
+  const minDate     = today;                        // hari ini tetap bisa dipilih sampai 23:59
   const maxDate     = addDaysStr(today, 7);        // sampai 7 hari ke depan
   return { defaultDate, minDate, maxDate };
 }
