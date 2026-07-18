@@ -1754,12 +1754,22 @@ interface IzinRow {
   status: string; status_surat: string | null; batas_upload_surat: string | null;
   override_by: string | null; denda?: number; kategori_lapor?: string | null; sakit_ke?: number | null;
   dibatalkan_oleh: string | null; catatan_pembatalan: string | null; created_at: string;
+  surat_uploaded_at?: string | null;
   foto_verified?: boolean; foto_verified_oleh?: string | null;
   denda_dihapus?: boolean; denda_dihapus_oleh?: string | null; catatan_denda?: string | null;
   karyawan: { nama: string } | null;
 }
+// "18 Jul 2026, 10.28" (WIB)
+function fmtWaktuWIB(iso: string | null): string {
+  if (!iso) return "-";
+  return new Date(iso).toLocaleString("id-ID", {
+    timeZone: "Asia/Jakarta", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit",
+  });
+}
+interface ShiftInfo { nama_shift: string | null; jam_masuk: string; jam_pulang: string; is_libur: boolean }
 function PengajuanIzin({ userName }: { userName: string }) {
   const [rows, setRows] = useState<IzinRow[]>([]);
+  const [shiftMap, setShiftMap] = useState<Record<string, ShiftInfo>>({});
   const [loading, setLoading] = useState(false);
   const [fotoModal, setFotoModal] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -1802,9 +1812,25 @@ function PengajuanIzin({ userName }: { userName: string }) {
     }
     // 2) Fetch lengkap
     const { data } = await supabase.from("pengajuan_izin")
-      .select("id, karyawan_id, tanggal_izin, jenis, foto_bukti_url, foto_surat_url, status, status_surat, batas_upload_surat, override_by, denda, kategori_lapor, sakit_ke, dibatalkan_oleh, catatan_pembatalan, created_at, foto_verified, foto_verified_oleh, denda_dihapus, denda_dihapus_oleh, catatan_denda, karyawan:karyawan_id(nama)")
+      .select("id, karyawan_id, tanggal_izin, jenis, foto_bukti_url, foto_surat_url, status, status_surat, batas_upload_surat, override_by, denda, kategori_lapor, sakit_ke, dibatalkan_oleh, catatan_pembatalan, created_at, surat_uploaded_at, foto_verified, foto_verified_oleh, denda_dihapus, denda_dihapus_oleh, catatan_denda, karyawan:karyawan_id(nama)")
       .order("tanggal_izin", { ascending: false }).limit(200);
-    setRows((data as unknown as IzinRow[]) ?? []);
+    const list = (data as unknown as IzinRow[]) ?? [];
+    setRows(list);
+
+    // Shift pada tanggal izin (untuk ditampilkan di kartu)
+    const kids = Array.from(new Set(list.map((r) => r.karyawan_id)));
+    const tgls = Array.from(new Set(list.map((r) => r.tanggal_izin)));
+    if (kids.length && tgls.length) {
+      const { data: sas } = await supabase.from("shift_assignment")
+        .select("karyawan_id, tanggal, is_libur, shift_master:shift_id(nama_shift, jam_masuk, jam_pulang)")
+        .in("karyawan_id", kids).in("tanggal", tgls);
+      const m: Record<string, ShiftInfo> = {};
+      for (const s of ((sas as unknown as { karyawan_id: string; tanggal: string; is_libur: boolean; shift_master: { nama_shift: string | null; jam_masuk: string; jam_pulang: string } | null }[] | null) ?? [])) {
+        if (!s.shift_master) continue;
+        m[`${s.karyawan_id}_${s.tanggal}`] = { nama_shift: s.shift_master.nama_shift, jam_masuk: s.shift_master.jam_masuk, jam_pulang: s.shift_master.jam_pulang, is_libur: s.is_libur };
+      }
+      setShiftMap(m);
+    }
     setLoading(false);
   }, []);
   useEffect(() => { fetchRows(); }, [fetchRows]);
@@ -1902,6 +1928,25 @@ function PengajuanIzin({ userName }: { userName: string }) {
                 {r.kategori_lapor && <span className="text-gray-400">{r.kategori_lapor === "tepat_waktu" ? "Tepat waktu" : r.kategori_lapor === "telat_sebelum_shift" ? "Telat (sblm shift)" : "Setelah shift"} · </span>}
                 <span className={`font-semibold ${(r.denda ?? 0) > 0 ? "text-red-600" : "text-green-600"}`}>Denda Rp {(r.denda ?? 0).toLocaleString("id-ID")}</span>
               </p>
+              {(() => {
+                const shift = shiftMap[`${r.karyawan_id}_${r.tanggal_izin}`];
+                return (
+                  <div className="mt-1 space-y-0.5 text-[11px] text-gray-500">
+                    <p><span className="text-gray-400">Lapor submit:</span> {fmtWaktuWIB(r.created_at)}</p>
+                    {r.jenis === "izin_sakit" && (
+                      <p><span className="text-gray-400">Kirim foto surat:</span> {r.surat_uploaded_at ? fmtWaktuWIB(r.surat_uploaded_at) : <span className="text-amber-600">belum dikirim</span>}</p>
+                    )}
+                    <p>
+                      <span className="text-gray-400">Shift {formatTglID(r.tanggal_izin)}:</span>{" "}
+                      {shift
+                        ? (shift.is_libur
+                            ? <span className="text-gray-500">Libur</span>
+                            : <span className="text-gray-700 font-medium">{shift.nama_shift ? `${shift.nama_shift} · ` : ""}{shift.jam_masuk.slice(0, 5)}–{shift.jam_pulang.slice(0, 5)}</span>)
+                        : <span className="text-orange-600">shift belum di-assign</span>}
+                    </p>
+                  </div>
+                );
+              })()}
               {badge && <span className={`inline-block mt-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${badge.cls}`}>{badge.text}</span>}
               {r.foto_verified && <span className="inline-flex items-center gap-1 mt-1 ml-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-green-100 text-green-700"><CheckCircle2 size={11} /> Foto terverifikasi{r.foto_verified_oleh ? ` · ${r.foto_verified_oleh}` : ""}</span>}
               {r.denda_dihapus && <p className="text-[11px] text-green-600 mt-0.5">Denda dihapus (toleransi){r.denda_dihapus_oleh ? ` oleh ${r.denda_dihapus_oleh}` : ""}{r.catatan_denda ? ` · "${r.catatan_denda}"` : ""}</p>}
