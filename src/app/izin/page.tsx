@@ -55,19 +55,23 @@ export default function IzinPage() {
   const [showCal, setShowCal] = useState(false);
   const [kuotaOleh, setKuotaOleh] = useState<string | null>(null); // nama karyawan lain yg sudah izin di tgl ini
   const [dendaInfo, setDendaInfo] = useState<{ denda: number; kat: KatLapor; adaShift: boolean } | null>(null);
+  const [sudahIzin, setSudahIzin] = useState(false); // karyawan ini sudah lapor izin di tgl terpilih
 
   // Cek kuota (Pasal 3c) + hitung preview denda izin biasa (Pasal 3a) sesuai waktu lapor
   useEffect(() => {
-    if (step !== "form" || !karyawan) { setKuotaOleh(null); setDendaInfo(null); return; }
+    if (step !== "form" || !karyawan) { setKuotaOleh(null); setDendaInfo(null); setSudahIzin(false); return; }
     let active = true;
     (async () => {
-      const [kRes, sRes] = await Promise.all([
+      const [kRes, sRes, dupRes] = await Promise.all([
         supabase.from("pengajuan_izin").select("karyawan:karyawan_id(nama)")
           .eq("tanggal_izin", tglIzin).eq("jenis", "izin_biasa").eq("status", "aktif").neq("karyawan_id", karyawan.id).limit(1),
         supabase.from("shift_assignment").select("is_libur, shift_master:shift_id(jam_masuk)")
           .eq("karyawan_id", karyawan.id).eq("tanggal", tglIzin).maybeSingle(),
+        supabase.from("pengajuan_izin").select("id")
+          .eq("karyawan_id", karyawan.id).eq("tanggal_izin", tglIzin).eq("status", "aktif").limit(1),
       ]);
       if (!active) return;
+      setSudahIzin(!!(dupRes.data && dupRes.data.length > 0));
       const kuota = (kRes.data?.[0] as { karyawan: { nama: string } | null } | undefined)?.karyawan?.nama ?? null;
       setKuotaOleh(kuota);
       const saRow = sRes.data as { is_libur: boolean; shift_master: { jam_masuk: string } | null } | null;
@@ -210,7 +214,14 @@ export default function IzinPage() {
                   )}
                 </div>
 
-                {dendaInfo?.adaShift && (
+                {sudahIzin && (
+                  <div className="rounded-xl bg-emerald-50 border-2 border-emerald-300 p-3 text-sm text-emerald-800 flex items-start gap-2">
+                    <CheckCircle2 size={18} className="text-emerald-500 shrink-0 mt-0.5" />
+                    <span>Kamu <b>sudah lapor izin</b> untuk hari <b>{labelTgl(tglIzin)}</b>. Menunggu verifikasi Super Admin. Pilih tanggal lain jika ingin izin di hari berbeda.</span>
+                  </div>
+                )}
+
+                {!sudahIzin && dendaInfo?.adaShift && (
                   <div className="rounded-xl bg-amber-50 border-2 border-amber-300 p-3 text-xs text-amber-800 space-y-1.5">
                     <p className="font-bold flex items-center gap-1.5"><AlertTriangle size={14} className="text-amber-500" /> Izin biasa dikenakan denda</p>
                     <p>
@@ -231,10 +242,13 @@ export default function IzinPage() {
                   </div>
                 )}
 
+                {!sudahIzin && (
                 <div className="rounded-xl bg-gray-50 border border-gray-100 p-3 text-xs text-gray-600">
                   Tuliskan di kertas: <b>alasan izin dan keperluan kamu untuk hari itu saja</b>, lalu foto tulisan tersebut. Jika ingin izin lebih dari 1 hari, kamu harus lapor lagi untuk tiap tanggalnya.
                 </div>
-
+                )}
+                {!sudahIzin && (
+                <>
                 {/* Foto bukti */}
                 {foto ? (
                   <div className="space-y-2">
@@ -263,6 +277,8 @@ export default function IzinPage() {
                   <FileText size={18} /> {busy ? "Mengirim..." : (kuotaOleh ? "Tetap Lapor Izin" : "Lapor Izin")}
                 </button>
                 {!fotoFile && <p className="text-[11px] text-gray-400 text-center">Foto bukti wajib sebelum submit</p>}
+                </>
+                )}
               </>
             )}
 
