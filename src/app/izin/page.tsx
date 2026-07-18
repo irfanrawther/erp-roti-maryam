@@ -4,7 +4,7 @@ import { supabase } from "@/lib/supabase";
 import { hashPin } from "@/lib/auth";
 import { FileText, Camera, CheckCircle2, X, AlertTriangle } from "lucide-react";
 import IndonesianDatePicker from "@/components/IndonesianDatePicker";
-import { katLapor, dendaIzinBiasa } from "@/lib/izin";
+import { katLapor, dendaIzinBiasa, labelKatLapor, type KatLapor } from "@/lib/izin";
 
 interface Karyawan { id: string; nama: string; jabatan: string | null }
 
@@ -54,20 +54,30 @@ export default function IzinPage() {
   const [tglIzin, setTglIzin] = useState(defaultDate);
   const [showCal, setShowCal] = useState(false);
   const [kuotaOleh, setKuotaOleh] = useState<string | null>(null); // nama karyawan lain yg sudah izin di tgl ini
+  const [dendaInfo, setDendaInfo] = useState<{ denda: number; kat: KatLapor; adaShift: boolean } | null>(null);
 
-  // Cek kuota izin harian (maks 1 orang/hari, Pasal 3c)
+  // Cek kuota (Pasal 3c) + hitung preview denda izin biasa (Pasal 3a) sesuai waktu lapor
   useEffect(() => {
-    if (step !== "form" || !karyawan) { setKuotaOleh(null); return; }
+    if (step !== "form" || !karyawan) { setKuotaOleh(null); setDendaInfo(null); return; }
     let active = true;
-    supabase.from("pengajuan_izin")
-      .select("karyawan:karyawan_id(nama)")
-      .eq("tanggal_izin", tglIzin).eq("jenis", "izin_biasa").eq("status", "aktif")
-      .neq("karyawan_id", karyawan.id).limit(1)
-      .then(({ data }) => {
-        if (!active) return;
-        const row = data?.[0] as { karyawan: { nama: string } | null } | undefined;
-        setKuotaOleh(row?.karyawan?.nama ?? null);
-      });
+    (async () => {
+      const [kRes, sRes] = await Promise.all([
+        supabase.from("pengajuan_izin").select("karyawan:karyawan_id(nama)")
+          .eq("tanggal_izin", tglIzin).eq("jenis", "izin_biasa").eq("status", "aktif").neq("karyawan_id", karyawan.id).limit(1),
+        supabase.from("shift_assignment").select("is_libur, shift_master:shift_id(jam_masuk)")
+          .eq("karyawan_id", karyawan.id).eq("tanggal", tglIzin).maybeSingle(),
+      ]);
+      if (!active) return;
+      const kuota = (kRes.data?.[0] as { karyawan: { nama: string } | null } | undefined)?.karyawan?.nama ?? null;
+      setKuotaOleh(kuota);
+      const saRow = sRes.data as { is_libur: boolean; shift_master: { jam_masuk: string } | null } | null;
+      if (saRow && !saRow.is_libur && saRow.shift_master) {
+        const kat = katLapor(tglIzin, saRow.shift_master.jam_masuk, Date.now());
+        setDendaInfo({ denda: dendaIzinBiasa(kat, !!kuota), kat, adaShift: true });
+      } else {
+        setDendaInfo({ denda: 0, kat: "tepat_waktu", adaShift: false });
+      }
+    })();
     return () => { active = false; };
   }, [tglIzin, karyawan, step]);
 
@@ -200,12 +210,14 @@ export default function IzinPage() {
                   )}
                 </div>
 
-                {kuotaOleh && (
+                {dendaInfo?.adaShift && (
                   <div className="rounded-xl bg-amber-50 border-2 border-amber-300 p-3 text-xs text-amber-800 space-y-1.5">
-                    <p className="font-bold flex items-center gap-1.5"><AlertTriangle size={14} className="text-amber-500" /> Kuota izin harian sudah terisi</p>
-                    <p>Sudah ada karyawan lain (<b>{kuotaOleh}</b>) yang izin di tanggal ini. Dalam 1 hari kerja hanya <b>1 orang</b> yang boleh izin biasa.</p>
-                    <p>Jika kamu tetap lapor izin, kamu <b>wajib masuk</b> — atau dikenakan <b>denda sesuai Pasal 3a + tambahan Rp100.000</b>.</p>
-                    <p className="text-amber-600">Disarankan pilih tanggal lain, atau tetap masuk kerja.</p>
+                    <p className="font-bold flex items-center gap-1.5"><AlertTriangle size={14} className="text-amber-500" /> Izin biasa dikenakan denda</p>
+                    <p>Berdasarkan waktu lapor kamu sekarang (<b>{labelKatLapor(dendaInfo.kat).toLowerCase()}</b>), izin ini dikenakan <b>Denda Rp {dendaInfo.denda.toLocaleString("id-ID")}</b>.</p>
+                    {kuotaOleh && (
+                      <p className="text-red-700">⚠️ Sudah ada karyawan lain (<b>{kuotaOleh}</b>) yang izin di tanggal ini — kuota harian (1 orang) terisi, jadi ada <b>tambahan Rp100.000</b>. Disarankan pilih tanggal lain atau tetap masuk.</p>
+                    )}
+                    <p className="text-amber-600">Lapor lebih awal = denda lebih ringan. Denda diproses oleh Super Admin.</p>
                   </div>
                 )}
 
