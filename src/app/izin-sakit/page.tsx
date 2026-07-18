@@ -26,12 +26,8 @@ function wibHM(): { h: number; m: number } {
   if (h === 24) h = 0;
   return { h, m };
 }
-// Deadline lapor sakit berdasarkan jam masuk shift
-function deadlineLapor(jamMasuk: string): string {
-  const map: Record<string, string> = { "06:00": "05:00", "08:00": "06:00", "10:00": "08:00", "13:00": "10:00" };
-  return map[jamMasuk.slice(0, 5)] ?? jamMasuk.slice(0, 5);
-}
 function jamToMin(hhmm: string) { const [h, m] = hhmm.split(":").map(Number); return h * 60 + m; }
+function minToJam(min: number) { const h = Math.floor(min / 60) % 24; const m = min % 60; return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`; }
 
 export default function IzinSakitPage() {
   const [step, setStep] = useState<"pin" | "form" | "susulan" | "done">("pin");
@@ -87,9 +83,10 @@ export default function IzinSakitPage() {
       } else if (H === today) {
         const { h: nh, m: nm } = wibHM();
         const nowMin = nh * 60 + nm;
-        const dl = deadlineLapor(shift.jam_masuk);
-        if (nowMin > jamToMin(dl)) {
-          setWindowErr(`Batas lapor sakit untuk shift kamu (${shift.nama_shift}) adalah jam ${dl}. Saat ini sudah lewat.`);
+        // Batas lapor sakit di hari yang sama: maksimal 2 jam setelah shift mulai
+        const cutoffMin = jamToMin(shift.jam_masuk.slice(0, 5)) + 120;
+        if (nowMin > cutoffMin) {
+          setWindowErr(`Batas lapor sakit untuk hari ini adalah 2 jam setelah shift mulai (jam ${minToJam(cutoffMin)}). Saat ini sudah lewat, jadi kamu tidak bisa lapor sakit dan otomatis dihitung Alpha.`);
         } else setWindowErr("");
       } else setWindowErr("");
       setStep("form");
