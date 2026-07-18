@@ -8,7 +8,7 @@ import { ID_MONTHS } from "@/components/RiwayatFilter";
 import IndonesianDatePicker from "@/components/IndonesianDatePicker";
 import { hitungDenda, bulanRange, wibMinutesOfDay, DENDA, DENDA_IZIN_MANUAL, JAM_ALPHA, STATUS_LABEL } from "@/lib/absensi";
 import { dendaIzinBiasa, type KatLapor } from "@/lib/izin";
-import { CalendarClock, Plus, X, Pencil, Trash2, ChevronLeft, ChevronRight, Layers, MapPin, Crosshair, Flag, AlertTriangle, Check, LogOut, FileText, ClipboardList, Clock } from "lucide-react";
+import { CalendarClock, Plus, X, Pencil, Trash2, ChevronLeft, ChevronRight, Layers, MapPin, Crosshair, Flag, AlertTriangle, Check, CheckCircle2, LogOut, FileText, ClipboardList, Clock } from "lucide-react";
 
 interface Karyawan {
   id: string;
@@ -1754,6 +1754,8 @@ interface IzinRow {
   status: string; status_surat: string | null; batas_upload_surat: string | null;
   override_by: string | null; denda?: number; kategori_lapor?: string | null; sakit_ke?: number | null;
   dibatalkan_oleh: string | null; catatan_pembatalan: string | null; created_at: string;
+  foto_verified?: boolean; foto_verified_oleh?: string | null;
+  denda_dihapus?: boolean; denda_dihapus_oleh?: string | null; catatan_denda?: string | null;
   karyawan: { nama: string } | null;
 }
 function PengajuanIzin({ userName }: { userName: string }) {
@@ -1782,7 +1784,7 @@ function PengajuanIzin({ userName }: { userName: string }) {
     }
     // 2) Fetch lengkap
     const { data } = await supabase.from("pengajuan_izin")
-      .select("id, karyawan_id, tanggal_izin, jenis, foto_bukti_url, foto_surat_url, status, status_surat, batas_upload_surat, override_by, denda, kategori_lapor, sakit_ke, dibatalkan_oleh, catatan_pembatalan, created_at, karyawan:karyawan_id(nama)")
+      .select("id, karyawan_id, tanggal_izin, jenis, foto_bukti_url, foto_surat_url, status, status_surat, batas_upload_surat, override_by, denda, kategori_lapor, sakit_ke, dibatalkan_oleh, catatan_pembatalan, created_at, foto_verified, foto_verified_oleh, denda_dihapus, denda_dihapus_oleh, catatan_denda, karyawan:karyawan_id(nama)")
       .order("tanggal_izin", { ascending: false }).limit(200);
     setRows((data as unknown as IzinRow[]) ?? []);
     setLoading(false);
@@ -1833,6 +1835,31 @@ function PengajuanIzin({ userName }: { userName: string }) {
     fetchRows();
   }
 
+  // Verifikasi foto bukti izin (approve)
+  async function verifikasiFoto(r: IzinRow) {
+    setBusyId(r.id);
+    await supabase.from("pengajuan_izin").update({
+      foto_verified: true, foto_verified_oleh: userName, foto_verified_at: new Date().toISOString(),
+    }).eq("id", r.id);
+    setBusyId(null);
+    fetchRows();
+  }
+
+  // Hapus denda (toleransi Super Admin) → denda 0 di pengajuan & absensi
+  async function hapusDenda(r: IzinRow) {
+    const catatan = prompt(`Hapus denda (toleransi)?\nDenda ${r.karyawan?.nama} untuk ${hariTglID(r.tanggal_izin)} akan menjadi Rp 0.\n\nAlasan toleransi (opsional):`, "");
+    if (catatan === null) return;
+    setBusyId(r.id);
+    await supabase.from("pengajuan_izin").update({
+      denda: 0, denda_dihapus: true, denda_dihapus_oleh: userName,
+      denda_dihapus_at: new Date().toISOString(), catatan_denda: catatan || null,
+    }).eq("id", r.id);
+    await supabase.from("absensi").update({ denda: 0, denda_dihapus_ampun: true })
+      .eq("karyawan_id", r.karyawan_id).eq("tanggal", r.tanggal_izin);
+    setBusyId(null);
+    fetchRows();
+  }
+
   const aktif = rows.filter((r) => r.status === "aktif");
   const lain  = rows.filter((r) => r.status !== "aktif");
 
@@ -1858,6 +1885,8 @@ function PengajuanIzin({ userName }: { userName: string }) {
                 <span className={`font-semibold ${(r.denda ?? 0) > 0 ? "text-red-600" : "text-green-600"}`}>Denda Rp {(r.denda ?? 0).toLocaleString("id-ID")}</span>
               </p>
               {badge && <span className={`inline-block mt-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${badge.cls}`}>{badge.text}</span>}
+              {r.foto_verified && <span className="inline-flex items-center gap-1 mt-1 ml-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-green-100 text-green-700"><CheckCircle2 size={11} /> Foto terverifikasi{r.foto_verified_oleh ? ` · ${r.foto_verified_oleh}` : ""}</span>}
+              {r.denda_dihapus && <p className="text-[11px] text-green-600 mt-0.5">Denda dihapus (toleransi){r.denda_dihapus_oleh ? ` oleh ${r.denda_dihapus_oleh}` : ""}{r.catatan_denda ? ` · "${r.catatan_denda}"` : ""}</p>}
               {r.override_by && <p className="text-[11px] text-green-600 mt-0.5">Override sakit oleh {r.override_by}</p>}
               {r.status === "dibatalkan" && (
                 <p className="text-[11px] text-red-500 mt-0.5">Tidak sah · {r.dibatalkan_oleh ?? "—"}{r.catatan_pembatalan ? ` · "${r.catatan_pembatalan}"` : ""}</p>
@@ -1867,6 +1896,18 @@ function PengajuanIzin({ userName }: { userName: string }) {
           <div className="flex flex-col gap-1.5 shrink-0">
             {r.status === "aktif" ? (
               <>
+                {!r.foto_verified && (
+                  <button onClick={() => verifikasiFoto(r)} disabled={busyId === r.id}
+                    className="text-xs font-semibold px-2.5 py-1.5 rounded-lg bg-green-100 text-green-700 hover:bg-green-200 transition-colors disabled:opacity-40">
+                    Verifikasi Foto
+                  </button>
+                )}
+                {(r.denda ?? 0) > 0 && !r.denda_dihapus && (
+                  <button onClick={() => hapusDenda(r)} disabled={busyId === r.id}
+                    className="text-xs font-semibold px-2.5 py-1.5 rounded-lg bg-amber-100 text-amber-700 hover:bg-amber-200 transition-colors disabled:opacity-40">
+                    Hapus Denda (Toleransi)
+                  </button>
+                )}
                 <button onClick={() => tandaiTidakSah(r)} disabled={busyId === r.id}
                   className="text-xs font-semibold px-2.5 py-1.5 rounded-lg bg-red-100 text-red-600 hover:bg-red-200 transition-colors disabled:opacity-40">
                   {r.jenis === "izin_sakit" ? "Tandai Surat Tidak Sah = Alpha" : "Tandai Bukti Tidak Sah = Alpha"}
