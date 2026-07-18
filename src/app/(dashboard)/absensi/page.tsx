@@ -7,7 +7,7 @@ import { homeRoute } from "@/lib/permissions";
 import { ID_MONTHS } from "@/components/RiwayatFilter";
 import IndonesianDatePicker from "@/components/IndonesianDatePicker";
 import { hitungDenda, bulanRange, wibMinutesOfDay, DENDA, DENDA_IZIN_MANUAL, JAM_ALPHA, STATUS_LABEL } from "@/lib/absensi";
-import { dendaIzinBiasa, type KatLapor } from "@/lib/izin";
+import { dendaIzinBiasa, katLapor, type KatLapor } from "@/lib/izin";
 import { CalendarClock, Plus, X, Pencil, Trash2, ChevronLeft, ChevronRight, Layers, MapPin, Crosshair, Flag, AlertTriangle, Check, CheckCircle2, LogOut, FileText, ClipboardList, Clock } from "lucide-react";
 
 interface Karyawan {
@@ -1780,6 +1780,24 @@ function PengajuanIzin({ userName }: { userName: string }) {
       await supabase.from("absensi").upsert({
         karyawan_id: t.karyawan_id, tanggal: t.tanggal_izin,
         status_kehadiran: "izin", denda: dendaBiasa,
+      }, { onConflict: "karyawan_id,tanggal" });
+    }
+    // 1b) Izin biasa yang denda-nya belum terhitung (kategori_lapor null) — recompute
+    //     berdasarkan shift & waktu lapor asli (created_at). Lewati yang dendanya sudah dihapus.
+    const { data: belum } = await supabase.from("pengajuan_izin")
+      .select("id, karyawan_id, tanggal_izin, created_at, kuota_penuh")
+      .eq("jenis", "izin_biasa").eq("status", "aktif").is("kategori_lapor", null).eq("denda_dihapus", false);
+    for (const b of ((belum as { id: string; karyawan_id: string; tanggal_izin: string; created_at: string; kuota_penuh: boolean }[] | null) ?? [])) {
+      const { data: sa } = await supabase.from("shift_assignment")
+        .select("is_libur, shift_master:shift_id(jam_masuk)")
+        .eq("karyawan_id", b.karyawan_id).eq("tanggal", b.tanggal_izin).maybeSingle();
+      const saRow = sa as { is_libur: boolean; shift_master: { jam_masuk: string } | null } | null;
+      if (!saRow || saRow.is_libur || !saRow.shift_master) continue; // libur / tanpa shift → tidak kena denda
+      const kat = katLapor(b.tanggal_izin, saRow.shift_master.jam_masuk, new Date(b.created_at).getTime());
+      const denda = dendaIzinBiasa(kat, !!b.kuota_penuh);
+      await supabase.from("pengajuan_izin").update({ kategori_lapor: kat, denda }).eq("id", b.id);
+      await supabase.from("absensi").upsert({
+        karyawan_id: b.karyawan_id, tanggal: b.tanggal_izin, status_kehadiran: "izin", denda,
       }, { onConflict: "karyawan_id,tanggal" });
     }
     // 2) Fetch lengkap
