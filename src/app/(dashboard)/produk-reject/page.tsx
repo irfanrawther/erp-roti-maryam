@@ -162,6 +162,7 @@ export default function ProdukRejectPage() {
   const salesPcsForReject  = (id: string) => allSales.filter((p) => p.reject_id === id).reduce((s, p) => s + p.jumlah_pcs, 0);
 
   async function doReset() {
+    if (!caps.isSuperAdmin) return; // hanya Super Admin — aksi ini destruktif & permanen
     setResetBusy(true);
     // Kembalikan stok dari semua penjualan, lalu hapus
     const { data } = await supabase.from("penjualan_reject").select("reject_id, jumlah_pcs");
@@ -233,7 +234,8 @@ export default function ProdukRejectPage() {
           <AlertTriangle size={20} className="text-red-500" />
           <h1 className="text-xl font-bold text-gray-800">Produk Reject</h1>
         </div>
-        {!readOnly && (
+        {/* TEMPORARY - REMOVE BEFORE PRODUCTION: super admin only, aksi ini destruktif & permanen */}
+        {caps.isSuperAdmin && (
           <button type="button" onClick={() => setShowResetModal(true)}
             className="flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-lg bg-red-100 text-red-600 hover:bg-red-200 transition-colors cursor-pointer">
             <RotateCcw size={11} /> Reset
