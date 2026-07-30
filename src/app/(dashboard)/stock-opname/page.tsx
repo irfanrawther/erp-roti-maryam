@@ -93,9 +93,16 @@ function periodeLabel(p: string): string {
   return `${BULAN_ID[m - 1]} ${y}`;
 }
 
+// Pakai tanggal WIB (bukan jam lokal device) biar konsisten dengan sisa aplikasi
+function todayWIBParts(): { year: number; month: number } {
+  const s = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" }); // "YYYY-MM-DD"
+  const [y, m] = s.split("-").map(Number);
+  return { year: y, month: m };
+}
+
 function currentPeriode(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  const { year, month } = todayWIBParts();
+  return `${year}-${String(month).padStart(2, "0")}`;
 }
 
 const STATUS_CONFIG: Record<OpnameStatus, { label: string; color: string; icon: typeof Clock }> = {
@@ -191,11 +198,12 @@ export default function StockOpnamePage() {
   const [catatanApproval,   setCatatanApproval]   = useState("");
   const [approvalBusy,      setApprovalBusy]      = useState(false);
 
-  // Period selector years
-  const thisYear = new Date().getFullYear();
+  // Period selector years (WIB, konsisten dengan currentPeriode)
+  const nowWIB = todayWIBParts();
+  const thisYear = nowWIB.year;
   const years = [thisYear - 1, thisYear, thisYear + 1];
-  const [selYear,  setSelYear]  = useState(thisYear);
-  const [selMonth, setSelMonth] = useState(new Date().getMonth() + 1);
+  const [selYear,  setSelYear]  = useState(nowWIB.year);
+  const [selMonth, setSelMonth] = useState(nowWIB.month);
 
   useEffect(() => {
     const u = getUserSession();
