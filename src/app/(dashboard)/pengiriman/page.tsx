@@ -190,6 +190,7 @@ export default function PengirimanPage() {
   }
 
   async function doReset() {
+    if (!caps.isSuperAdmin) return; // hanya Super Admin — aksi ini destruktif & permanen
     setResetBusy(true);
     // Hapus semua data pengiriman
     await supabase.from("pengiriman").delete().neq("id", "00000000-0000-0000-0000-000000000000");
@@ -226,10 +227,13 @@ export default function PengirimanPage() {
 
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-bold text-gray-800">Pengiriman</h1>
-        <button type="button" onClick={() => setShowResetModal(true)}
-          className="flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-lg bg-red-100 text-red-600 hover:bg-red-200 transition-colors cursor-pointer">
-          <RotateCcw size={11} /> Reset
-        </button>
+        {/* TEMPORARY - REMOVE BEFORE PRODUCTION: super admin only, aksi ini destruktif & permanen */}
+        {caps.isSuperAdmin && (
+          <button type="button" onClick={() => setShowResetModal(true)}
+            className="flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-lg bg-red-100 text-red-600 hover:bg-red-200 transition-colors cursor-pointer">
+            <RotateCcw size={11} /> Reset
+          </button>
+        )}
       </div>
 
       {/* Tab bar */}
