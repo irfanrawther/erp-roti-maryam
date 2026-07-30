@@ -25,6 +25,15 @@ const BRAND_CONFIG = [
 
 const TOKO = "Olmoz Store";
 
+// "37 pcs" isi 2/pack -> "18 pack + 1 pcs" (atau "18 pack" kalau pas)
+function packBreakdown(pcs: number, perPack: number): string {
+  if (!perPack || perPack <= 0) return "";
+  const pack = Math.floor(pcs / perPack);
+  const sisa = pcs % perPack;
+  if (pack === 0 && sisa === 0) return "0 pack";
+  return sisa === 0 ? `${pack} pack` : `${pack} pack + ${sisa} pcs`;
+}
+
 export default function ProdukRejectPage() {
   const user     = getUserSession();
   const router   = useRouter();
@@ -304,8 +313,11 @@ export default function ProdukRejectPage() {
                               </button>
                             </div>
                           ) : (
-                            <div className="flex items-center gap-1">
-                              <span className={`text-sm font-bold ${row.stok_pcs > 0 ? "text-gray-800" : "text-gray-300"}`}>{formatAngka(row.stok_pcs)} pcs</span>
+                            <div className="flex items-center gap-1.5">
+                              <div className="text-right leading-tight">
+                                <div className={`text-sm font-bold ${row.stok_pcs > 0 ? "text-gray-800" : "text-gray-300"}`}>{formatAngka(row.stok_pcs)} pcs</div>
+                                <div className="text-[10px] text-gray-400">{packBreakdown(row.stok_pcs, row.pcs_per_pack)}</div>
+                              </div>
                               {!readOnly && (
                                 <button type="button" onClick={() => openEditStok(row)}
                                   className="p-0.5 rounded-md text-gray-300 hover:text-amber-500 hover:bg-amber-50 transition-colors shrink-0"
