@@ -6,7 +6,7 @@ import { supabase } from "@/lib/supabase";
 import { getUserSession } from "@/lib/auth";
 import { getCapabilities, homeRoute } from "@/lib/permissions";
 import { formatAngka } from "@/lib/utils";
-import { Truck, RotateCcw } from "lucide-react";
+import { Truck, RotateCcw, Pencil, Check, X } from "lucide-react";
 import { RiwayatFilter, getRiwayatRange, ID_MONTHS } from "@/components/RiwayatFilter";
 import type { RiwayatPreset } from "@/components/RiwayatFilter";
 
@@ -42,6 +42,11 @@ export default function PengirimanPage() {
   const [toast,          setToast]          = useState("");
   const [showResetModal, setShowResetModal] = useState(false);
   const [resetBusy,      setResetBusy]      = useState(false);
+
+  // Edit varian (koreksi laporan penjualan yang sudah diinput)
+  const [editVarianId,  setEditVarianId]  = useState<string | null>(null);
+  const [editVarianVal, setEditVarianVal] = useState("");
+  const [editVarianBusy,setEditVarianBusy]= useState(false);
 
   // Butter Hollmann bahan_baku id
   const [butterId, setButterId] = useState<string | null>(null);
@@ -187,6 +192,41 @@ export default function PengirimanPage() {
     setCustomEnd("");
     setSelectedBulan(`${y}-${m}`);
     setAllRows([]);
+  }
+
+  // Koreksi total pack terkirim untuk satu varian dalam rentang tanggal yang sedang difilter.
+  // Konsolidasi semua baris pengiriman varian itu dlm rentang jadi satu baris baru,
+  // lalu kompensasi stok produk (trigger DB hanya mengurangi stok saat INSERT, tidak
+  // mengembalikan saat DELETE, jadi harus dikompensasi manual di sini).
+  async function simpanKoreksiVarian(skuId: string) {
+    const newTotal = parseInt(editVarianVal);
+    if (isNaN(newTotal) || newTotal < 0) return;
+    setEditVarianBusy(true);
+    try {
+      const matchingRows = allRows.filter((p) => p.produk_sku_id === skuId);
+      const oldTotal = matchingRows.reduce((s, p) => s + p.jumlah_pack, 0);
+      if (newTotal !== oldTotal) {
+        if (matchingRows.length) {
+          await supabase.from("pengiriman").delete().in("id", matchingRows.map((r) => r.id));
+        }
+        const tglBaru = matchingRows.length ? matchingRows[matchingRows.length - 1].tanggal_keluar : (customEnd || customStart || todayStr);
+        if (newTotal > 0) {
+          await supabase.from("pengiriman").insert({
+            produk_sku_id: skuId, jumlah_pack: newTotal, tanggal_keluar: tglBaru,
+            keterangan: `Koreksi manual laporan penjualan oleh ${user?.nama ?? "Super Admin"}`, created_by: user?.id,
+          });
+        }
+        // Kompensasi stok: insert baru (jika ada) sudah otomatis -newTotal via trigger,
+        // delete tidak otomatis mengembalikan, jadi tambahkan kembali oldTotal secara manual.
+        if (oldTotal > 0) {
+          const { data } = await supabase.from("produk_sku").select("stok_saat_ini").eq("id", skuId).single();
+          const cur = (data as { stok_saat_ini: number } | null)?.stok_saat_ini ?? 0;
+          await supabase.from("produk_sku").update({ stok_saat_ini: Math.max(0, cur + oldTotal) }).eq("id", skuId);
+        }
+      }
+      setEditVarianId(null); setEditVarianVal("");
+      fetchSkus(); fetchAll();
+    } finally { setEditVarianBusy(false); }
   }
 
   async function doReset() {
@@ -373,26 +413,56 @@ export default function PengirimanPage() {
             const brandSkus = skuList.filter(s => s.brand === bc.brand);
             const isAmber   = bc.color === "amber";
 
-            type R = { label: string; pack: number; pcs: number };
-            const renderRow = (r: R) => (
-              <div key={r.label} className="flex items-center justify-between py-1.5 border-b border-gray-50 last:border-0">
-                <span className="text-sm text-gray-700">{r.label}</span>
-                <div className="text-right">
-                  {r.pack > 0
-                    ? <><span className="font-semibold text-sm text-gray-800">{formatAngka(r.pack)} pack</span><span className="text-xs text-gray-400 ml-1.5">({formatAngka(r.pcs)} pcs)</span></>
-                    : <span className="text-sm text-gray-300">—</span>}
+            type R = { label: string; pack: number; pcs: number; skuId: string | null };
+            const renderRow = (r: R) => {
+              const isEditing = r.skuId && editVarianId === r.skuId;
+              return (
+                <div key={r.label} className="flex items-center justify-between py-1.5 border-b border-gray-50 last:border-0">
+                  <span className="text-sm text-gray-700">{r.label}</span>
+                  {isEditing ? (
+                    <div className="flex items-center gap-1">
+                      <input type="number" min="0" step="1" autoFocus value={editVarianVal}
+                        onChange={(e) => setEditVarianVal(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === "Enter") simpanKoreksiVarian(r.skuId!); if (e.key === "Escape") setEditVarianId(null); }}
+                        className="input py-0.5 text-sm w-16 text-center font-bold" />
+                      <span className="text-[10px] text-gray-400">pack</span>
+                      <button type="button" onClick={() => simpanKoreksiVarian(r.skuId!)} disabled={editVarianBusy || editVarianVal === ""}
+                        className="flex items-center justify-center w-6 h-6 rounded-md bg-green-500 text-white hover:bg-green-600 disabled:opacity-40 shrink-0">
+                        {editVarianBusy ? <span className="text-[9px]">…</span> : <Check size={11} />}
+                      </button>
+                      <button type="button" onClick={() => setEditVarianId(null)}
+                        className="flex items-center justify-center w-6 h-6 rounded-md bg-gray-100 text-gray-500 hover:bg-gray-200 shrink-0">
+                        <X size={11} />
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1">
+                      <div className="text-right">
+                        {r.pack > 0
+                          ? <><span className="font-semibold text-sm text-gray-800">{formatAngka(r.pack)} pack</span><span className="text-xs text-gray-400 ml-1.5">({formatAngka(r.pcs)} pcs)</span></>
+                          : <span className="text-sm text-gray-300">—</span>}
+                      </div>
+                      {caps.isSuperAdmin && r.skuId && (
+                        <button type="button" onClick={() => { setEditVarianId(r.skuId); setEditVarianVal(String(r.pack)); }}
+                          className="p-0.5 rounded-md text-gray-300 hover:text-amber-500 hover:bg-amber-50 transition-colors shrink-0"
+                          title="Koreksi jumlah terjual">
+                          <Pencil size={11} />
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
-              </div>
-            );
+              );
+            };
 
             const caneRows: R[] = bc.brand === "cane" ? bc.variants.map(v => {
               const sku = brandSkus.find(s => s.varian === v);
               const pack = sku ? sumForSku(sku.id) : 0;
-              return { label: v, pack, pcs: sku ? pack * sku.isi_per_pack : 0 };
+              return { label: v, pack, pcs: sku ? pack * sku.isi_per_pack : 0, skuId: sku?.id ?? null };
             }) : [];
 
-            const mIsi5:  R[] = bc.brand === "mehana" ? bc.variants.map(v => { const sku = brandSkus.find(s => s.varian === v && s.isi_per_pack === 5);  const pack = sku ? sumForSku(sku.id) : 0; return { label: v, pack, pcs: pack * 5  }; }) : [];
-            const mIsi10: R[] = bc.brand === "mehana" ? bc.variants.map(v => { const sku = brandSkus.find(s => s.varian === v && s.isi_per_pack === 10); const pack = sku ? sumForSku(sku.id) : 0; return { label: v, pack, pcs: pack * 10 }; }) : [];
+            const mIsi5:  R[] = bc.brand === "mehana" ? bc.variants.map(v => { const sku = brandSkus.find(s => s.varian === v && s.isi_per_pack === 5);  const pack = sku ? sumForSku(sku.id) : 0; return { label: v, pack, pcs: pack * 5, skuId: sku?.id ?? null }; }) : [];
+            const mIsi10: R[] = bc.brand === "mehana" ? bc.variants.map(v => { const sku = brandSkus.find(s => s.varian === v && s.isi_per_pack === 10); const pack = sku ? sumForSku(sku.id) : 0; return { label: v, pack, pcs: pack * 10, skuId: sku?.id ?? null }; }) : [];
 
             const totalPack = allRows.filter(p => brandSkus.some(s => s.id === p.produk_sku_id)).reduce((s, p) => s + p.jumlah_pack, 0);
             const totalPcs  = allRows.filter(p => brandSkus.some(s => s.id === p.produk_sku_id)).reduce((s, p) => { const sku = brandSkus.find(sk => sk.id === p.produk_sku_id); return s + p.jumlah_pack * (sku?.isi_per_pack ?? 0); }, 0);
