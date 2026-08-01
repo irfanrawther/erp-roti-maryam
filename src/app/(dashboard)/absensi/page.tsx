@@ -1585,6 +1585,7 @@ function RekapAbsensi({ karyawanList, shifts, userName }: { karyawanList: Karyaw
   const [loading, setLoading] = useState(false);
   const [fotoModal, setFotoModal] = useState<RekapRow | null>(null);
   const [fTanggal, setFTanggal] = useState("");
+  const [fKaryawan, setFKaryawan] = useState("");
   const [showCal, setShowCal] = useState(false);
   const [editRow, setEditRow] = useState<RekapRow | null>(null);
   const [editJam, setEditJam] = useState("");
@@ -1616,7 +1617,7 @@ function RekapAbsensi({ karyawanList, shifts, userName }: { karyawanList: Karyaw
   function prevMonth() { setFTanggal(""); if (month === 1) { setMonth(12); setYear((y) => y - 1); } else setMonth((m) => m - 1); }
   function nextMonth() { setFTanggal(""); if (month === 12) { setMonth(1); setYear((y) => y + 1); } else setMonth((m) => m + 1); }
 
-  const filteredRows = fTanggal ? rows.filter((r) => r.tanggal === fTanggal) : rows;
+  const filteredRows = rows.filter((r) => (!fTanggal || r.tanggal === fTanggal) && (!fKaryawan || r.karyawan_id === fKaryawan));
   const totalDenda = filteredRows.reduce((s, r) => s + (r.denda_dihapus_ampun ? 0 : r.denda), 0);
 
   function openEdit(r: RekapRow) {
@@ -1674,6 +1675,11 @@ function RekapAbsensi({ karyawanList, shifts, userName }: { karyawanList: Karyaw
               </div>
             )}
           </div>
+          <select className="bg-white rounded-xl border border-gray-100 px-3 py-2 text-sm text-gray-700"
+            value={fKaryawan} onChange={(e) => setFKaryawan(e.target.value)}>
+            <option value="">Semua karyawan</option>
+            {[...karyawanList].sort((a, b) => a.nama.localeCompare(b.nama)).map((k) => <option key={k.id} value={k.id}>{k.nama}</option>)}
+          </select>
         </div>
         <div className="text-sm text-gray-500">
           {filteredRows.length} absensi · Total denda: <span className="font-bold text-red-600">Rp {totalDenda.toLocaleString("id-ID")}</span>
@@ -1734,7 +1740,7 @@ function RekapAbsensi({ karyawanList, shifts, userName }: { karyawanList: Karyaw
             {loading ? (
               <tr><td colSpan={8} className="px-3 py-8 text-center text-gray-400">Memuat…</td></tr>
             ) : filteredRows.length === 0 ? (
-              <tr><td colSpan={8} className="px-3 py-8 text-center text-gray-400">{rows.length === 0 ? "Belum ada absensi bulan ini" : "Tidak ada data untuk tanggal ini"}</td></tr>
+              <tr><td colSpan={8} className="px-3 py-8 text-center text-gray-400">{rows.length === 0 ? "Belum ada absensi bulan ini" : "Tidak ada data untuk filter ini"}</td></tr>
             ) : filteredRows.map((r) => (
               <tr key={r.id} className="border-b border-gray-50 last:border-0">
                 <td className="px-3 py-1.5">
