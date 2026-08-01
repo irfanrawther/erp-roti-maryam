@@ -118,7 +118,7 @@ export default function AbsensiPage() {
         <PengajuanIzin userName={user?.nama ?? ""} />
       )}
       {tab === "rekap" && (
-        <RekapAbsensi karyawanList={karyawanList} shifts={shifts} />
+        <RekapAbsensi karyawanList={karyawanList} shifts={shifts} userName={user?.nama ?? ""} />
       )}
       {tab === "pengaturan" && (
         <>
@@ -1570,14 +1570,13 @@ function AbsenDetailModal({ abs, shift, nama, tanggal, userName, assign, onClose
 
 // ── Rekap Absensi + Foto (Super Admin) ──
 interface RekapRow {
-  id: string; karyawan_id: string; tanggal: string;
+  id: string; karyawan_id: string; tanggal: string; shift_id: string | null;
   jam_checkin: string | null; jam_checkout: string | null;
   foto_checkin_url: string | null; lat_checkin: number | null; lng_checkin: number | null;
   status_kehadiran: string; denda: number; denda_dihapus_ampun: boolean;
   menit_telat: number; kategori_telat: string | null;
 }
-function RekapAbsensi({ karyawanList, shifts }: { karyawanList: Karyawan[]; shifts: Shift[] }) {
-  void shifts;
+function RekapAbsensi({ karyawanList, shifts, userName }: { karyawanList: Karyawan[]; shifts: Shift[]; userName: string }) {
   const now = new Date();
   const [year, setYear]   = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
@@ -1585,6 +1584,12 @@ function RekapAbsensi({ karyawanList, shifts }: { karyawanList: Karyawan[]; shif
   const [lembur, setLembur] = useState<{ karyawan_id: string; jam_lembur: number; nominal_lembur: number }[]>([]);
   const [loading, setLoading] = useState(false);
   const [fotoModal, setFotoModal] = useState<RekapRow | null>(null);
+  const [fTanggal, setFTanggal] = useState("");
+  const [showCal, setShowCal] = useState(false);
+  const [editRow, setEditRow] = useState<RekapRow | null>(null);
+  const [editJam, setEditJam] = useState("");
+  const [editMenit, setEditMenit] = useState("");
+  const [editBusy, setEditBusy] = useState(false);
 
   const daysInMonth = new Date(year, month, 0).getDate();
   const mStart = `${year}-${String(month).padStart(2, "0")}-01`;
@@ -1596,7 +1601,7 @@ function RekapAbsensi({ karyawanList, shifts }: { karyawanList: Karyawan[]; shif
     setLoading(true);
     const [aRes, lRes] = await Promise.all([
       supabase.from("absensi")
-        .select("id, karyawan_id, tanggal, jam_checkin, jam_checkout, foto_checkin_url, lat_checkin, lng_checkin, status_kehadiran, denda, denda_dihapus_ampun, menit_telat, kategori_telat")
+        .select("id, karyawan_id, tanggal, shift_id, jam_checkin, jam_checkout, foto_checkin_url, lat_checkin, lng_checkin, status_kehadiran, denda, denda_dihapus_ampun, menit_telat, kategori_telat")
         .gte("tanggal", mStart).lte("tanggal", mEnd).order("tanggal", { ascending: false }),
       supabase.from("shift_assignment").select("karyawan_id, jam_lembur, nominal_lembur")
         .gte("tanggal", mStart).lte("tanggal", mEnd).gt("jam_lembur", 0),
@@ -1608,22 +1613,70 @@ function RekapAbsensi({ karyawanList, shifts }: { karyawanList: Karyawan[]; shif
 
   useEffect(() => { fetchRekap(); }, [fetchRekap]);
 
-  function prevMonth() { if (month === 1) { setMonth(12); setYear((y) => y - 1); } else setMonth((m) => m - 1); }
-  function nextMonth() { if (month === 12) { setMonth(1); setYear((y) => y + 1); } else setMonth((m) => m + 1); }
+  function prevMonth() { setFTanggal(""); if (month === 1) { setMonth(12); setYear((y) => y - 1); } else setMonth((m) => m - 1); }
+  function nextMonth() { setFTanggal(""); if (month === 12) { setMonth(1); setYear((y) => y + 1); } else setMonth((m) => m + 1); }
 
-  const totalDenda = rows.reduce((s, r) => s + (r.denda_dihapus_ampun ? 0 : r.denda), 0);
+  const filteredRows = fTanggal ? rows.filter((r) => r.tanggal === fTanggal) : rows;
+  const totalDenda = filteredRows.reduce((s, r) => s + (r.denda_dihapus_ampun ? 0 : r.denda), 0);
+
+  function openEdit(r: RekapRow) {
+    setEditRow(r);
+    const d = r.jam_checkin ? new Date(r.jam_checkin) : null;
+    setEditJam(d ? d.toLocaleTimeString("en-GB", { timeZone: "Asia/Jakarta", hour: "2-digit", hour12: false }) : "");
+    setEditMenit(d ? d.toLocaleTimeString("en-GB", { timeZone: "Asia/Jakarta", minute: "2-digit", hour12: false }).slice(-2) : "");
+  }
+
+  async function simpanEditJam() {
+    if (!editRow || !editJam || !editMenit) return;
+    setEditBusy(true);
+    const newIso = new Date(`${editRow.tanggal}T${editJam}:${editMenit}:00+07:00`).toISOString();
+    const patch: Record<string, unknown> = {
+      jam_checkin: newIso, status_kehadiran: "hadir",
+      is_override: true, override_by: userName, override_at: new Date().toISOString(),
+    };
+    const shift = shifts.find((s) => s.id === editRow.shift_id);
+    if (shift) {
+      const { start, end } = bulanRange(editRow.tanggal);
+      const { count } = await supabase.from("absensi").select("id", { count: "exact", head: true })
+        .eq("karyawan_id", editRow.karyawan_id).eq("kategori_telat", "K1").eq("denda_dihapus_ampun", true)
+        .gte("tanggal", start).lte("tanggal", end).neq("id", editRow.id);
+      const res = hitungDenda(shift.jam_masuk, new Date(newIso), count ?? 0);
+      patch.menit_telat = res.menit_telat; patch.kategori_telat = res.kategori_telat;
+      patch.denda = res.denda; patch.denda_dihapus_ampun = res.denda_dihapus_ampun;
+      patch.is_flagged = res.is_flagged; patch.flag_reason = res.flag_reason;
+    }
+    await supabase.from("absensi").update(patch).eq("id", editRow.id);
+    setEditBusy(false); setEditRow(null);
+    fetchRekap();
+  }
 
   return (
     <div className="space-y-3">
-      {/* Month selector */}
+      {/* Month + tanggal selector */}
       <div className="flex items-center justify-between gap-2 flex-wrap">
-        <div className="flex items-center gap-2 bg-white rounded-xl border border-gray-100 p-1">
-          <button onClick={prevMonth} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500"><ChevronLeft size={18} /></button>
-          <span className="font-bold text-gray-700 text-sm w-32 text-center">{ID_MONTHS[month - 1]} {year}</span>
-          <button onClick={nextMonth} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500"><ChevronRight size={18} /></button>
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-center gap-2 bg-white rounded-xl border border-gray-100 p-1">
+            <button onClick={prevMonth} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500"><ChevronLeft size={18} /></button>
+            <span className="font-bold text-gray-700 text-sm w-32 text-center">{ID_MONTHS[month - 1]} {year}</span>
+            <button onClick={nextMonth} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500"><ChevronRight size={18} /></button>
+          </div>
+          <div className="relative">
+            <button type="button" onClick={() => setShowCal((v) => !v)}
+              className="flex items-center gap-1.5 bg-white rounded-xl border border-gray-100 px-3 py-2 text-sm">
+              <CalendarClock size={14} className="text-gray-400" />
+              <span className={fTanggal ? "text-gray-800 font-medium" : "text-gray-400"}>{fTanggal ? hariTglID(fTanggal) : "Semua tanggal"}</span>
+            </button>
+            {showCal && (
+              <div className="absolute z-30 mt-1 w-72">
+                <IndonesianDatePicker value={fTanggal || `${year}-${String(month).padStart(2, "0")}-01`}
+                  onChange={(v) => { const [y, m] = v.split("-").map(Number); setYear(y); setMonth(m); setFTanggal(v); setShowCal(false); }} />
+                <button onClick={() => { setFTanggal(""); setShowCal(false); }} className="mt-1 w-full text-xs text-gray-500 hover:text-gray-700 py-1 bg-white rounded-lg border border-gray-100">Tampilkan semua tanggal</button>
+              </div>
+            )}
+          </div>
         </div>
         <div className="text-sm text-gray-500">
-          {rows.length} absensi · Total denda: <span className="font-bold text-red-600">Rp {totalDenda.toLocaleString("id-ID")}</span>
+          {filteredRows.length} absensi · Total denda: <span className="font-bold text-red-600">Rp {totalDenda.toLocaleString("id-ID")}</span>
         </div>
       </div>
 
@@ -1674,14 +1727,15 @@ function RekapAbsensi({ karyawanList, shifts }: { karyawanList: Karyawan[]; shif
               <th className="px-3 py-2 font-semibold">Keluar</th>
               <th className="px-3 py-2 font-semibold">Status</th>
               <th className="px-3 py-2 font-semibold text-right">Denda</th>
+              <th className="px-3 py-2 font-semibold w-8"></th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={7} className="px-3 py-8 text-center text-gray-400">Memuat…</td></tr>
-            ) : rows.length === 0 ? (
-              <tr><td colSpan={7} className="px-3 py-8 text-center text-gray-400">Belum ada absensi bulan ini</td></tr>
-            ) : rows.map((r) => (
+              <tr><td colSpan={8} className="px-3 py-8 text-center text-gray-400">Memuat…</td></tr>
+            ) : filteredRows.length === 0 ? (
+              <tr><td colSpan={8} className="px-3 py-8 text-center text-gray-400">{rows.length === 0 ? "Belum ada absensi bulan ini" : "Tidak ada data untuk tanggal ini"}</td></tr>
+            ) : filteredRows.map((r) => (
               <tr key={r.id} className="border-b border-gray-50 last:border-0">
                 <td className="px-3 py-1.5">
                   {r.foto_checkin_url ? (
@@ -1707,6 +1761,11 @@ function RekapAbsensi({ karyawanList, shifts }: { karyawanList: Karyawan[]; shif
                       ? <span className="text-green-600 text-xs">Rp {r.denda.toLocaleString("id-ID")} (ampun)</span>
                       : <span className="text-red-600 font-semibold">Rp {r.denda.toLocaleString("id-ID")}</span>
                   ) : <span className="text-gray-300">-</span>}
+                </td>
+                <td className="px-2 py-1.5">
+                  <button onClick={() => openEdit(r)} className="p-1 rounded-md text-gray-300 hover:text-amber-500 hover:bg-amber-50 transition-colors" title="Edit jam masuk">
+                    <Pencil size={13} />
+                  </button>
                 </td>
               </tr>
             ))}
@@ -1740,6 +1799,36 @@ function RekapAbsensi({ karyawanList, shifts }: { karyawanList: Karyawan[]; shif
                 <p className="text-center text-xs text-gray-400">Lokasi check-in tidak tercatat</p>
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal edit jam checkin (override, walau sudah direview) */}
+      {editRow && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setEditRow(null)}>
+          <div className="bg-white rounded-2xl w-full max-w-xs p-4 space-y-3" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="font-bold text-gray-800 text-sm">Edit Jam Masuk</p>
+                <p className="text-xs text-gray-500">{namaOf(editRow.karyawan_id)} · {formatTglID(editRow.tanggal)}</p>
+              </div>
+              <button onClick={() => setEditRow(null)} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+            </div>
+            <div className="flex items-center gap-2">
+              <select className="input" value={editJam} onChange={(e) => setEditJam(e.target.value)}>
+                <option value="">Jam</option>
+                {Array.from({ length: 24 }, (_, i) => String(i).padStart(2, "0")).map((h) => <option key={h} value={h}>{h}</option>)}
+              </select>
+              <span className="font-bold text-gray-400">:</span>
+              <select className="input" value={editMenit} onChange={(e) => setEditMenit(e.target.value)}>
+                <option value="">Menit</option>
+                {Array.from({ length: 60 }, (_, i) => String(i).padStart(2, "0")).map((m) => <option key={m} value={m}>{m}</option>)}
+              </select>
+            </div>
+            <p className="text-[11px] text-gray-400">Menyimpan akan menandai kehadiran sebagai Hadir &amp; menghitung ulang telat/denda, walau baris ini sudah direview/override sebelumnya.</p>
+            <button onClick={simpanEditJam} disabled={editBusy || !editJam || !editMenit} className="btn-primary w-full">
+              {editBusy ? "Menyimpan…" : "Simpan"}
+            </button>
           </div>
         </div>
       )}
