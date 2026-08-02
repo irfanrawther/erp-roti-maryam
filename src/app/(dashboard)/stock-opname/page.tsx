@@ -324,10 +324,19 @@ export default function StockOpnamePage() {
     setBusy(true);
     setError("");
 
+    // pic_id harus selalu akun ber-role PIC yang aktif, bukan siapa pun yang
+    // kebetulan membuka halaman ini duluan (termasuk Super Admin).
+    let picId = user.id;
+    if (user.role !== "pic") {
+      const { data: picUser } = await supabase.from("users")
+        .select("id").eq("role", "pic").eq("aktif", true).limit(1).maybeSingle();
+      if (picUser) picId = (picUser as { id: string }).id;
+    }
+
     // Create opname row
     const { data: newOp, error: opErr } = await supabase
       .from("stock_opname")
-      .insert({ periode, pic_id: user.id, status: "draft" })
+      .insert({ periode, pic_id: picId, status: "draft" })
       .select("id")
       .single();
 
