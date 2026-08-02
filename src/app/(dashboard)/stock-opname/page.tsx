@@ -6,7 +6,7 @@ import { supabase } from "@/lib/supabase";
 import { getUserSession, type UserSession } from "@/lib/auth";
 import { getCapabilities, homeRoute } from "@/lib/permissions";
 import { formatAngka } from "@/lib/utils";
-import { ClipboardList, CheckCircle2, Clock, AlertCircle, ChevronDown, X, RotateCcw, Pencil } from "lucide-react";
+import { ClipboardList, CheckCircle2, Clock, AlertCircle, ChevronDown, X, RotateCcw } from "lucide-react";
 
 // ── Types ────────────────────────────────────────────────────
 type OpnameStatus = "draft" | "pending_approval" | "approved" | "rejected";
@@ -198,14 +198,6 @@ export default function StockOpnamePage() {
   const [catatanApproval,   setCatatanApproval]   = useState("");
   const [approvalBusy,      setApprovalBusy]      = useState(false);
   const [undoBusy,          setUndoBusy]          = useState(false);
-
-  // Edit inline stok utuh/sisa + satuan (Super Admin, koreksi kesalahan input)
-  const [editBahanId,     setEditBahanId]     = useState<string | null>(null);
-  const [editUtuhVal,     setEditUtuhVal]     = useState("");
-  const [editUtuhSat,     setEditUtuhSat]     = useState("");
-  const [editSisaVal,     setEditSisaVal]     = useState("");
-  const [editSisaSat,     setEditSisaSat]     = useState("");
-  const [editBahanBusy,   setEditBahanBusy]   = useState(false);
 
   // Period selector years (WIB, konsisten dengan currentPeriode)
   const nowWIB = todayWIBParts();
@@ -553,43 +545,13 @@ export default function StockOpnamePage() {
     setReviewDetailReject((dreject.data ?? []) as unknown as DetailReject[]);
   }
 
-  async function refreshReviewBahan(opnameId: string) {
-    const { data } = await supabase.from("stock_opname_detail_bahan")
-      .select("id,bahan_id,stok_sistem,stok_fisik,stok_utuh,satuan_utuh,stok_sisa,satuan_sisa,bahan_baku:bahan_id(nama,satuan)")
-      .eq("opname_id", opnameId);
-    setReviewDetailBahan((data ?? []) as unknown as DetailBahan[]);
-  }
-
-  function openEditBahan(d: DetailBahan) {
-    const defSat = d.bahan_baku?.satuan?.toLowerCase() ?? "kg";
-    setEditBahanId(d.id);
-    setEditUtuhVal(d.stok_utuh != null ? String(d.stok_utuh) : "");
-    setEditUtuhSat(d.satuan_utuh ?? defSat);
-    setEditSisaVal(d.stok_sisa != null ? String(d.stok_sisa) : "");
-    setEditSisaSat(d.satuan_sisa ?? defSat);
-  }
-
-  async function simpanEditBahan(d: DetailBahan) {
-    setEditBahanBusy(true);
-    const utuhNum = editUtuhVal !== "" ? parseFloat(editUtuhVal) : null;
-    const sisaNum = editSisaVal !== "" ? parseFloat(editSisaVal) : null;
-    const utuhStd = utuhNum != null && !isNaN(utuhNum) ? toStdUnit(utuhNum, editUtuhSat) : 0;
-    const sisaStd = sisaNum != null && !isNaN(sisaNum) ? toStdUnit(sisaNum, editSisaSat) : 0;
-    const fisikTotal = (utuhNum != null || sisaNum != null) ? utuhStd + sisaStd : null;
-    await supabase.from("stock_opname_detail_bahan").update({
-      stok_utuh: utuhNum, satuan_utuh: editUtuhSat,
-      stok_sisa: sisaNum, satuan_sisa: editSisaSat,
-      stok_fisik: fisikTotal,
-    }).eq("id", d.id);
-    setEditBahanId(null);
-    setEditBahanBusy(false);
-    if (reviewModal) await refreshReviewBahan(reviewModal.id);
-  }
-
   // ── Undo Approve (Super Admin) ─────────────────────────────
+  // Membalik perubahan stok yang sudah diterapkan, lalu kembalikan opname
+  // ke status 'rejected' supaya otomatis ter-unlock di tab Input Opname
+  // untuk PIC koreksi — data stok_utuh/stok_sisa yang sudah ada TETAP tersimpan.
   async function handleUndoApprove() {
     if (!reviewModal || !user) return;
-    if (!confirm("Undo approve opname ini? Perubahan stok yang sudah diterapkan akan dibalik, dan opname kembali ke status menunggu approval.")) return;
+    if (!confirm("Undo approve opname ini? Perubahan stok yang sudah diterapkan akan dibalik, dan opname dikembalikan ke PIC untuk dikoreksi (data yang sudah diisi tidak akan hilang).")) return;
     setUndoBusy(true);
     const { data, error: err } = await supabase.rpc("undo_approve_stock_opname", {
       p_opname_id: reviewModal.id,
@@ -602,11 +564,10 @@ export default function StockOpnamePage() {
       setUndoBusy(false);
       return;
     }
-    setReviewModal((m) => m ? { ...m, status: "pending_approval" } : m);
-    await refreshReviewBahan(reviewModal.id);
+    setReviewModal(null);
     await fetchOpname(periode);
     await fetchAllOpname();
-    showToast("Approve dibatalkan. Opname kembali ke status menunggu approval — silakan koreksi lalu approve ulang.");
+    showToast("Approve dibatalkan. Opname dikembalikan ke PIC untuk dikoreksi di tab Input Opname.");
     setUndoBusy(false);
   }
 
@@ -1122,61 +1083,21 @@ export default function StockOpnamePage() {
                   {reviewDetailBahan.filter((d) => d.stok_fisik != null).map((d) => {
                     const selisih = d.stok_fisik! - d.stok_sistem;
                     const sat = d.bahan_baku?.satuan?.toLowerCase() ?? "";
-                    const satOpts = getSatuanOptions(sat);
-                    const isEditing = editBahanId === d.id;
-                    const canEdit = caps.isSuperAdmin && reviewModal?.status === "pending_approval";
                     return (
                       <div key={d.id} className="rounded-lg border border-gray-100 px-2.5 py-1.5">
                         <div className="flex items-center justify-between text-sm">
                           <span className="text-gray-700 font-medium">{d.bahan_baku?.nama}</span>
-                          <div className="flex items-center gap-2">
-                            <div className="text-right">
-                              <span className="text-gray-400 text-xs block">{formatAngka(d.stok_sistem)} → {formatAngka(d.stok_fisik!)} {sat}</span>
-                              <span className={`text-xs font-bold ${selisih > 0 ? "text-green-600" : selisih < 0 ? "text-red-600" : "text-gray-400"}`}>
-                                {selisih > 0 ? "+" : ""}{formatAngka(selisih)} {sat}
-                              </span>
-                            </div>
-                            {canEdit && !isEditing && (
-                              <button onClick={() => openEditBahan(d)} title="Koreksi stok utuh/sisa & satuan"
-                                className="p-1 rounded-md text-gray-300 hover:text-amber-500 hover:bg-amber-50 transition-colors shrink-0">
-                                <Pencil size={13} />
-                              </button>
-                            )}
+                          <div className="text-right">
+                            <span className="text-gray-400 text-xs block">{formatAngka(d.stok_sistem)} → {formatAngka(d.stok_fisik!)} {sat}</span>
+                            <span className={`text-xs font-bold ${selisih > 0 ? "text-green-600" : selisih < 0 ? "text-red-600" : "text-gray-400"}`}>
+                              {selisih > 0 ? "+" : ""}{formatAngka(selisih)} {sat}
+                            </span>
                           </div>
                         </div>
-                        {!isEditing ? (
-                          <p className="text-[11px] text-gray-400 mt-0.5">
-                            Stok utuh: {d.stok_utuh != null ? `${formatAngka(d.stok_utuh)} ${d.satuan_utuh ?? sat}` : "—"}
-                            {" · "}Stok sisa: {d.stok_sisa != null ? `${formatAngka(d.stok_sisa)} ${d.satuan_sisa ?? sat}` : "—"}
-                          </p>
-                        ) : (
-                          <div className="mt-1.5 space-y-1.5 bg-amber-50 rounded-lg p-2">
-                            <div className="flex items-center gap-1.5">
-                              <span className="text-[11px] text-gray-500 w-16 shrink-0">Stok utuh</span>
-                              <input type="number" step="any" value={editUtuhVal} onChange={(e) => setEditUtuhVal(e.target.value)}
-                                className="input py-1 text-sm flex-1" placeholder="0" />
-                              <select value={editUtuhSat} onChange={(e) => setEditUtuhSat(e.target.value)} className="input py-1 text-sm w-20">
-                                {satOpts.map((o) => <option key={o} value={o}>{o}</option>)}
-                              </select>
-                            </div>
-                            <div className="flex items-center gap-1.5">
-                              <span className="text-[11px] text-gray-500 w-16 shrink-0">Stok sisa</span>
-                              <input type="number" step="any" value={editSisaVal} onChange={(e) => setEditSisaVal(e.target.value)}
-                                className="input py-1 text-sm flex-1" placeholder="0" />
-                              <select value={editSisaSat} onChange={(e) => setEditSisaSat(e.target.value)} className="input py-1 text-sm w-20">
-                                {satOpts.map((o) => <option key={o} value={o}>{o}</option>)}
-                              </select>
-                            </div>
-                            <div className="flex gap-2 pt-0.5">
-                              <button onClick={() => setEditBahanId(null)} disabled={editBahanBusy}
-                                className="flex-1 py-1.5 rounded-lg border border-gray-200 text-xs font-medium text-gray-600 hover:bg-white">Batal</button>
-                              <button onClick={() => simpanEditBahan(d)} disabled={editBahanBusy}
-                                className="flex-1 py-1.5 rounded-lg bg-amber-500 text-white text-xs font-semibold hover:bg-amber-600 disabled:opacity-50">
-                                {editBahanBusy ? "Menyimpan…" : "Simpan"}
-                              </button>
-                            </div>
-                          </div>
-                        )}
+                        <p className="text-[11px] text-gray-400 mt-0.5">
+                          Stok utuh: {d.stok_utuh != null ? `${formatAngka(d.stok_utuh)} ${d.satuan_utuh ?? sat}` : "—"}
+                          {" · "}Stok sisa: {d.stok_sisa != null ? `${formatAngka(d.stok_sisa)} ${d.satuan_sisa ?? sat}` : "—"}
+                        </p>
                       </div>
                     );
                   })}
