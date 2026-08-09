@@ -926,6 +926,7 @@ function ReviewFlag({ karyawanList, shifts, userName }: {
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [rows, setRows]   = useState<AbsRow[]>([]);
   const [catatanMap, setCatatanMap] = useState<Record<string, string>>({});
+  const [koreksiShiftMap, setKoreksiShiftMap] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const [fTanggal, setFTanggal] = useState("");     // filter Semua Absensi: "" = semua tanggal di bulan ini
   const [fStatus,  setFStatus]  = useState("semua"); // semua | K1 | K2 | K3 | alpha | izin | izin_sakit
@@ -993,6 +994,7 @@ function ReviewFlag({ karyawanList, shifts, userName }: {
       denda: res.denda, denda_dihapus_ampun: res.denda_dihapus_ampun,
       is_flagged: res.is_flagged, flag_reason: res.flag_reason,
     }).eq("id", row.id);
+    setKoreksiShiftMap((m) => { const n = { ...m }; delete n[row.id]; return n; });
     refresh();
   }
   async function hapusDenda(row: AbsRow) {
@@ -1117,10 +1119,17 @@ function ReviewFlag({ karyawanList, shifts, userName }: {
             <div className="grid sm:grid-cols-2 gap-2">
               <div>
                 <label className="text-[11px] text-gray-500">Shift asli karyawan (recalc)</label>
-                <select className="input py-1.5 text-sm" value={r.shift_id_koreksi ?? ""} onChange={(e) => e.target.value && koreksiShift(r, e.target.value)}>
+                <select className="input py-1.5 text-sm" value={koreksiShiftMap[r.id] ?? r.shift_id_koreksi ?? ""}
+                  onChange={(e) => setKoreksiShiftMap((m) => ({ ...m, [r.id]: e.target.value }))}>
                   <option value="">Pilih shift…</option>
                   {shifts.map((s, i) => <option key={s.id} value={s.id}>Shift {i + 1} ({s.jam_masuk.slice(0, 5)})</option>)}
                 </select>
+                {koreksiShiftMap[r.id] && koreksiShiftMap[r.id] !== (r.shift_id_koreksi ?? "") && (
+                  <button onClick={() => koreksiShift(r, koreksiShiftMap[r.id])}
+                    className="mt-1 w-full text-xs font-semibold px-2 py-1.5 rounded-lg bg-amber-500 text-white hover:bg-amber-600">
+                    Terapkan Koreksi Shift
+                  </button>
+                )}
               </div>
               <div>
                 <label className="text-[11px] text-gray-500">Catatan</label>
