@@ -73,6 +73,8 @@ interface PemakaianEntry {
   tanggal?: string;
   namaUser: string;
   isReturn?: boolean;   // koreksi packing aktual < rendam → bahan dikembalikan (+)
+  batchId?: string;     // untuk nest koreksi packing ke entri asalnya
+  isKoreksi?: boolean;
 }
 
 // Label mapping untuk proses bikin brand+varian key
@@ -497,13 +499,17 @@ export default function BahanBakuView() {
       let label = "Proses Bikin";
       let isReturn = false;
       let tglProduksi: string | undefined;
+      let batchId: string | undefined;
+      let isKoreksi = false;
       try {
         const jsonStr = r.keterangan.replace("proses_bikin::", "").split(" | ")[0];
         const json = JSON.parse(jsonStr);
         const brandLabels = PROSES_BIKIN_LABEL[json.brandKey] ?? {};
         const varianLabel = brandLabels[json.varianKey] ?? `Proses Bikin ${json.varianKey ?? ""}`;
         tglProduksi = json.tanggal;   // tanggal_produksi warisan dari batch
+        batchId = json.batchId;
         if (json.koreksi) {
+          isKoreksi = true;
           const s = json.selisih as number;
           label = `Koreksi Packing ${s > 0 ? "+" : ""}${s} pcs ${varianLabel}`;
           isReturn = r.tipe === "masuk";   // selisih < 0 → dikembalikan
@@ -523,17 +529,37 @@ export default function BahanBakuView() {
         label,
         namaUser:   r.users?.nama ?? "",
         isReturn,
+        batchId,
+        isKoreksi,
       };
     }),
   ].sort((a, b) => b.created_at.localeCompare(a.created_at)); // terbaru di atas
 
-  const pemakaianFiltered = allPemakaian.filter((r) => {
+  // Nest "Koreksi Packing" ke entri Proses Bikin asalnya (batchId + bahan sama),
+  // supaya tidak jadi baris baru terpisah di list. Berlaku juga utk data lama
+  // karena batchId sudah tersimpan di metadata sejak awal.
+  const koreksiByParent: Record<string, PemakaianEntry[]> = {};
+  const pemakaianTanpaKoreksi: PemakaianEntry[] = [];
+  for (const entry of allPemakaian) {
+    if (!entry.isKoreksi) { pemakaianTanpaKoreksi.push(entry); continue; }
+    const parent = allPemakaian.find((p) => !p.isKoreksi && p.sumber === "proses_bikin" && p.batchId === entry.batchId && p.bahanId === entry.bahanId);
+    if (parent) {
+      (koreksiByParent[parent.id] ??= []).push(entry);
+    } else {
+      pemakaianTanpaKoreksi.push(entry); // orphan (parent tidak ketemu) → tetap tampil sbg baris sendiri
+    }
+  }
+
+  const pemakaianPred = (r: PemakaianEntry) => {
     // Opsi B: filter pakai tanggal_produksi (warisan batch), fallback created_at
     const d = r.tanggal ?? toWIBDate(r.created_at);
     if (d < paRange.start || d > paRange.end) return false;
     if (filterPemakaianBahan && !r.namaBahan.toLowerCase().includes(filterPemakaianBahan.toLowerCase())) return false;
     return true;
-  });
+  };
+  const pemakaianFiltered = pemakaianTanpaKoreksi.filter(pemakaianPred);
+  // Termasuk koreksi (walau ditampilkan nested) — dipakai buat Grand Total supaya angkanya tetap benar
+  const allPemakaianFiltered = allPemakaian.filter(pemakaianPred);
 
 
   async function doReset() {
@@ -797,7 +823,7 @@ export default function BahanBakuView() {
           {/* Grand Total panel — gabungan Produksi + Proses Bikin */}
           {pemakaianFiltered.length > 0 && (() => {
             const totals: Record<string, { jumlah: number; satuan: string }> = {};
-            for (const r of pemakaianFiltered) {
+            for (const r of allPemakaianFiltered) {
               if (!totals[r.namaBahan]) totals[r.namaBahan] = { jumlah: 0, satuan: r.satuan };
               // Koreksi return (bahan dikembalikan) mengurangi total pemakaian
               totals[r.namaBahan].jumlah += r.isReturn ? -r.jumlah : r.jumlah;
@@ -846,6 +872,7 @@ export default function BahanBakuView() {
                     const isEditing = editRowId === r.id;
                     const actualId  = r.id.replace(/^(prod|pb)-/, "");
                     const rowAdjs   = adjustments.filter((a) => a.riwayat_id === actualId);
+                    const rowKoreksi = koreksiByParent[r.id] ?? [];
                     return (
                       <div key={r.id} className="border-b border-gray-50 pb-2.5 last:border-0 last:pb-0">
                         <div className="flex items-start justify-between gap-2">
@@ -870,6 +897,21 @@ export default function BahanBakuView() {
                                       oleh <span className="font-medium text-gray-500">{a.users?.nama ?? "—"}</span> · {formatTanggalWaktu(a.created_at)}
                                     </span>
                                     {a.catatan && <span className="text-[10px] text-gray-400 italic">"{a.catatan}"</span>}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                            {rowKoreksi.length > 0 && (
+                              <div className="mt-1 space-y-0.5">
+                                {rowKoreksi.map((k) => (
+                                  <div key={k.id} className="flex items-center gap-1.5 flex-wrap">
+                                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold ${k.isReturn ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>
+                                      {k.isReturn ? "+" : "−"} {formatBahan(k.jumlah, k.satuan)} {capSatuan(k.satuan)} — {k.label}
+                                      {k.isReturn && " (dikembalikan)"}
+                                    </span>
+                                    <span className="text-[10px] text-gray-400">
+                                      oleh <span className="font-medium text-gray-500">{k.namaUser || "—"}</span> · {formatTanggalWaktu(k.created_at)}
+                                    </span>
                                   </div>
                                 ))}
                               </div>
