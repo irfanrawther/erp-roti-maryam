@@ -937,6 +937,13 @@ function ReviewFlag({ karyawanList, shifts, userName }: {
   const [lemburMap, setLemburMap] = useState<Record<string, { jam: number; nominal: number }>>({});
   const [showCal, setShowCal] = useState(false);
 
+  // Edit shift/jam masuk dari tabel "Semua Absensi" — tetap tersedia walau sudah direview
+  const [editRow2,   setEditRow2]   = useState<AbsRow | null>(null);
+  const [editShiftId2, setEditShiftId2] = useState("");
+  const [editJam2,   setEditJam2]   = useState("");
+  const [editMenit2, setEditMenit2] = useState("");
+  const [editBusy2,  setEditBusy2]  = useState(false);
+
   const daysInMonth = new Date(year, month, 0).getDate();
   const mStart = `${year}-${String(month).padStart(2, "0")}-01`;
   const mEnd   = `${year}-${String(month).padStart(2, "0")}-${String(daysInMonth).padStart(2, "0")}`;
@@ -997,6 +1004,34 @@ function ReviewFlag({ karyawanList, shifts, userName }: {
     setKoreksiShiftMap((m) => { const n = { ...m }; delete n[row.id]; return n; });
     refresh();
   }
+
+  // Edit shift + jam masuk dari "Semua Absensi" — backup permanen, jalan walau sudah direview/submit
+  function openEdit2(r: AbsRow) {
+    setEditRow2(r);
+    setEditShiftId2(r.shift_id_koreksi ?? r.shift_id ?? "");
+    const d = r.jam_checkin ? new Date(r.jam_checkin) : null;
+    setEditJam2(d ? d.toLocaleTimeString("en-GB", { timeZone: "Asia/Jakarta", hour: "2-digit", hour12: false }) : "");
+    setEditMenit2(d ? d.toLocaleTimeString("en-GB", { timeZone: "Asia/Jakarta", minute: "2-digit", hour12: false }).slice(-2) : "");
+  }
+  async function simpanEdit2() {
+    if (!editRow2 || !editShiftId2) return;
+    setEditBusy2(true);
+    const shift = shifts.find((s) => s.id === editShiftId2);
+    const patch: Record<string, unknown> = { shift_id_koreksi: editShiftId2 };
+    if (shift && editJam2 && editMenit2) {
+      const newIso = new Date(`${editRow2.tanggal}T${editJam2}:${editMenit2}:00+07:00`).toISOString();
+      const k1 = await countK1Ampun(editRow2.karyawan_id, editRow2.tanggal, editRow2.id);
+      const res = hitungDenda(shift.jam_masuk, new Date(newIso), k1);
+      patch.jam_checkin = newIso; patch.status_kehadiran = "hadir";
+      patch.menit_telat = res.menit_telat; patch.kategori_telat = res.kategori_telat;
+      patch.denda = res.denda; patch.denda_dihapus_ampun = res.denda_dihapus_ampun;
+      patch.is_flagged = res.is_flagged; patch.flag_reason = res.flag_reason;
+    }
+    await supabase.from("absensi").update(patch).eq("id", editRow2.id);
+    setEditBusy2(false); setEditRow2(null);
+    refresh();
+  }
+
   async function hapusDenda(row: AbsRow) {
     await supabase.from("absensi").update({ denda: 0, is_flagged: false }).eq("id", row.id);
     refresh();
@@ -1287,6 +1322,7 @@ function ReviewFlag({ karyawanList, shifts, userName }: {
               <tr className="text-left text-xs text-gray-400 uppercase border-b border-gray-100">
                 <th className="py-2 pr-3">Tanggal</th><th className="py-2 pr-3">Karyawan</th><th className="py-2 pr-3">Shift</th>
                 <th className="py-2 pr-3">Masuk</th><th className="py-2 pr-3">Telat</th><th className="py-2 pr-3">Status</th><th className="py-2 pr-3 text-right">Denda</th><th className="py-2 pr-3 text-right">Lembur</th>
+                <th className="py-2 pr-3 w-8"></th>
               </tr>
             </thead>
             <tbody>
@@ -1302,6 +1338,12 @@ function ReviewFlag({ karyawanList, shifts, userName }: {
                   <td className="py-2 pr-3">{STATUS_LABEL[r.status_kehadiran] ?? r.status_kehadiran}{r.denda_dihapus_ampun && <span className="text-green-500 text-[10px]"> (ampun)</span>}</td>
                   <td className="py-2 pr-3 text-right font-semibold text-gray-800">{r.denda ? rupiah(r.denda) : "—"}</td>
                   <td className="py-2 pr-3 text-right whitespace-nowrap">{lem ? <span className="text-teal-700 font-semibold">{lem.jam}j · Rp {lem.nominal.toLocaleString("id-ID")}</span> : <span className="text-gray-300">—</span>}</td>
+                  <td className="py-2 pr-1">
+                    <button onClick={() => openEdit2(r)} title="Edit shift/jam (bisa dipakai kapan saja)"
+                      className="p-1 rounded-md text-gray-300 hover:text-amber-500 hover:bg-amber-50 transition-colors">
+                      <Pencil size={13} />
+                    </button>
+                  </td>
                 </tr>
                 );
               })}
@@ -1309,6 +1351,46 @@ function ReviewFlag({ karyawanList, shifts, userName }: {
           </table>
         )}
       </div>
+
+      {/* Modal edit shift/jam dari "Semua Absensi" — backup permanen, tersedia kapan pun */}
+      {editRow2 && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setEditRow2(null)}>
+          <div className="bg-white rounded-2xl w-full max-w-xs p-4 space-y-3" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="font-bold text-gray-800 text-sm">Edit Shift &amp; Jam Masuk</p>
+                <p className="text-xs text-gray-500">{editRow2.karyawan?.nama} · {formatTglID(editRow2.tanggal)}</p>
+              </div>
+              <button onClick={() => setEditRow2(null)} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+            </div>
+            <div>
+              <label className="text-[11px] text-gray-500">Shift</label>
+              <select className="input" value={editShiftId2} onChange={(e) => setEditShiftId2(e.target.value)}>
+                <option value="">Pilih shift…</option>
+                {shifts.map((s, i) => <option key={s.id} value={s.id}>Shift {i + 1} ({s.jam_masuk.slice(0, 5)})</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-[11px] text-gray-500">Jam Masuk</label>
+              <div className="flex items-center gap-2">
+                <select className="input" value={editJam2} onChange={(e) => setEditJam2(e.target.value)}>
+                  <option value="">Jam</option>
+                  {Array.from({ length: 24 }, (_, i) => String(i).padStart(2, "0")).map((h) => <option key={h} value={h}>{h}</option>)}
+                </select>
+                <span className="font-bold text-gray-400">:</span>
+                <select className="input" value={editMenit2} onChange={(e) => setEditMenit2(e.target.value)}>
+                  <option value="">Menit</option>
+                  {Array.from({ length: 60 }, (_, i) => String(i).padStart(2, "0")).map((m) => <option key={m} value={m}>{m}</option>)}
+                </select>
+              </div>
+            </div>
+            <p className="text-[11px] text-gray-400">Menyimpan akan menghitung ulang telat/denda pakai shift &amp; jam ini, walau baris ini sudah direview/submit sebelumnya.</p>
+            <button onClick={simpanEdit2} disabled={editBusy2 || !editShiftId2} className="btn-primary w-full">
+              {editBusy2 ? "Menyimpan…" : "Simpan"}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
