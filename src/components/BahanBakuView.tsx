@@ -326,7 +326,7 @@ export default function BahanBakuView() {
       .eq("id", row.id);
     if (updateErr) { setAdjError("Gagal update: " + updateErr.message); setAdjLoading(false); return; }
 
-    await supabase.from("adjustment_bahan_baku").insert({
+    const { error: adjInsertErr } = await supabase.from("adjustment_bahan_baku").insert({
       bahan_baku_id: row.bahan_baku_id,
       tipe: adjTipe,
       jumlah_adjustment: adj,
@@ -336,6 +336,11 @@ export default function BahanBakuView() {
       riwayat_id: row.id,
       created_by: user.id,
     });
+    if (adjInsertErr) {
+      setAdjError("Jumlah tersimpan tapi histori gagal dicatat: " + adjInsertErr.message);
+      setAdjLoading(false);
+      return;
+    }
 
     setAdjSuccess("Tersimpan!");
     setAdjLoading(false);
@@ -423,7 +428,7 @@ export default function BahanBakuView() {
     }
 
     // Audit trail: INSERT ke adjustment_bahan_baku dari client (butuh RLS auth context)
-    await supabase.from("adjustment_bahan_baku").insert({
+    const { error: adjInsertErr } = await supabase.from("adjustment_bahan_baku").insert({
       bahan_baku_id:     entry.bahanId,
       tipe:              adjTipe,
       jumlah_adjustment: adj,
@@ -433,6 +438,11 @@ export default function BahanBakuView() {
       riwayat_id:        actualId,
       created_by:        user.id,
     });
+    if (adjInsertErr) {
+      setAdjError("Jumlah tersimpan tapi histori gagal dicatat: " + adjInsertErr.message);
+      setAdjLoading(false);
+      return;
+    }
 
     setAdjSuccess(`Tersimpan! Pemakaian: ${entry.jumlah} → ${newJumlah} ${entry.satuan}`);
     setAdjLoading(false);
