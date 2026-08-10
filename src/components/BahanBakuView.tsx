@@ -933,7 +933,7 @@ export default function BahanBakuView() {
                             }`}>
                               {r.sumber === "produksi" ? "Produksi" : "Proses Bikin"}
                             </span>
-                            {bolehAdjust && (
+                            {bolehAdjust && r.sumber === "proses_bikin" && (
                               <button type="button"
                                 onClick={() => isEditing ? setEditRowId(null) : openEditPemakaian(r)}
                                 className={`p-1.5 rounded-lg transition-colors ${isEditing ? "bg-amber-100 text-amber-600" : "text-gray-300 hover:text-amber-500 hover:bg-amber-50"}`}
