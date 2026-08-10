@@ -235,12 +235,13 @@ export default function BahanBakuView() {
     if (adjRes.data)         setAdjustments(adjRes.data as unknown as AdjustmentEntry[]);
   }
 
-  async function submitTransaksi(bahanId: string, tipe: "masuk" | "keluar", jumlah: number, satuan: string): Promise<boolean> {
+  async function submitTransaksi(bahanId: string, tipe: "masuk" | "keluar", jumlah: number, satuan: string, alasan?: string): Promise<boolean> {
     if (!user) return false;
+    const defaultKet = tipe === "masuk" ? "Tambah stok manual" : "Kurang stok manual";
     const { error } = await supabase.from("penerimaan_bahan_baku").insert({
       bahan_baku_id: bahanId, jumlah, satuan, tipe,
       tanggal: new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" }), created_by: user.id,
-      keterangan: tipe === "masuk" ? "Tambah stok manual" : "Kurang stok manual",
+      keterangan: alasan?.trim() ? alasan.trim() : defaultKet,
     });
     if (!error) fetchData();
     return !error;
@@ -783,6 +784,11 @@ export default function BahanBakuView() {
                               </p>
                             )}
                             <p className="text-xs text-gray-300">{formatTanggalWaktu(r.created_at)}</p>
+                            {!masuk && r.keterangan && r.keterangan !== "Kurang stok manual" && (
+                              <span className="inline-block mt-1 text-[10px] px-1.5 py-0.5 rounded-full font-semibold bg-orange-100 text-orange-700">
+                                {r.keterangan}
+                              </span>
+                            )}
                             {rowAdjs.length > 0 && (
                               <div className="mt-1 space-y-0.5">
                                 {rowAdjs.map((a) => (
@@ -1089,9 +1095,11 @@ export default function BahanBakuView() {
 
 
 // ── BahanCard ────────────────────────────────────────────────
+const ALASAN_KURANGI = ["Kurang stok manual", "Rusak / Dimakan hama", "Kadaluarsa", "Tumpah / Tercecer", "Lainnya"];
+
 function BahanCard({ bahan, onSubmit, isSuperAdmin, onDirectSet, canKurangi, readOnly, addOnly }: {
   bahan: BahanBaku;
-  onSubmit: (id: string, tipe: "masuk" | "keluar", jumlah: number, satuan: string) => Promise<boolean>;
+  onSubmit: (id: string, tipe: "masuk" | "keluar", jumlah: number, satuan: string, alasan?: string) => Promise<boolean>;
   isSuperAdmin: boolean;
   onDirectSet: (id: string, nilai: number) => Promise<boolean>;
   canKurangi: boolean;
@@ -1102,12 +1110,14 @@ function BahanCard({ bahan, onSubmit, isSuperAdmin, onDirectSet, canKurangi, rea
   const [mode,        setMode]        = useState<"masuk" | "keluar" | null>(null);
   const [jumlah,      setJumlah]      = useState("");
   const [satuan,      setSatuan]      = useState("");
+  const [alasan,      setAlasan]      = useState(ALASAN_KURANGI[0]);
+  const [alasanLain,  setAlasanLain]  = useState("");
   const [loading,     setLoading]     = useState(false);
   const [editingStok, setEditingStok] = useState(false);
   const [stokInput,   setStokInput]   = useState("");
   const [stokLoading, setStokLoading] = useState(false);
 
-  function openForm(tipe: "masuk" | "keluar") { setMode(tipe); setJumlah(""); setSatuan(""); setEditingStok(false); }
+  function openForm(tipe: "masuk" | "keluar") { setMode(tipe); setJumlah(""); setSatuan(""); setAlasan(ALASAN_KURANGI[0]); setAlasanLain(""); setEditingStok(false); }
   function closeForm() { setMode(null); setJumlah(""); setSatuan(""); }
 
   function openEditStok() {
@@ -1119,8 +1129,10 @@ function BahanCard({ bahan, onSubmit, isSuperAdmin, onDirectSet, canKurangi, rea
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!jumlah || !satuan || !mode) return;
+    if (mode === "keluar" && alasan === "Lainnya" && !alasanLain.trim()) return;
     setLoading(true);
-    const ok = await onSubmit(bahan.id, mode, parseFloat(jumlah), satuan);
+    const alasanFinal = mode === "keluar" ? (alasan === "Lainnya" ? alasanLain : alasan) : undefined;
+    const ok = await onSubmit(bahan.id, mode, parseFloat(jumlah), satuan, alasanFinal);
     setLoading(false);
     if (ok) closeForm();
   }
@@ -1226,6 +1238,17 @@ function BahanCard({ bahan, onSubmit, isSuperAdmin, onDirectSet, canKurangi, rea
               <X size={14} />
             </button>
           </div>
+          {mode === "keluar" && (
+            <div className="mt-2 space-y-1.5">
+              <select value={alasan} onChange={(e) => setAlasan(e.target.value)} className="input py-1.5 text-sm w-full">
+                {ALASAN_KURANGI.map((a) => <option key={a} value={a}>{a}</option>)}
+              </select>
+              {alasan === "Lainnya" && (
+                <input type="text" required value={alasanLain} onChange={(e) => setAlasanLain(e.target.value)}
+                  placeholder="Tulis alasan…" className="input py-1.5 text-sm w-full" />
+              )}
+            </div>
+          )}
         </form>
       )}
     </div>
