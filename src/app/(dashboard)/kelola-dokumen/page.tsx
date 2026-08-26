@@ -7,8 +7,16 @@ import { homeRoute } from "@/lib/permissions";
 import { FileText, Upload, Plus, X, CheckCircle2, AlertCircle } from "lucide-react";
 
 interface Dokumen {
-  id: string; nama: string; file_pdf_url: string | null; versi: number; wajib_ttd: boolean; is_aktif: boolean; created_at: string;
+  id: string; nama: string; file_pdf_url: string | null; versi: number; wajib_ttd: boolean; is_aktif: boolean; created_at: string; kategori: string;
 }
+
+const KATEGORI_LABEL: Record<string, string> = {
+  training_produksi: "Training Produksi",
+  training_packing: "Training Packing",
+  staff_produksi: "Staff Produksi",
+  staff_packing: "Staff Packing",
+  spv: "SPV",
+};
 interface Karyawan { id: string; nama: string }
 interface Persetujuan {
   dokumen_id: string; dokumen_versi: number; karyawan_id: string; tipe: string;
@@ -47,7 +55,7 @@ export default function KelolaDokumenPage() {
   const fetchAll = useCallback(async () => {
     setLoading(true);
     const [dRes, kRes, pRes] = await Promise.all([
-      supabase.from("dokumen").select("id, nama, file_pdf_url, versi, wajib_ttd, is_aktif, created_at").eq("is_aktif", true).order("created_at"),
+      supabase.from("dokumen").select("id, nama, file_pdf_url, versi, wajib_ttd, is_aktif, kategori, created_at").eq("is_aktif", true).order("created_at"),
       supabase.from("karyawan").select("id, nama").eq("status", "aktif").order("nama"),
       supabase.from("dokumen_persetujuan").select("dokumen_id, dokumen_versi, karyawan_id, tipe, tanda_tangan_url, disetujui_at"),
     ]);
@@ -75,7 +83,7 @@ export default function KelolaDokumenPage() {
       const url = await uploadPdf();
       const { error } = await supabase.from("dokumen").insert({
         nama: nama.trim(), file_pdf_url: url, versi: 1, wajib_ttd: wajibTtd,
-        is_aktif: true, uploaded_by: user?.nama ?? "",
+        is_aktif: true, uploaded_by: user?.nama ?? "", kategori: "training_produksi",
       });
       if (error) throw new Error(error.message);
       setShowUpload(false); setNama(""); setFile(null); setWajibTtd(true);
@@ -121,7 +129,9 @@ export default function KelolaDokumenPage() {
             <div key={d.id} className="flex items-center justify-between gap-2 p-2.5 rounded-xl border border-gray-100">
               <div className="min-w-0">
                 <p className="font-semibold text-sm text-gray-800 truncate">{d.nama}</p>
-                <p className="text-[11px] text-gray-400">Versi {d.versi} · {d.wajib_ttd ? "Wajib TTD" : "Baca Saja"} · {belumCount(d)} belum</p>
+                <p className="text-[11px] text-gray-400">
+                  <span className="text-indigo-500 font-medium">{KATEGORI_LABEL[d.kategori] ?? d.kategori}</span> · Versi {d.versi} · {d.wajib_ttd ? "Wajib TTD" : "Baca Saja"} · {belumCount(d)} belum
+                </p>
               </div>
               <div className="flex items-center gap-2 shrink-0">
                 {d.file_pdf_url && <a href={d.file_pdf_url} target="_blank" rel="noopener noreferrer" className="text-xs text-indigo-600 hover:underline">Lihat PDF</a>}
@@ -187,6 +197,12 @@ export default function KelolaDokumenPage() {
             <div className="flex items-center justify-between">
               <h2 className="font-bold text-gray-800">Upload Dokumen Baru</h2>
               <button onClick={() => setShowUpload(false)} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
+            </div>
+            <div>
+              <label className="label">Kategori Dokumen</label>
+              <select className="input" value="training_produksi" disabled>
+                <option value="training_produksi">Training Produksi</option>
+              </select>
             </div>
             <div>
               <label className="label">Nama Dokumen</label>

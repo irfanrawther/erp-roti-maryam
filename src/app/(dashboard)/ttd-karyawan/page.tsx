@@ -11,8 +11,10 @@ const DokumenViewerPerusahaan = dynamic(() => import("./DokumenViewerPerusahaan"
 
 const KATEGORI_OPTIONS = [
   { value: "", label: "— Belum ditentukan —" },
-  { value: "training", label: "Training" },
-  { value: "staff", label: "Staff" },
+  { value: "training_produksi", label: "Training Produksi" },
+  { value: "training_packing", label: "Training Packing" },
+  { value: "staff_produksi", label: "Staff Produksi" },
+  { value: "staff_packing", label: "Staff Packing" },
   { value: "spv", label: "SPV" },
 ];
 
