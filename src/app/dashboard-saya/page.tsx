@@ -1,11 +1,14 @@
 "use client";
 import { useState } from "react";
+import dynamic from "next/dynamic";
 import { supabase } from "@/lib/supabase";
 import { hashPin } from "@/lib/auth";
-import { UserCircle, Clock, ClipboardList, CalendarDays, FileText, CheckCircle2, AlertCircle, X, ExternalLink, ShieldAlert } from "lucide-react";
+import { UserCircle, Clock, ClipboardList, CalendarDays, FileText, CheckCircle2, AlertCircle, X, ExternalLink, ShieldAlert, PenLine } from "lucide-react";
 import { kuartalSekarang, labelKuartal, POIN_PER_SP } from "@/lib/poin";
 
-interface Karyawan { id: string; nama: string; jabatan: string | null }
+const DokumenViewer = dynamic(() => import("@/app/dokumen/DokumenViewer"), { ssr: false });
+
+interface Karyawan { id: string; nama: string; jabatan: string | null; kategori_dokumen: string | null }
 interface ShiftInfo { nama_shift: string; jam_masuk: string; jam_pulang: string }
 interface AssignRow { tanggal: string; is_libur: boolean; shift_id: string | null; shift_master: ShiftInfo | null }
 interface AbsRow {
@@ -47,6 +50,7 @@ export default function DashboardSayaPage() {
   const [poinRows, setPoinRows] = useState<{ tanggal: string; poin: number; sumber: string; master_pelanggaran: { nama_pelanggaran: string } | null; catatan: string | null }[]>([]);
   const [spLevel, setSpLevel] = useState(0);
   const [spBefore, setSpBefore] = useState(0);
+  const [signingDoc, setSigningDoc] = useState<DokItem | null>(null);
 
   const today = todayWIB();
   const monthStart = today.slice(0, 8) + "01";
@@ -58,18 +62,21 @@ export default function DashboardSayaPage() {
     try {
       const hash = await hashPin(pin);
       const { data: k } = await supabase.from("karyawan")
-        .select("id, nama, jabatan").eq("pin_absensi", hash).eq("status", "aktif").maybeSingle();
+        .select("id, nama, jabatan, kategori_dokumen").eq("pin_absensi", hash).eq("status", "aktif").maybeSingle();
       if (!k) { setPinErr("PIN tidak ditemukan"); return; }
       const kar = k as Karyawan; setKaryawan(kar);
 
       const upTo = addDaysStr(today, 7);
+      const dokQuery = kar.kategori_dokumen
+        ? supabase.from("dokumen").select("id, nama, versi, wajib_ttd, file_pdf_url").eq("is_aktif", true).eq("kategori", kar.kategori_dokumen).order("created_at")
+        : Promise.resolve({ data: [] as { id: string; nama: string; versi: number; wajib_ttd: boolean; file_pdf_url: string | null }[] });
       const [asg, abs, jd, dk, pj, pn, spr] = await Promise.all([
         supabase.from("shift_assignment").select("tanggal, is_libur, shift_id, shift_master:shift_id(nama_shift, jam_masuk, jam_pulang)")
           .eq("karyawan_id", kar.id).gte("tanggal", monthStart).lte("tanggal", upTo).order("tanggal"),
         supabase.from("absensi").select("tanggal, jam_checkin, jam_checkout, menit_telat, status_kehadiran, is_flagged, is_override, shift_master:shift_id(nama_shift)")
           .eq("karyawan_id", kar.id).gte("tanggal", monthStart).lte("tanggal", today).order("tanggal", { ascending: false }),
         supabase.from("jobdesk_shift").select("shift_id, jobdesk_awal, jobdesk_akhir"),
-        supabase.from("dokumen").select("id, nama, versi, wajib_ttd, file_pdf_url").eq("is_aktif", true).order("created_at"),
+        dokQuery,
         supabase.from("dokumen_persetujuan").select("dokumen_id, dokumen_versi, disetujui_at, tipe, tanda_tangan_url").eq("karyawan_id", kar.id),
         supabase.from("poin_karyawan").select("tanggal, poin, sumber, catatan, master_pelanggaran:pelanggaran_id(nama_pelanggaran)").eq("karyawan_id", kar.id).eq("kuartal", kuartalSekarang()).order("tanggal", { ascending: false }),
         supabase.from("status_sp_karyawan").select("level_sp, kuartal_kena").eq("karyawan_id", kar.id).eq("is_aktif", true),
@@ -88,6 +95,20 @@ export default function DashboardSayaPage() {
       setStep("dash");
     } catch { setPinErr("Terjadi kesalahan, coba lagi"); }
     finally { setBusy(false); }
+  }
+
+  async function refreshDocs() {
+    if (!karyawan) return;
+    const [dk, pj] = await Promise.all([
+      karyawan.kategori_dokumen
+        ? supabase.from("dokumen").select("id, nama, versi, wajib_ttd, file_pdf_url").eq("is_aktif", true).eq("kategori", karyawan.kategori_dokumen).order("created_at")
+        : Promise.resolve({ data: [] as { id: string; nama: string; versi: number; wajib_ttd: boolean; file_pdf_url: string | null }[] }),
+      supabase.from("dokumen_persetujuan").select("dokumen_id, dokumen_versi, disetujui_at, tipe, tanda_tangan_url").eq("karyawan_id", karyawan.id),
+    ]);
+    const persetujuan = (pj.data as { dokumen_id: string; dokumen_versi: number; disetujui_at: string; tipe: string; tanda_tangan_url: string | null }[] | null) ?? [];
+    setDocs(((dk.data as { id: string; nama: string; versi: number; wajib_ttd: boolean; file_pdf_url: string | null }[] | null) ?? []).map((d) => ({
+      ...d, approved: persetujuan.find((p) => p.dokumen_id === d.id && p.dokumen_versi === d.versi) ?? null,
+    })));
   }
 
   function reset() { setStep("pin"); setPin(""); setPinErr(""); setKaryawan(null); }
@@ -253,26 +274,35 @@ export default function DashboardSayaPage() {
             </div>
 
             {/* SECTION 4 — Dokumen */}
-            <div className="bg-white rounded-2xl shadow-sm p-4 space-y-3">
-              <h2 className="font-bold text-gray-700 text-sm flex items-center gap-2"><FileText size={16} className="text-violet-500" /> Dokumen Saya</h2>
-              {docs.length === 0 ? <p className="text-sm text-gray-400">Belum ada dokumen.</p> : docs.map((d) => (
-                <div key={d.id} className="flex items-center justify-between gap-2 py-2 border-b border-gray-50 last:border-0">
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-gray-800 truncate">{d.nama}</p>
-                    {d.approved
-                      ? <p className="text-[11px] text-green-600">{d.approved.tipe === "ttd" ? "Sudah TTD" : "Sudah Baca"} · {tglWaktu(d.approved.disetujui_at)}</p>
-                      : <p className="text-[11px] text-red-500">Belum</p>}
+            {signingDoc ? (
+              <DokumenViewer
+                dok={signingDoc}
+                karyawanId={karyawan.id}
+                onBack={() => setSigningDoc(null)}
+                onDone={() => { setSigningDoc(null); refreshDocs(); }}
+              />
+            ) : (
+              <div className="bg-white rounded-2xl shadow-sm p-4 space-y-3">
+                <h2 className="font-bold text-gray-700 text-sm flex items-center gap-2"><FileText size={16} className="text-violet-500" /> Dokumen Saya</h2>
+                {docs.length === 0 ? <p className="text-sm text-gray-400">Belum ada dokumen ditugaskan.</p> : docs.map((d) => (
+                  <div key={d.id} className="flex items-center justify-between gap-2 py-2 border-b border-gray-50 last:border-0">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-gray-800 truncate">{d.nama}</p>
+                      {d.approved
+                        ? <p className="text-[11px] text-green-600">{d.approved.tipe === "ttd" ? "Sudah TTD" : "Sudah Baca"} · {tglWaktu(d.approved.disetujui_at)}</p>
+                        : <p className="text-[11px] text-red-500">Belum</p>}
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {d.approved
+                        ? <CheckCircle2 size={16} className="text-green-500" />
+                        : <button onClick={() => setSigningDoc(d)} className="text-[11px] font-semibold text-indigo-600 hover:underline flex items-center gap-0.5"><PenLine size={11} /> Tanda tangani</button>}
+                      {d.file_pdf_url && <a href={d.file_pdf_url} target="_blank" rel="noopener noreferrer" className="text-gray-300 hover:text-gray-500"><ExternalLink size={14} /></a>}
+                      {d.approved?.tanda_tangan_url && <a href={d.approved.tanda_tangan_url} target="_blank" rel="noopener noreferrer" className="text-[10px] text-gray-400 hover:underline">TTD</a>}
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    {d.approved
-                      ? <CheckCircle2 size={16} className="text-green-500" />
-                      : <a href="/dokumen" className="text-[11px] font-semibold text-indigo-600 hover:underline flex items-center gap-0.5">Tanda tangani <ExternalLink size={11} /></a>}
-                    {d.file_pdf_url && <a href={d.file_pdf_url} target="_blank" rel="noopener noreferrer" className="text-gray-300 hover:text-gray-500"><ExternalLink size={14} /></a>}
-                    {d.approved?.tanda_tangan_url && <a href={d.approved.tanda_tangan_url} target="_blank" rel="noopener noreferrer" className="text-[10px] text-gray-400 hover:underline">TTD</a>}
-                  </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
 
             <button onClick={reset} className="w-full text-sm text-gray-400 hover:text-gray-600">Ganti karyawan / Keluar</button>
           </div>

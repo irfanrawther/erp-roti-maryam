@@ -15,6 +15,7 @@ import {
   AlertTriangle,
   CalendarClock,
   FileText,
+  FileSignature,
   ShieldAlert,
   LogOut,
   X,
@@ -46,6 +47,7 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
   const adminItems = [
     { href: "/absensi",     label: "Absensi",             icon: CalendarClock, show: caps.absensi },
     { href: "/kelola-dokumen", label: "Dokumen",          icon: FileText, show: caps.dokumen },
+    { href: "/ttd-karyawan",  label: "TTD Dokumen Karyawan", icon: FileSignature, show: caps.dokumen },
     { href: "/pelanggaran",   label: "Pelanggaran & Poin", icon: ShieldAlert, show: caps.pelanggaran },
     { href: "/admin/users", label: "Kelola User",         icon: Users,    show: caps.kelolaUser },
     { href: "/admin/resep", label: "Master Resep Adonan", icon: BookOpen, show: caps.masterResep },
