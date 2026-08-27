@@ -1,4 +1,5 @@
 "use client";
+import { useEffect } from "react";
 // Rendering HTML terstruktur dari "PK & PP Masa Training — Karyawan Produksi".
 // Isi & urutan pasal mengikuti PDF sumber apa adanya; field titik-titik
 // dikonversi jadi input, digating per pihak (perusahaan vs karyawan).
@@ -50,6 +51,40 @@ function Blank({ field, values, mode, onChange, placeholder, type = "text", w = 
       placeholder={placeholder ?? "…"}
       className={`inline-block ${w} border-b border-indigo-300 focus:border-indigo-500 outline-none px-1 text-indigo-700 font-medium bg-indigo-50/40 rounded-sm`}
     />
+  );
+}
+
+// Dropdown yang cuma punya 1 opsi — dipakai untuk field yang saat ini
+// nilainya tunggal/pasti (mis. "Training Produksi"), tapi tampil sebagai
+// dropdown asli (bukan teks statis) supaya siap nambah opsi lain nanti.
+function LockedChoice({ field, values, mode, onChange, options }: {
+  field: Field; values: TrainingDocValues; mode: Mode;
+  onChange?: (field: Field, value: string) => void;
+  options: string[];
+}) {
+  const editable = fieldEditable(field, mode);
+  const val = values[field] ?? "";
+
+  useEffect(() => {
+    if (editable && !val && options.length >= 1) onChange?.(field, options[0]);
+  }, [editable, val]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!editable) {
+    return (
+      <span className={`inline-block border-b border-dotted border-gray-400 px-1 min-w-[80px] ${val ? "text-gray-800 font-medium" : "text-gray-300"}`}>
+        {val || "…"}
+      </span>
+    );
+  }
+  return (
+    <select
+      value={val || options[0]}
+      disabled={options.length <= 1}
+      onChange={(e) => onChange?.(field, e.target.value)}
+      className="inline-block w-56 border-b border-indigo-300 focus:border-indigo-500 outline-none px-1 py-0.5 text-indigo-700 font-medium bg-indigo-50/40 rounded-sm disabled:cursor-default"
+    >
+      {options.map((o) => <option key={o} value={o}>{o}</option>)}
+    </select>
   );
 }
 
@@ -118,7 +153,9 @@ export default function TrainingDocContent({ values, mode, onChange }: {
       <h3 className="font-bold text-center text-red-700 text-[13px] mt-4">BAGIAN A — PERJANJIAN KERJA MASA TRAINING</h3>
 
       <Pasal n="1" title="Jabatan dan Penempatan">
-        <p>1. PIHAK PERTAMA menerima PIHAK KEDUA untuk menjalani masa training pada jabatan: {B("jabatan_dilamar", { w: "w-48" })}, Divisi Produksi, berlokasi di Jalan Gajah Mada No. 91, Jakarta Barat.</p>
+        <p>1. PIHAK PERTAMA menerima PIHAK KEDUA untuk menjalani masa training pada jabatan:{" "}
+          <LockedChoice field="jabatan_dilamar" values={values} mode={mode} onChange={onChange} options={["Training Produksi"]} />
+          , Divisi Produksi, berlokasi di Jalan Gajah Mada No. 91, Jakarta Barat.</p>
       </Pasal>
 
       <Pasal n="2" title="Masa Training dan Status Kerja">
