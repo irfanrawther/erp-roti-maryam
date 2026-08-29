@@ -17,6 +17,7 @@ import {
   FileText,
   FileSignature,
   ShieldAlert,
+  SlidersHorizontal,
   LogOut,
   X,
 } from "lucide-react";
@@ -49,6 +50,7 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
     { href: "/kelola-dokumen", label: "Dokumen",          icon: FileText, show: caps.dokumen },
     { href: "/ttd-karyawan",  label: "TTD Dokumen Karyawan", icon: FileSignature, show: caps.dokumen },
     { href: "/pelanggaran",   label: "Pelanggaran & Poin", icon: ShieldAlert, show: caps.pelanggaran },
+    { href: "/aturan",        label: "Aturan & Nominal",   icon: SlidersHorizontal, show: caps.aturan },
     { href: "/admin/users", label: "Kelola User",         icon: Users,    show: caps.kelolaUser },
     { href: "/admin/resep", label: "Master Resep Adonan", icon: BookOpen, show: caps.masterResep },
   ].filter((i) => i.show);

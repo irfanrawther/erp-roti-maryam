@@ -24,6 +24,7 @@ export interface Capabilities {
   dokumen: boolean;       // halaman Dokumen & e-signature (Super Admin)
   laporPelanggaran: boolean; // SPV lapor pelanggaran
   pelanggaran: boolean;   // Super Admin kelola pelanggaran & poin
+  aturan: boolean;        // Super Admin kelola rules engine (nominal/poin/jam)
   isSuperAdmin: boolean;
 }
 
@@ -32,7 +33,7 @@ const NONE: Capabilities = {
   adonan: false, rendam: false, packingFreezer: false, produksiRiwayat: false,
   pengiriman: false, produkReject: false, kelolaUser: false, masterResep: false,
   stockOpname: false, absensi: false, daftarIzin: false, dokumen: false,
-  laporPelanggaran: false, pelanggaran: false, isSuperAdmin: false,
+  laporPelanggaran: false, pelanggaran: false, aturan: false, isSuperAdmin: false,
 };
 
 export function getCapabilities(user: UserSession | null): Capabilities {
@@ -46,7 +47,7 @@ export function getCapabilities(user: UserSession | null): Capabilities {
       adonan: true, rendam: true, packingFreezer: true, produksiRiwayat: true,
       pengiriman: true, produkReject: true, kelolaUser: true, masterResep: true,
       stockOpname: true, absensi: true, daftarIzin: false, dokumen: true,
-      laporPelanggaran: false, pelanggaran: true, isSuperAdmin: true,
+      laporPelanggaran: false, pelanggaran: true, aturan: true, isSuperAdmin: true,
     };
   }
 

@@ -3,8 +3,11 @@
 // SP akumulatif: tiap +5 poin kuartal berjalan naik 1 level (max SP3).
 // ============================================================
 import { supabase } from "@/lib/supabase";
+import { loadAturan, jalurDariKategori, levelSPdariPoin, type CfgSP, type CfgTelat } from "@/lib/aturan";
 
-export const POIN_PER_SP = 5;   // tiap 5 poin naik 1 level SP
+// Dipertahankan untuk kompatibilitas tampilan lama (progress bar dashboard).
+// Ambang SP yang sebenarnya kini dibaca dari aturan_config.
+export const POIN_PER_SP = 5;
 export const SP_MAX = 3;
 
 // "2026-07-18" → "2026-Q3"
@@ -47,7 +50,8 @@ export async function tambahPoin(p: {
   await cekNaikSP(p.karyawan_id, kuartal, p.tanggal);
 }
 
-// Naik SP jika perlu. targetSP = spSebelumKuartal + floor(poinKuartal/5), max 3.
+// Naik SP jika perlu. Ambang dibaca dari aturan_config (default absolut
+// 5/10/15 poin kuartal berjalan, sesuai PP Pasal 5 ketiga jalur).
 export async function cekNaikSP(karyawan_id: string, kuartal: string, tanggal: string): Promise<void> {
   // total poin kuartal berjalan
   const { data: pRows } = await supabase.from("poin_karyawan").select("poin").eq("karyawan_id", karyawan_id).eq("kuartal", kuartal);
@@ -59,7 +63,9 @@ export async function cekNaikSP(karyawan_id: string, kuartal: string, tanggal: s
   const currentSP = sps.reduce((mx, s) => Math.max(mx, s.level_sp), 0);
   const spSebelumKuartal = sps.filter((s) => s.kuartal_kena !== kuartal).reduce((mx, s) => Math.max(mx, s.level_sp), 0);
 
-  const targetSP = Math.min(SP_MAX, spSebelumKuartal + Math.floor(poinKuartal / POIN_PER_SP));
+  const cfg = await cfgSPuntuk(karyawan_id);
+  const targetSP = levelSPdariPoin(cfg, poinKuartal, spSebelumKuartal);
+
   if (targetSP > currentSP) {
     const ins = [];
     for (let lvl = currentSP + 1; lvl <= targetSP; lvl++) {
@@ -69,14 +75,34 @@ export async function cekNaikSP(karyawan_id: string, kuartal: string, tanggal: s
   }
 }
 
-// Poin telat: K1 (kecuali ampun) 0.5, K2 1, K3 3
+// Ambil config SP sesuai jalur kepegawaian karyawan (training/staff/spv).
+async function cfgSPuntuk(karyawan_id: string): Promise<CfgSP> {
+  const fallback: CfgSP = {
+    thresholds: [{ level: 1, poin: 5 }, { level: 2, poin: 10 }, { level: 3, poin: 15 }],
+    carry_over_antar_kuartal: false, reset_poin_per_kuartal: true,
+    sp_ikut_reset: false, tutup_sp_setelah_kuartal_bersih: 2, phk_otomatis: false,
+  };
+  const { data: k } = await supabase.from("karyawan").select("kategori_dokumen").eq("id", karyawan_id).maybeSingle();
+  const jalur = jalurDariKategori((k as { kategori_dokumen: string | null } | null)?.kategori_dokumen) ?? "training";
+  const all = await loadAturan();
+  return ((all[jalur]?.sp as unknown as CfgSP) ?? fallback);
+}
+
+// Poin telat otomatis — kategori & bobot poin dibaca dari aturan_config
+// (config-driven, tidak lagi hardcode 0.5/1/3).
 export async function poinTelat(karyawan_id: string, kategori: string | null, ampun: boolean, tanggal: string): Promise<void> {
-  if (!kategori) return;
-  let poin = 0, nama = "";
-  if (kategori === "K1") { if (ampun) return; poin = 0.5; nama = "Terlambat Kategori 1 (1-15 menit)"; }
-  else if (kategori === "K2") { poin = 1; nama = "Terlambat Kategori 2 (16-45 menit)"; }
-  else if (kategori === "K3") { poin = 3; nama = "Terlambat Kategori 3 (lebih dari 45 menit)"; }
-  else return;
+  if (!kategori || ampun) return;
+  const { data: k } = await supabase.from("karyawan").select("kategori_dokumen").eq("id", karyawan_id).maybeSingle();
+  const jalur = jalurDariKategori((k as { kategori_dokumen: string | null } | null)?.kategori_dokumen) ?? "training";
+  const all = await loadAturan();
+  const cfg = all[jalur]?.telat as unknown as CfgTelat | undefined;
+  const kat = cfg?.kategori.find((c) => c.kode === kategori);
+  if (!kat || kat.poin <= 0) return;
+
+  const nama =
+    kategori === "K1" ? "Terlambat Kategori 1 (1-15 menit)" :
+    kategori === "K2" ? "Terlambat Kategori 2 (16-45 menit)" :
+    "Terlambat Kategori 3 (lebih dari 45 menit)";
   const pid = await pelanggaranOtomatisId(nama);
-  await tambahPoin({ karyawan_id, pelanggaran_id: pid, poin, sumber: "otomatis", tanggal });
+  await tambahPoin({ karyawan_id, pelanggaran_id: pid, poin: kat.poin, sumber: "otomatis", tanggal });
 }
