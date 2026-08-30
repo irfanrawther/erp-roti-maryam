@@ -3,7 +3,7 @@
 // SP akumulatif: tiap +5 poin kuartal berjalan naik 1 level (max SP3).
 // ============================================================
 import { supabase } from "@/lib/supabase";
-import { loadAturan, jalurDariKategori, levelSPdariPoin, type CfgSP, type CfgTelat } from "@/lib/aturan";
+import { muatAturan, pilihAturan, cfgTelat, jalurDariKategori, levelSPdariPoin, type CfgSP } from "@/lib/aturan";
 
 // Dipertahankan untuk kompatibilitas tampilan lama (progress bar dashboard).
 // Ambang SP yang sebenarnya kini dibaca dari aturan_config.
@@ -63,7 +63,7 @@ export async function cekNaikSP(karyawan_id: string, kuartal: string, tanggal: s
   const currentSP = sps.reduce((mx, s) => Math.max(mx, s.level_sp), 0);
   const spSebelumKuartal = sps.filter((s) => s.kuartal_kena !== kuartal).reduce((mx, s) => Math.max(mx, s.level_sp), 0);
 
-  const cfg = await cfgSPuntuk(karyawan_id);
+  const cfg = await cfgSPuntuk(karyawan_id, tanggal);
   const targetSP = levelSPdariPoin(cfg, poinKuartal, spSebelumKuartal);
 
   if (targetSP > currentSP) {
@@ -75,17 +75,19 @@ export async function cekNaikSP(karyawan_id: string, kuartal: string, tanggal: s
   }
 }
 
-// Ambil config SP sesuai jalur kepegawaian karyawan (training/staff/spv).
-async function cfgSPuntuk(karyawan_id: string): Promise<CfgSP> {
+// Config SP sesuai jalur kepegawaian karyawan DAN tanggal kejadian.
+// Fallback = perilaku lama (carry-over), dipakai hanya bila aturan_config
+// belum termuat, supaya tidak diam-diam berubah jadi aturan baru.
+async function cfgSPuntuk(karyawan_id: string, tanggal: string): Promise<CfgSP> {
   const fallback: CfgSP = {
     thresholds: [{ level: 1, poin: 5 }, { level: 2, poin: 10 }, { level: 3, poin: 15 }],
-    carry_over_antar_kuartal: false, reset_poin_per_kuartal: true,
+    carry_over_antar_kuartal: true, reset_poin_per_kuartal: true,
     sp_ikut_reset: false, tutup_sp_setelah_kuartal_bersih: 2, phk_otomatis: false,
   };
   const { data: k } = await supabase.from("karyawan").select("kategori_dokumen").eq("id", karyawan_id).maybeSingle();
   const jalur = jalurDariKategori((k as { kategori_dokumen: string | null } | null)?.kategori_dokumen) ?? "training";
-  const all = await loadAturan();
-  return ((all[jalur]?.sp as unknown as CfgSP) ?? fallback);
+  const rows = await muatAturan();
+  return pilihAturan<CfgSP>(rows, jalur, "sp", tanggal) ?? fallback;
 }
 
 // Poin telat otomatis — kategori & bobot poin dibaca dari aturan_config
@@ -94,9 +96,9 @@ export async function poinTelat(karyawan_id: string, kategori: string | null, am
   if (!kategori || ampun) return;
   const { data: k } = await supabase.from("karyawan").select("kategori_dokumen").eq("id", karyawan_id).maybeSingle();
   const jalur = jalurDariKategori((k as { kategori_dokumen: string | null } | null)?.kategori_dokumen) ?? "training";
-  const all = await loadAturan();
-  const cfg = all[jalur]?.telat as unknown as CfgTelat | undefined;
-  const kat = cfg?.kategori.find((c) => c.kode === kategori);
+  const rows = await muatAturan();
+  const cfg = cfgTelat(rows, jalur, tanggal);
+  const kat = cfg.kategori.find((c) => c.kode === kategori);
   if (!kat || kat.poin <= 0) return;
 
   const nama =

@@ -1,6 +1,13 @@
 // ============================================================
 // Logika denda telat, kategori, flag anomali — Tahap 3 Absensi
+//
+// Nominal & poin dibaca dari rules engine (aturan_config) dan
+// dipilih berdasarkan TANGGAL KEJADIAN, bukan tanggal deploy.
+// Nominal di bawah ini tetap ada sebagai fallback bila config
+// belum termuat — nilainya sama dengan aturan yang berlaku
+// sampai 31 Agustus 2026.
 // ============================================================
+import { cfgTelat, cfgIzin, TELAT_LAMA, type AturanRows, type CfgTelat, type Jalur } from "@/lib/aturan";
 
 export const DENDA = { K1: 10000, K2: 20000, K3: 30000, ALPHA: 200000 } as const;
 // Denda izin manual sementara (sebelum fitur Lapor Izin berjalan)
@@ -35,7 +42,13 @@ export interface DendaResult {
 }
 
 // Hitung denda berdasarkan jam masuk shift, waktu check-in, dan jumlah ampun K1 bulan ini.
-export function hitungDenda(jamMasukShift: string, checkin: Date, k1AmpunBulanIni: number): DendaResult {
+//
+// `cfg` adalah aturan keterlambatan yang berlaku pada TANGGAL KEJADIAN
+// (ambil lewat cfgTelat(rows, jalur, tanggal)). Bila tidak diberikan,
+// dipakai aturan lama — sama persis dengan perilaku sebelumnya.
+export function hitungDenda(
+  jamMasukShift: string, checkin: Date, k1AmpunBulanIni: number, cfg: CfgTelat = TELAT_LAMA
+): DendaResult {
   const masuk = jamToMinutes(jamMasukShift);
   const ci    = wibMinutesOfDay(checkin);
   const telat    = Math.max(0, ci - masuk);
@@ -45,14 +58,20 @@ export function hitungDenda(jamMasukShift: string, checkin: Date, k1AmpunBulanIn
   let denda = 0, ampun = false, flagged = false;
   let flagReason: DendaResult["flag_reason"] = null;
 
-  if (telat >= 1 && telat <= 15) {
-    kategori = "K1";
-    if (k1AmpunBulanIni < JATAH_AMPUN_K1) { denda = 0; ampun = true; }   // ampun ke-1/2/3
-    else { denda = DENDA.K1; ampun = false; }
-  } else if (telat >= 16 && telat <= 45) {
-    kategori = "K2"; denda = DENDA.K2;
-  } else if (telat > 45) {
-    kategori = "K3"; denda = DENDA.K3; flagged = true; flagReason = "telat_jauh";
+  if (telat >= 1) {
+    const kat = cfg.kategori.find(
+      (k) => telat >= k.menit_min && (k.menit_maks === null || telat <= k.menit_maks)
+    );
+    if (kat) {
+      kategori = kat.kode as DendaResult["kategori_telat"];
+      const isK1 = kat.kode === cfg.kategori[0]?.kode;
+      if (isK1 && k1AmpunBulanIni < cfg.dispensasi_k1_per_bulan) {
+        denda = 0; ampun = true;                 // dispensasi K1 ke-1..N
+      } else {
+        denda = kat.denda; ampun = false;
+      }
+      if (kat.menit_maks === null) { flagged = true; flagReason = "telat_jauh"; }
+    }
   }
 
   // Kepagian ekstrem (hanya saat tidak telat) → flag, tanpa denda
@@ -62,6 +81,16 @@ export function hitungDenda(jamMasukShift: string, checkin: Date, k1AmpunBulanIn
     menit_telat: telat, menit_kepagian: kepagian, kategori_telat: kategori,
     denda, denda_dihapus_ampun: ampun, is_flagged: flagged, flag_reason: flagReason,
   };
+}
+
+// Denda alpha yang berlaku pada tanggal kejadian.
+export function dendaAlphaPada(rows: AturanRows, jalur: Jalur, tanggal: string): number {
+  return cfgIzin(rows, jalur, tanggal).alpha.denda;
+}
+
+// Aturan keterlambatan yang berlaku pada tanggal kejadian.
+export function telatPada(rows: AturanRows, jalur: Jalur, tanggal: string): CfgTelat {
+  return cfgTelat(rows, jalur, tanggal);
 }
 
 // Rentang bulan kalender dari sebuah tanggal "YYYY-MM-DD"

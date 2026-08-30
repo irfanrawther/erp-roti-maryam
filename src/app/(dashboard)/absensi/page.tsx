@@ -8,7 +8,18 @@ import { ID_MONTHS } from "@/components/RiwayatFilter";
 import IndonesianDatePicker from "@/components/IndonesianDatePicker";
 import { hitungDenda, bulanRange, wibMinutesOfDay, DENDA, DENDA_IZIN_MANUAL, JAM_ALPHA, STATUS_LABEL } from "@/lib/absensi";
 import { dendaIzinBiasa, katLapor, type KatLapor } from "@/lib/izin";
+import { muatAturan, cfgTelat, cfgIzin, jalurDariKategori } from "@/lib/aturan";
 import { CalendarClock, Plus, X, Pencil, Trash2, ChevronLeft, ChevronRight, Layers, MapPin, Crosshair, Flag, AlertTriangle, Check, CheckCircle2, LogOut, FileText, ClipboardList, Clock } from "lucide-react";
+
+// Aturan yang berlaku pada TANGGAL KEJADIAN untuk karyawan tertentu.
+// Nominal lama vs baru dipilih dari berlaku_mulai di aturan_config,
+// bukan dari tanggal kode di-deploy.
+async function aturanUntuk(karyawanId: string, tanggal: string) {
+  const rows = await muatAturan();
+  const { data } = await supabase.from("karyawan").select("kategori_dokumen").eq("id", karyawanId).maybeSingle();
+  const jalur = jalurDariKategori((data as { kategori_dokumen: string | null } | null)?.kategori_dokumen) ?? "training";
+  return { telat: cfgTelat(rows, jalur, tanggal), izin: cfgIzin(rows, jalur, tanggal) };
+}
 
 interface Karyawan {
   id: string;
@@ -962,11 +973,19 @@ function ReviewFlag({ karyawanList, shifts, userName }: {
     const have = new Set(((absExist.data as { karyawan_id: string; tanggal: string }[] | null) ?? []).map((a) => `${a.karyawan_id}|${a.tanggal}`));
     const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" });
     const nowMin = wibMinutesOfDay(new Date());
+    // Denda alpha diambil dari aturan yang berlaku pada tanggal kejadian.
+    const aturanRows = await muatAturan();
+    const { data: karDok } = await supabase.from("karyawan").select("id, kategori_dokumen");
+    const jalurMap: Record<string, ReturnType<typeof jalurDariKategori>> = {};
+    for (const k of ((karDok as { id: string; kategori_dokumen: string | null }[] | null) ?? [])) {
+      jalurMap[k.id] = jalurDariKategori(k.kategori_dokumen);
+    }
     const ins: Record<string, unknown>[] = [];
     for (const a of ((asgRes.data as { karyawan_id: string; tanggal: string; shift_id: string }[] | null) ?? [])) {
       const passed = a.tanggal < todayStr || (a.tanggal === todayStr && nowMin >= JAM_ALPHA * 60);
       if (!passed || have.has(`${a.karyawan_id}|${a.tanggal}`)) continue;
-      ins.push({ karyawan_id: a.karyawan_id, tanggal: a.tanggal, shift_id: a.shift_id, status_kehadiran: "alpha", denda: DENDA.ALPHA });
+      const dendaAlpha = cfgIzin(aturanRows, jalurMap[a.karyawan_id] ?? "training", a.tanggal).alpha.denda;
+      ins.push({ karyawan_id: a.karyawan_id, tanggal: a.tanggal, shift_id: a.shift_id, status_kehadiran: "alpha", denda: dendaAlpha });
     }
     if (ins.length) await supabase.from("absensi").upsert(ins, { onConflict: "karyawan_id,tanggal" });
 
@@ -994,7 +1013,7 @@ function ReviewFlag({ karyawanList, shifts, userName }: {
     const shift = shifts.find((s) => s.id === newShiftId);
     if (!shift || !row.jam_checkin) return;
     const k1 = await countK1Ampun(row.karyawan_id, row.tanggal, row.id);
-    const res = hitungDenda(shift.jam_masuk, new Date(row.jam_checkin), k1);
+    const res = hitungDenda(shift.jam_masuk, new Date(row.jam_checkin), k1, (await aturanUntuk(row.karyawan_id, row.tanggal)).telat);
     await supabase.from("absensi").update({
       shift_id_koreksi: newShiftId,
       menit_telat: res.menit_telat, kategori_telat: res.kategori_telat,
@@ -1021,7 +1040,7 @@ function ReviewFlag({ karyawanList, shifts, userName }: {
     if (shift && editJam2 && editMenit2) {
       const newIso = new Date(`${editRow2.tanggal}T${editJam2}:${editMenit2}:00+07:00`).toISOString();
       const k1 = await countK1Ampun(editRow2.karyawan_id, editRow2.tanggal, editRow2.id);
-      const res = hitungDenda(shift.jam_masuk, new Date(newIso), k1);
+      const res = hitungDenda(shift.jam_masuk, new Date(newIso), k1, (await aturanUntuk(editRow2.karyawan_id, editRow2.tanggal)).telat);
       patch.jam_checkin = newIso; patch.status_kehadiran = "hadir";
       patch.menit_telat = res.menit_telat; patch.kategori_telat = res.kategori_telat;
       patch.denda = res.denda; patch.denda_dihapus_ampun = res.denda_dihapus_ampun;
@@ -1087,7 +1106,7 @@ function ReviewFlag({ karyawanList, shifts, userName }: {
     // recalc telat pakai jam masuk baru → flag "kepagian/telat" ikut update
     if (row.jam_checkin) {
       const k1 = await countK1Ampun(row.karyawan_id, row.tanggal, row.id);
-      const res = hitungDenda(masuk, new Date(row.jam_checkin), k1);
+      const res = hitungDenda(masuk, new Date(row.jam_checkin), k1, (await aturanUntuk(row.karyawan_id, row.tanggal)).telat);
       await supabase.from("absensi").update({
         menit_telat: res.menit_telat, kategori_telat: res.kategori_telat,
         denda: res.denda, denda_dihapus_ampun: res.denda_dihapus_ampun,
@@ -1435,14 +1454,15 @@ function OverrideManual({ karyawanList, shifts, userName, onDone, countK1Ampun }
         payload.status_kehadiran = "hadir";
         if (saRow?.shift_master?.jam_masuk) {
           const k1 = await countK1Ampun(karyawanId, tanggal);
-          const res = hitungDenda(saRow.shift_master.jam_masuk, new Date(checkinIso), k1);
+          const res = hitungDenda(saRow.shift_master.jam_masuk, new Date(checkinIso), k1, (await aturanUntuk(karyawanId, tanggal)).telat);
           payload.menit_telat = res.menit_telat; payload.kategori_telat = res.kategori_telat;
           payload.denda = res.denda; payload.denda_dihapus_ampun = res.denda_dihapus_ampun;
         } else { payload.denda = 0; payload.kategori_telat = null; payload.menit_telat = 0; }
       } else {
         // izin → denda 50rb (sementara); izin_sakit → 0; alpha → 200rb
         payload.status_kehadiran = mode;
-        payload.denda = mode === "alpha" ? DENDA.ALPHA : mode === "izin" ? DENDA_IZIN_MANUAL : 0;
+        const aturanOv = await aturanUntuk(karyawanId, tanggal);
+        payload.denda = mode === "alpha" ? aturanOv.izin.alpha.denda : mode === "izin" ? DENDA_IZIN_MANUAL : 0;
         payload.kategori_telat = null; payload.menit_telat = 0;
       }
 
@@ -1551,7 +1571,7 @@ function AbsenDetailModal({ abs, shift, nama, tanggal, userName, assign, onClose
     };
     // Izin / Sakit → denda 0. Alpha → denda alpha. Hadir → biarkan denda apa adanya.
     if (status === "izin" || status === "izin_sakit") { patch.denda = 0; patch.is_flagged = false; }
-    else if (status === "alpha") { patch.denda = DENDA.ALPHA; }
+    else if (status === "alpha") { patch.denda = (await aturanUntuk(row.karyawan_id, row.tanggal)).izin.alpha.denda; }
     const { error } = await supabase.from("absensi").update(patch).eq("id", abs.id);
     setBusy(false);
     if (error) { setErr(error.message); return; }
@@ -1732,7 +1752,7 @@ function RekapAbsensi({ karyawanList, shifts, userName }: { karyawanList: Karyaw
       const { count } = await supabase.from("absensi").select("id", { count: "exact", head: true })
         .eq("karyawan_id", editRow.karyawan_id).eq("kategori_telat", "K1").eq("denda_dihapus_ampun", true)
         .gte("tanggal", start).lte("tanggal", end).neq("id", editRow.id);
-      const res = hitungDenda(shift.jam_masuk, new Date(newIso), count ?? 0);
+      const res = hitungDenda(shift.jam_masuk, new Date(newIso), count ?? 0, (await aturanUntuk(editRow.karyawan_id, editRow.tanggal)).telat);
       patch.menit_telat = res.menit_telat; patch.kategori_telat = res.kategori_telat;
       patch.denda = res.denda; patch.denda_dihapus_ampun = res.denda_dihapus_ampun;
       patch.is_flagged = res.is_flagged; patch.flag_reason = res.flag_reason;
@@ -1971,7 +1991,7 @@ function PengajuanIzin({ userName }: { userName: string }) {
       .lt("batas_upload_surat", nowIso);
     for (const t of ((telat as { id: string; karyawan_id: string; tanggal_izin: string; kategori_lapor: string | null }[] | null) ?? [])) {
       const kat = (t.kategori_lapor as KatLapor) ?? "tepat_waktu";
-      const dendaBiasa = dendaIzinBiasa(kat, false);
+      const dendaBiasa = dendaIzinBiasa(kat, false, (await aturanUntuk(t.karyawan_id, t.tanggal_izin)).izin);
       await supabase.from("pengajuan_izin").update({ status_surat: "surat_telat", denda: dendaBiasa }).eq("id", t.id);
       await supabase.from("absensi").upsert({
         karyawan_id: t.karyawan_id, tanggal: t.tanggal_izin,
@@ -1989,8 +2009,9 @@ function PengajuanIzin({ userName }: { userName: string }) {
         .eq("karyawan_id", b.karyawan_id).eq("tanggal", b.tanggal_izin).maybeSingle();
       const saRow = sa as { is_libur: boolean; shift_master: { jam_masuk: string } | null } | null;
       if (!saRow || saRow.is_libur || !saRow.shift_master) continue; // libur / tanpa shift → tidak kena denda
-      const kat = katLapor(b.tanggal_izin, saRow.shift_master.jam_masuk, new Date(b.created_at).getTime());
-      const denda = dendaIzinBiasa(kat, !!b.kuota_penuh);
+      const cfgB = (await aturanUntuk(b.karyawan_id, b.tanggal_izin)).izin;
+      const kat = katLapor(b.tanggal_izin, saRow.shift_master.jam_masuk, new Date(b.created_at).getTime(), cfgB);
+      const denda = dendaIzinBiasa(kat, !!b.kuota_penuh, cfgB);
       await supabase.from("pengajuan_izin").update({ kategori_lapor: kat, denda }).eq("id", b.id);
       await supabase.from("absensi").upsert({
         karyawan_id: b.karyawan_id, tanggal: b.tanggal_izin, status_kehadiran: "izin", denda,
@@ -2040,7 +2061,7 @@ function PengajuanIzin({ userName }: { userName: string }) {
     }).eq("id", r.id);
     await supabase.from("absensi").upsert({
       karyawan_id: r.karyawan_id, tanggal: r.tanggal_izin,
-      status_kehadiran: "alpha", denda: DENDA.ALPHA, is_override: true,
+      status_kehadiran: "alpha", denda: (await aturanUntuk(r.karyawan_id, r.tanggal_izin)).izin.alpha.denda, is_override: true,
       override_by: userName, override_at: new Date().toISOString(),
     }, { onConflict: "karyawan_id,tanggal" });
     setBusyId(null);
@@ -2305,7 +2326,7 @@ function LemburModal({ assign, shift, nama, userName, onClose, onSaved }: {
       const { count } = await supabase.from("absensi").select("id", { count: "exact", head: true })
         .eq("karyawan_id", assign.karyawan_id).eq("kategori_telat", "K1").eq("denda_dihapus_ampun", true)
         .gte("tanggal", start).lte("tanggal", end).neq("id", abRow.id);
-      const res = hitungDenda(jamMasukResmi, new Date(abRow.jam_checkin), count ?? 0);
+      const res = hitungDenda(jamMasukResmi, new Date(abRow.jam_checkin), count ?? 0, (await aturanUntuk(assign.karyawan_id, assign.tanggal)).telat);
       await supabase.from("absensi").update({
         menit_telat: res.menit_telat, kategori_telat: res.kategori_telat,
         denda: res.denda, denda_dihapus_ampun: res.denda_dihapus_ampun,

@@ -99,29 +99,109 @@ export interface AturanJalur {
 
 export type SemuaAturan = Record<string, Record<string, unknown>>;
 
-// ── Loader dengan cache sederhana ───────────────────────────
-let cache: SemuaAturan | null = null;
+// ── Aturan berlaku-per-tanggal ──────────────────────────────
+// Satu (jalur, kunci) bisa punya beberapa versi dengan berlaku_mulai
+// berbeda. Pemilihan versi memakai TANGGAL KEJADIAN pelanggaran,
+// bukan tanggal kode di-deploy — jadi periode gaji yang sedang
+// berjalan tidak ikut berubah saat aturan baru mulai berlaku.
+export interface ConfigRow {
+  jalur: string; kunci: string; nilai: unknown; berlaku_mulai: string;
+}
+export type AturanRows = ConfigRow[];
+
+let cache: AturanRows | null = null;
 let cacheAt = 0;
 const TTL_MS = 60_000;
 
-export async function loadAturan(force = false): Promise<SemuaAturan> {
+export async function muatAturan(force = false): Promise<AturanRows> {
   if (!force && cache && Date.now() - cacheAt < TTL_MS) return cache;
-  const { data } = await supabase.from("aturan_config").select("jalur, kunci, nilai");
-  const rows = (data as { jalur: string; kunci: string; nilai: unknown }[] | null) ?? [];
-  const out: SemuaAturan = {};
-  for (const r of rows) {
-    (out[r.jalur] ??= {})[r.kunci] = r.nilai as Record<string, unknown>;
-  }
-  cache = out; cacheAt = Date.now();
-  return out;
+  const { data } = await supabase
+    .from("aturan_config")
+    .select("jalur, kunci, nilai, berlaku_mulai")
+    .order("berlaku_mulai", { ascending: true });
+  cache = (data as AturanRows | null) ?? [];
+  cacheAt = Date.now();
+  return cache;
 }
 
 export function invalidateAturanCache() { cache = null; }
 
-export function aturanJalur(all: SemuaAturan, jalur: Jalur): AturanJalur | null {
-  const j = all[jalur];
-  if (!j) return null;
-  return j as unknown as AturanJalur;
+// Versi yang berlaku pada `tanggal` (YYYY-MM-DD) = berlaku_mulai
+// terbesar yang <= tanggal. null kalau tidak ada versi yang cocok.
+export function pilihAturan<T>(
+  rows: AturanRows, jalur: Jalur | "global", kunci: string, tanggal: string
+): T | null {
+  let pilih: ConfigRow | null = null;
+  for (const r of rows) {
+    if (r.jalur !== jalur || r.kunci !== kunci) continue;
+    if (r.berlaku_mulai > tanggal) continue;
+    if (!pilih || r.berlaku_mulai > pilih.berlaku_mulai) pilih = r;
+  }
+  return pilih ? (pilih.nilai as T) : null;
+}
+
+// Ambil config lengkap satu jalur pada tanggal tertentu.
+export function aturanJalurPada(rows: AturanRows, jalur: Jalur, tanggal: string): Partial<AturanJalur> {
+  const out: Record<string, unknown> = {};
+  const kunci = new Set(rows.filter((r) => r.jalur === jalur).map((r) => r.kunci));
+  kunci.forEach((k) => {
+    const v = pilihAturan<unknown>(rows, jalur, k, tanggal);
+    if (v !== null) out[k] = v;
+  });
+  return out as Partial<AturanJalur>;
+}
+
+// Tanggal hari ini di WIB — dipakai sebagai default "tanggal kejadian".
+export function hariIniWIB(): string {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" });
+}
+
+// ── Fallback: nominal LAMA (berlaku s/d 31 Agustus 2026) ────
+// Dipakai hanya bila tabel aturan_config belum termuat/kosong, supaya
+// perhitungan tidak pernah jatuh ke angka nol atau angka baru secara
+// diam-diam. Nilainya identik dengan perilaku produksi sebelum
+// rules engine dipasang.
+export const TELAT_LAMA: CfgTelat = {
+  dispensasi_k1_per_bulan: 3,
+  destinasi_denda: "tunjangan_kerajinan",
+  kategori: [
+    { kode: "K1", menit_min: 1,  menit_maks: 15,   poin: 0.5, denda: 10000 },
+    { kode: "K2", menit_min: 16, menit_maks: 45,   poin: 1,   denda: 20000 },
+    { kode: "K3", menit_min: 46, menit_maks: null, poin: 3,   denda: 30000 },
+  ],
+};
+const DEADLINE_LAMA = { "06:00": 1, "08:00": 2, "10:00": 2, "13:00": 3 };
+export const IZIN_LAMA: CfgIzin = {
+  jam_sebelum_by_shift: DEADLINE_LAMA,
+  tepat_waktu:         { denda: 150000, poin: 0 },
+  telat_sebelum_shift: { denda: 200000, poin: 0 },
+  setelah_shift:       { denda: 300000, poin: 0 },
+  alpha:               { denda: 200000, poin: 5 },
+  kuota_izin_per_hari: 1,
+  denda_tambahan_kuota_penuh: 100000,
+  destinasi_denda: "denda_tunai",
+};
+export const SAKIT_LAMA: CfgSakit = {
+  jam_sebelum_by_shift: DEADLINE_LAMA,
+  batas_kirim_surat_jam: "20:00",
+  tepat_waktu_bersurat: { denda: 0,     poin: 0 },
+  telat_sebelum_shift:  { denda: 25000, poin: 0 },
+  setelah_shift:        { denda: 50000, poin: 0 },
+  bebas_denda_berlaku_semua_kejadian: false,
+  tanpa_surat_ikut_aturan_izin: false,
+  tambahan_poin_sakit_berulang: { mulai_kejadian_ke: 9999, poin: 0, maks_per_bulan: 0 },
+  destinasi_denda: "denda_tunai",
+};
+
+// Selector dengan fallback aman.
+export function cfgTelat(rows: AturanRows, jalur: Jalur, tanggal: string): CfgTelat {
+  return pilihAturan<CfgTelat>(rows, jalur, "telat", tanggal) ?? TELAT_LAMA;
+}
+export function cfgIzin(rows: AturanRows, jalur: Jalur, tanggal: string): CfgIzin {
+  return pilihAturan<CfgIzin>(rows, jalur, "izin", tanggal) ?? IZIN_LAMA;
+}
+export function cfgSakit(rows: AturanRows, jalur: Jalur, tanggal: string): CfgSakit {
+  return pilihAturan<CfgSakit>(rows, jalur, "sakit", tanggal) ?? SAKIT_LAMA;
 }
 
 // kategori_dokumen ("training_produksi" / "staff_packing" / "spv") → jalur kepegawaian
@@ -177,14 +257,21 @@ export function hitungIzinBiasa(cfg: CfgIzin, kat: KatLapor, kuotaPenuh: boolean
 
 // ── Izin sakit (PP Pasal 3b) ────────────────────────────────
 // suratOnTime = surat dokter masuk sebelum batas_kirim_surat_jam.
-// Tanpa surat sah → diperlakukan sebagai izin biasa (huruf a).
+// Baris "bebas denda" hanya berlaku bila lapor tepat waktu DAN bersurat.
+// bebas_denda_berlaku_semua_kejadian menentukan apakah pembebasan itu
+// berlaku untuk sakit ke-2 dst (aturan baru) atau hanya sakit pertama
+// (aturan lama).
 export function hitungIzinSakit(
-  cfgSakit: CfgSakit, cfgIzin: CfgIzin, kat: KatLapor, suratOnTime: boolean, kuotaPenuh: boolean
+  cfgSakit: CfgSakit, cfgIzin: CfgIzin, kat: KatLapor,
+  suratOnTime: boolean, kuotaPenuh: boolean, sakitKe = 1
 ): TarifLapor {
   if (!suratOnTime && cfgSakit.tanpa_surat_ikut_aturan_izin) {
     return hitungIzinBiasa(cfgIzin, kat, kuotaPenuh);
   }
-  if (kat === "tepat_waktu") return { ...cfgSakit.tepat_waktu_bersurat };
+  if (kat === "tepat_waktu") {
+    const bebas = suratOnTime && (sakitKe === 1 || cfgSakit.bebas_denda_berlaku_semua_kejadian);
+    return bebas ? { ...cfgSakit.tepat_waktu_bersurat } : { ...cfgSakit.telat_sebelum_shift };
+  }
   return { ...cfgSakit[kat] };
 }
 

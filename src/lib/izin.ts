@@ -1,40 +1,52 @@
 // ============================================================
-// Pasal 3 — Denda Izin (biasa & sakit) berdasarkan waktu lapor.
-// Deadline lapor: Shift 1 = 1 jam sebelum, Shift 2 & 3 = 2 jam, Shift 4 = 3 jam.
+// Pasal 3 — Denda Izin (biasa & sakit).
+//
+// Nominal, poin, dan deadline lapor dibaca dari rules engine
+// (aturan_config) dan dipilih berdasarkan TANGGAL KEJADIAN,
+// bukan tanggal deploy kode. Tanpa config, fungsi ini memakai
+// aturan lama — identik dengan perilaku sebelumnya.
 // ============================================================
+import {
+  IZIN_LAMA, SAKIT_LAMA, hitungIzinBiasa, hitungIzinSakit,
+  katLapor as katLaporCfg, jamSebelumByShift,
+  type CfgIzin, type CfgSakit, type KatLapor,
+} from "@/lib/aturan";
 
-export type KatLapor = "tepat_waktu" | "telat_sebelum_shift" | "setelah_shift";
+export type { KatLapor };
 
 // jam sebelum shift (deadline lapor) berdasarkan jam masuk shift
-export function jamSebelumByMasuk(jamMasuk: string): number {
-  const hm = jamMasuk.slice(0, 5);
-  if (hm === "06:00") return 1;   // Shift 1
-  if (hm === "13:00") return 3;   // Shift 4
-  return 2;                        // Shift 2 & 3
+export function jamSebelumByMasuk(jamMasuk: string, cfg: CfgIzin | CfgSakit = IZIN_LAMA): number {
+  return jamSebelumByShift(jamMasuk, cfg.jam_sebelum_by_shift);
 }
 
 // Kategori waktu lapor: bandingkan waktu lapor (ms) dengan deadline & jam shift pada tanggal izin
-export function katLapor(izinDate: string, jamMasuk: string, reportMs: number): KatLapor {
-  const jamSebelum = jamSebelumByMasuk(jamMasuk);
-  const shiftStart = new Date(`${izinDate}T${jamMasuk.slice(0, 8).padEnd(8, ":00")}+07:00`).getTime();
-  const deadline = shiftStart - jamSebelum * 3600_000;
-  if (reportMs <= deadline) return "tepat_waktu";
-  if (reportMs < shiftStart) return "telat_sebelum_shift";
-  return "setelah_shift";
+export function katLapor(
+  izinDate: string, jamMasuk: string, reportMs: number, cfg: CfgIzin | CfgSakit = IZIN_LAMA
+): KatLapor {
+  return katLaporCfg(izinDate, jamMasuk, reportMs, cfg.jam_sebelum_by_shift);
 }
 
-// Pasal 3a — Izin biasa. Kuota penuh (Pasal 3c) → +100.000
-export function dendaIzinBiasa(kat: KatLapor, kuotaPenuh: boolean): number {
-  let d = kat === "tepat_waktu" ? 150000 : kat === "telat_sebelum_shift" ? 200000 : 300000;
-  if (kuotaPenuh) d += 100000;
-  return d;
+// Pasal 3a — Izin biasa. Kuota penuh (Pasal 3c) → + denda tambahan.
+export function dendaIzinBiasa(kat: KatLapor, kuotaPenuh: boolean, cfg: CfgIzin = IZIN_LAMA): number {
+  return hitungIzinBiasa(cfg, kat, kuotaPenuh).denda;
+}
+export function poinIzinBiasa(kat: KatLapor, kuotaPenuh: boolean, cfg: CfgIzin = IZIN_LAMA): number {
+  return hitungIzinBiasa(cfg, kat, kuotaPenuh).poin;
 }
 
-// Pasal 3b — Izin sakit. sakitKe: 1 = pertama bulan ini. suratOnTime = surat masuk sebelum 20:00.
-export function dendaIzinSakit(kat: KatLapor, sakitKe: number, suratOnTime: boolean): number {
-  if (sakitKe === 1 && kat === "tepat_waktu" && suratOnTime) return 0;
-  if (kat === "setelah_shift") return 50000;
-  return 25000; // tepat_waktu atau telat_sebelum_shift
+// Pasal 3b — Izin sakit. sakitKe: 1 = pertama bulan ini.
+// suratOnTime = surat dokter masuk sebelum batas jam yang ditetapkan.
+export function dendaIzinSakit(
+  kat: KatLapor, sakitKe: number, suratOnTime: boolean,
+  cfgS: CfgSakit = SAKIT_LAMA, cfgI: CfgIzin = IZIN_LAMA, kuotaPenuh = false
+): number {
+  return hitungIzinSakit(cfgS, cfgI, kat, suratOnTime, kuotaPenuh, sakitKe).denda;
+}
+export function poinIzinSakit(
+  kat: KatLapor, sakitKe: number, suratOnTime: boolean,
+  cfgS: CfgSakit = SAKIT_LAMA, cfgI: CfgIzin = IZIN_LAMA, kuotaPenuh = false
+): number {
+  return hitungIzinSakit(cfgS, cfgI, kat, suratOnTime, kuotaPenuh, sakitKe).poin;
 }
 
 export function labelKatLapor(kat: KatLapor): string {

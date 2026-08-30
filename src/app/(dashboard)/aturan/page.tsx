@@ -12,7 +12,7 @@ type Json = string | number | boolean | null | Json[] | { [k: string]: Json };
 
 interface ConfigRow {
   id: string; jalur: string; kunci: string; label: string | null; nilai: Json;
-  updated_by: string | null; updated_at: string;
+  berlaku_mulai: string; updated_by: string | null; updated_at: string;
 }
 interface PelanggaranRow {
   id: string; jalur: string; nomor: number | null; nama_pelanggaran: string;
@@ -34,6 +34,9 @@ const PELANGGARAN_TAB = [
   { key: "tier4",      label: "Tier 4 — PHK" },
 ];
 
+function tglSaja(iso: string) {
+  return new Date(`${iso}T00:00:00+07:00`).toLocaleDateString("id-ID", { timeZone: "Asia/Jakarta", day: "numeric", month: "long", year: "numeric" });
+}
 function tglWaktu(iso: string) {
   return new Date(iso).toLocaleString("id-ID", { timeZone: "Asia/Jakarta", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
@@ -61,7 +64,7 @@ export default function AturanPage() {
   const fetchAll = useCallback(async () => {
     setLoading(true);
     const [c, p] = await Promise.all([
-      supabase.from("aturan_config").select("id, jalur, kunci, label, nilai, updated_by, updated_at").order("jalur").order("kunci"),
+      supabase.from("aturan_config").select("id, jalur, kunci, label, nilai, berlaku_mulai, updated_by, updated_at").order("jalur").order("kunci").order("berlaku_mulai"),
       supabase.from("master_pelanggaran")
         .select("id, jalur, nomor, nama_pelanggaran, poin, tier, jenis, is_aktif, is_kebersihan, is_kolektif, eskalasi_poin, catatan")
         .neq("jalur", "legacy").order("jalur").order("nomor"),
@@ -104,7 +107,19 @@ export default function AturanPage() {
     showToast(`Tersimpan — ${row.nama_pelanggaran.slice(0, 40)}…`);
   }
 
+  const hariIni = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" });
   const configsJalur = configs.filter((c) => c.jalur === jalur);
+  // Versi yang benar-benar berlaku hari ini per (jalur,kunci) = berlaku_mulai terbesar yang <= hari ini
+  const aktifIds = new Set<string>();
+  {
+    const best: Record<string, ConfigRow> = {};
+    for (const c of configs) {
+      if (c.berlaku_mulai > hariIni) continue;
+      const k = `${c.jalur}|${c.kunci}`;
+      if (!best[k] || c.berlaku_mulai > best[k].berlaku_mulai) best[k] = c;
+    }
+    Object.values(best).forEach((c) => aktifIds.add(c.id));
+  }
   const pelJalurRows = pelanggaran.filter((p) => p.jalur === pelJalur);
 
   return (
@@ -162,6 +177,13 @@ export default function AturanPage() {
                       <code className="bg-gray-100 px-1 rounded">{c.jalur}.{c.kunci}</code>
                       {c.updated_by && <> · terakhir diubah {c.updated_by}, {tglWaktu(c.updated_at)}</>}
                     </p>
+                    <span className={`inline-block mt-1 text-[10px] px-1.5 py-0.5 rounded-full font-semibold ${
+                      c.berlaku_mulai <= hariIni ? "bg-green-100 text-green-700" : "bg-blue-100 text-blue-700"
+                    }`}>
+                      {c.berlaku_mulai <= hariIni
+                        ? (aktifIds.has(c.id) ? "Berlaku sekarang" : `Sudah lewat · s/d sebelum versi berikutnya`)
+                        : `Mulai berlaku ${tglSaja(c.berlaku_mulai)}`}
+                    </span>
                   </div>
                   {berubah && (
                     <div className="flex items-center gap-1.5 shrink-0">

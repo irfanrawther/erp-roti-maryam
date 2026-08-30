@@ -5,8 +5,9 @@ import { hashPin } from "@/lib/auth";
 import { FileText, Camera, CheckCircle2, X, AlertTriangle } from "lucide-react";
 import IndonesianDatePicker from "@/components/IndonesianDatePicker";
 import { katLapor, dendaIzinBiasa, labelKatLapor, type KatLapor } from "@/lib/izin";
+import { muatAturan, cfgIzin, jalurDariKategori } from "@/lib/aturan";
 
-interface Karyawan { id: string; nama: string; jabatan: string | null }
+interface Karyawan { id: string; nama: string; jabatan: string | null; kategori_dokumen: string | null }
 
 // "Rabu, 2 Juli 2026" — sertakan nama hari
 function labelTgl(iso: string) {
@@ -77,8 +78,12 @@ export default function IzinPage() {
       setKuotaOleh(kuota);
       const saRow = sRes.data as { is_libur: boolean; shift_master: { jam_masuk: string } | null } | null;
       if (saRow && !saRow.is_libur && saRow.shift_master) {
-        const kat = katLapor(tglIzin, saRow.shift_master.jam_masuk, Date.now());
-        setDendaInfo({ denda: dendaIzinBiasa(kat, false), kat, adaShift: true });
+        // Aturan yang dipakai = yang berlaku pada TANGGAL IZIN (tanggal kejadian)
+        const rows = await muatAturan();
+        const jalur = jalurDariKategori(karyawan.kategori_dokumen) ?? "training";
+        const cfg = cfgIzin(rows, jalur, tglIzin);
+        const kat = katLapor(tglIzin, saRow.shift_master.jam_masuk, Date.now(), cfg);
+        setDendaInfo({ denda: dendaIzinBiasa(kat, false, cfg), kat, adaShift: true });
         // Batas lapor izin di hari yang sama: maksimal 2 jam setelah shift mulai
         const jm = saRow.shift_master.jam_masuk.slice(0, 8).padEnd(8, ":00");
         const shiftStart = new Date(`${tglIzin}T${jm}+07:00`).getTime();
@@ -98,7 +103,7 @@ export default function IzinPage() {
     try {
       const hash = await hashPin(pin);
       const { data: k } = await supabase.from("karyawan")
-        .select("id, nama, jabatan").eq("pin_absensi", hash).eq("status", "aktif").maybeSingle();
+        .select("id, nama, jabatan, kategori_dokumen").eq("pin_absensi", hash).eq("status", "aktif").maybeSingle();
       if (!k) { setPinErr("PIN tidak ditemukan"); return; }
       setKaryawan(k as Karyawan);
       setStep("form");
@@ -137,9 +142,12 @@ export default function IzinPage() {
         .eq("karyawan_id", karyawan.id).eq("tanggal", tgl).maybeSingle();
       const saRow = sa as { is_libur: boolean; shift_master: { jam_masuk: string } | null } | null;
       if (saRow && !saRow.is_libur && saRow.shift_master) {
-        const kat = katLapor(tgl, saRow.shift_master.jam_masuk, Date.now());
+        const rows = await muatAturan();
+        const jalur = jalurDariKategori(karyawan.kategori_dokumen) ?? "training";
+        const cfg = cfgIzin(rows, jalur, tgl);
+        const kat = katLapor(tgl, saRow.shift_master.jam_masuk, Date.now(), cfg);
         kategori = kat;
-        denda = dendaIzinBiasa(kat, !!kuotaOleh);
+        denda = dendaIzinBiasa(kat, !!kuotaOleh, cfg);
       }
 
       // Insert pengajuan izin

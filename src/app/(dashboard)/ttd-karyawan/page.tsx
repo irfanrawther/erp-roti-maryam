@@ -5,7 +5,8 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { getUserSession, canAccessAdmin, type UserSession } from "@/lib/auth";
 import { homeRoute } from "@/lib/permissions";
-import { FileSignature, Search, CheckCircle2, AlertCircle, ChevronRight } from "lucide-react";
+import { FileSignature, Search, CheckCircle2, AlertCircle, ChevronRight, ChevronLeft } from "lucide-react";
+import { jalurDariKategori } from "@/lib/aturan";
 
 const DokumenViewerPerusahaan = dynamic(() => import("./DokumenViewerPerusahaan"), { ssr: false });
 
@@ -19,7 +20,7 @@ const KATEGORI_OPTIONS = [
 ];
 
 interface Karyawan { id: string; nama: string; jabatan: string | null; kategori_dokumen: string | null }
-interface Dokumen { id: string; nama: string; file_pdf_url: string | null; versi: number; kategori: string; is_aktif: boolean }
+interface Dokumen { id: string; nama: string; file_pdf_url: string | null; versi: number; jalur: string | null; jenis: string | null; is_aktif: boolean }
 interface PersetujuanKaryawan { dokumen_id: string; dokumen_versi: number; karyawan_id: string; disetujui_at: string }
 interface TtdPerusahaan { dokumen_id: string; dokumen_versi: number; karyawan_id: string; ditandatangani_at: string; diwakili_oleh: string | null; jabatan_perwakilan: string | null }
 
@@ -37,6 +38,7 @@ export default function TtdKaryawanPage() {
   const [ttdPerusahaan, setTtdPerusahaan] = useState<TtdPerusahaan[]>([]);
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<Karyawan | null>(null);
+  const [selectedDok, setSelectedDok] = useState<Dokumen | null>(null);
   const [catBusy, setCatBusy] = useState<string | null>(null);
 
   useEffect(() => {
@@ -49,7 +51,7 @@ export default function TtdKaryawanPage() {
     setLoading(true);
     const [kRes, dRes, pRes, tRes] = await Promise.all([
       supabase.from("karyawan").select("id, nama, jabatan, kategori_dokumen").eq("status", "aktif").order("nama"),
-      supabase.from("dokumen").select("id, nama, file_pdf_url, versi, kategori, is_aktif").eq("is_aktif", true),
+      supabase.from("dokumen").select("id, nama, file_pdf_url, versi, jalur, jenis, is_aktif").eq("is_aktif", true).order("jenis"),
       supabase.from("dokumen_persetujuan").select("dokumen_id, dokumen_versi, karyawan_id, disetujui_at"),
       supabase.from("dokumen_ttd_perusahaan").select("dokumen_id, dokumen_versi, karyawan_id, ditandatangani_at, diwakili_oleh, jabatan_perwakilan"),
     ]);
@@ -67,51 +69,97 @@ export default function TtdKaryawanPage() {
     setCatBusy(null);
   }
 
-  function dokUntuk(k: Karyawan): Dokumen | null {
-    if (!k.kategori_dokumen) return null;
-    return docs.find((d) => d.kategori === k.kategori_dokumen) ?? null;
+  // Tiap jalur punya 2 dokumen terpisah (PK + PP) — keduanya perlu TTD perusahaan.
+  function dokumenUntuk(k: Karyawan): Dokumen[] {
+    const j = jalurDariKategori(k.kategori_dokumen);
+    if (!j) return [];
+    return docs.filter((d) => d.jalur === j);
   }
-  function statusKaryawan(k: Karyawan, d: Dokumen | null) {
-    if (!d) return null;
+  function statusKaryawan(k: Karyawan, d: Dokumen) {
     return approvalsKaryawan.find((a) => a.dokumen_id === d.id && a.dokumen_versi === d.versi && a.karyawan_id === k.id) ?? null;
   }
-  function statusPerusahaan(k: Karyawan, d: Dokumen | null) {
-    if (!d) return null;
+  function statusPerusahaan(k: Karyawan, d: Dokumen) {
     return ttdPerusahaan.find((a) => a.dokumen_id === d.id && a.dokumen_versi === d.versi && a.karyawan_id === k.id) ?? null;
   }
 
   const filtered = karyawan.filter((k) => k.nama.toLowerCase().includes(search.toLowerCase()));
 
   if (selected) {
-    const dok = dokUntuk(selected);
+    const dokList = dokumenUntuk(selected);
+
+    // Sudah pilih dokumen → tampilkan viewer TTD perusahaan
+    if (selectedDok) {
+      return (
+        <div className="p-4 space-y-4 max-w-3xl mx-auto">
+          <div className="flex items-center gap-2">
+            <FileSignature size={20} className="text-amber-500" />
+            <h1 className="text-xl font-bold text-gray-800">TTD Dokumen Karyawan</h1>
+          </div>
+          <div className="card">
+            <p className="font-semibold text-gray-800">{selected.nama}</p>
+            <p className="text-xs text-gray-500">{selectedDok.nama}</p>
+          </div>
+          <DokumenViewerPerusahaan
+            dok={selectedDok}
+            karyawanId={selected.id}
+            adminNama={user?.nama ?? ""}
+            onBack={() => setSelectedDok(null)}
+            onDone={() => { setSelectedDok(null); fetchAll(); }}
+          />
+        </div>
+      );
+    }
+
+    // Belum pilih → daftar dokumen (PK & PP) untuk jalur karyawan ini
     return (
       <div className="p-4 space-y-4 max-w-3xl mx-auto">
         <div className="flex items-center gap-2">
+          <button onClick={() => setSelected(null)} className="text-gray-400 hover:text-gray-600"><ChevronLeft size={20} /></button>
           <FileSignature size={20} className="text-amber-500" />
           <h1 className="text-xl font-bold text-gray-800">TTD Dokumen Karyawan</h1>
         </div>
         <div className="card">
           <p className="font-semibold text-gray-800">{selected.nama}</p>
-          <p className="text-xs text-gray-500">{selected.jabatan ?? "Karyawan"} · Kategori dokumen: <b>{selected.kategori_dokumen ?? "belum ditentukan"}</b></p>
+          <p className="text-xs text-gray-500">{selected.jabatan ?? "Karyawan"} · Kategori: <b>{selected.kategori_dokumen ?? "belum ditentukan"}</b></p>
         </div>
-        {!dok ? (
+
+        {dokList.length === 0 ? (
           <div className="card text-center py-8">
             <AlertCircle size={28} className="mx-auto text-amber-400 mb-2" />
             <p className="text-sm text-gray-500">
               {selected.kategori_dokumen
-                ? `Belum ada dokumen aktif untuk kategori "${selected.kategori_dokumen}".`
+                ? "Belum ada dokumen aktif untuk jalur karyawan ini. Upload dulu di halaman Dokumen."
                 : "Kategori dokumen karyawan ini belum ditentukan. Set kategorinya dulu di daftar."}
             </p>
             <button onClick={() => setSelected(null)} className="mt-3 text-sm text-indigo-600 hover:underline">← Kembali ke daftar</button>
           </div>
         ) : (
-          <DokumenViewerPerusahaan
-            dok={dok}
-            karyawanId={selected.id}
-            adminNama={user?.nama ?? ""}
-            onBack={() => setSelected(null)}
-            onDone={() => { setSelected(null); fetchAll(); }}
-          />
+          <div className="card space-y-2">
+            {dokList.map((d) => {
+              const sK = statusKaryawan(selected, d);
+              const sP = statusPerusahaan(selected, d);
+              return (
+                <button key={d.id} onClick={() => setSelectedDok(d)}
+                  className="w-full text-left rounded-xl border border-gray-100 p-3 hover:border-amber-200 hover:bg-amber-50/40 transition-colors">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="font-semibold text-sm text-gray-800">{d.nama}</p>
+                      <p className="text-[11px] text-gray-400">Versi {d.versi}</p>
+                      <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold flex items-center gap-0.5 ${sK ? "bg-green-50 text-green-600" : "bg-red-50 text-red-500"}`}>
+                          {sK ? <CheckCircle2 size={10} /> : <AlertCircle size={10} />} Karyawan {sK ? tglWaktu(sK.disetujui_at) : "belum TTD"}
+                        </span>
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold flex items-center gap-0.5 ${sP ? "bg-green-50 text-green-600" : "bg-red-50 text-red-500"}`}>
+                          {sP ? <CheckCircle2 size={10} /> : <AlertCircle size={10} />} Perusahaan {sP ? tglWaktu(sP.ditandatangani_at) : "belum TTD"}
+                        </span>
+                      </div>
+                    </div>
+                    <ChevronRight size={18} className="text-gray-300 shrink-0" />
+                  </div>
+                </button>
+              );
+            })}
+          </div>
         )}
       </div>
     );
@@ -137,21 +185,21 @@ export default function TtdKaryawanPage() {
         {loading ? <p className="text-sm text-gray-400 text-center py-4">Memuat…</p>
           : filtered.length === 0 ? <p className="text-sm text-gray-400 text-center py-4">Tidak ada karyawan</p>
           : filtered.map((k) => {
-            const dok = dokUntuk(k);
-            const sKaryawan = statusKaryawan(k, dok);
-            const sPerusahaan = statusPerusahaan(k, dok);
+            const dokList = dokumenUntuk(k);
+            const totalTtdKaryawan = dokList.filter((d) => statusKaryawan(k, d)).length;
+            const totalTtdPerusahaan = dokList.filter((d) => statusPerusahaan(k, d)).length;
             return (
               <div key={k.id} className="flex items-center gap-2 p-2.5 rounded-xl border border-gray-100">
                 <div className="flex-1 min-w-0">
                   <p className="font-semibold text-sm text-gray-800 truncate">{k.nama}</p>
                   <p className="text-[11px] text-gray-400">{k.jabatan ?? "Karyawan"}</p>
-                  {dok && (
+                  {dokList.length > 0 && (
                     <div className="flex items-center gap-2 mt-1 flex-wrap">
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold flex items-center gap-0.5 ${sKaryawan ? "bg-green-50 text-green-600" : "bg-red-50 text-red-500"}`}>
-                        {sKaryawan ? <CheckCircle2 size={10} /> : <AlertCircle size={10} />} Karyawan {sKaryawan ? tglWaktu(sKaryawan.disetujui_at) : "belum TTD"}
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold flex items-center gap-0.5 ${totalTtdKaryawan === dokList.length ? "bg-green-50 text-green-600" : "bg-red-50 text-red-500"}`}>
+                        {totalTtdKaryawan === dokList.length ? <CheckCircle2 size={10} /> : <AlertCircle size={10} />} Karyawan {totalTtdKaryawan}/{dokList.length}
                       </span>
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold flex items-center gap-0.5 ${sPerusahaan ? "bg-green-50 text-green-600" : "bg-red-50 text-red-500"}`}>
-                        {sPerusahaan ? <CheckCircle2 size={10} /> : <AlertCircle size={10} />} Perusahaan {sPerusahaan ? tglWaktu(sPerusahaan.ditandatangani_at) : "belum TTD"}
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold flex items-center gap-0.5 ${totalTtdPerusahaan === dokList.length ? "bg-green-50 text-green-600" : "bg-red-50 text-red-500"}`}>
+                        {totalTtdPerusahaan === dokList.length ? <CheckCircle2 size={10} /> : <AlertCircle size={10} />} Perusahaan {totalTtdPerusahaan}/{dokList.length}
                       </span>
                     </div>
                   )}
@@ -162,7 +210,7 @@ export default function TtdKaryawanPage() {
                   className="input py-1.5 text-xs w-32 shrink-0">
                   {KATEGORI_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                 </select>
-                <button onClick={() => setSelected(k)} className="p-2 rounded-lg text-gray-300 hover:text-amber-500 hover:bg-amber-50 shrink-0">
+                <button onClick={() => { setSelected(k); setSelectedDok(null); }} className="p-2 rounded-lg text-gray-300 hover:text-amber-500 hover:bg-amber-50 shrink-0">
                   <ChevronRight size={18} />
                 </button>
               </div>

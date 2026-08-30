@@ -5,8 +5,9 @@ import { hashPin } from "@/lib/auth";
 import { Stethoscope, Camera, CheckCircle2, X, AlertTriangle, Clock } from "lucide-react";
 import { bulanRange } from "@/lib/absensi";
 import { katLapor, dendaIzinSakit } from "@/lib/izin";
+import { muatAturan, cfgIzin, cfgSakit, jalurDariKategori } from "@/lib/aturan";
 
-interface Karyawan { id: string; nama: string; jabatan: string | null }
+interface Karyawan { id: string; nama: string; jabatan: string | null; kategori_dokumen: string | null }
 interface ShiftHari { nama_shift: string; jam_masuk: string; jam_pulang: string }
 interface SakitAktif { id: string; tanggal_izin: string; status_surat: string | null; kategori_lapor: string | null; sakit_ke: number | null; batas_upload_surat: string | null }
 
@@ -53,7 +54,7 @@ export default function IzinSakitPage() {
     try {
       const hash = await hashPin(pin);
       const { data: k } = await supabase.from("karyawan")
-        .select("id, nama, jabatan").eq("pin_absensi", hash).eq("status", "aktif").maybeSingle();
+        .select("id, nama, jabatan, kategori_dokumen").eq("pin_absensi", hash).eq("status", "aktif").maybeSingle();
       if (!k) { setPinErr("PIN tidak ditemukan"); return; }
       const kar = k as Karyawan;
       setKaryawan(kar);
@@ -128,8 +129,12 @@ export default function IzinSakitPage() {
         .eq("karyawan_id", karyawan.id).eq("jenis", "izin_sakit").eq("status", "aktif")
         .gte("tanggal_izin", start).lte("tanggal_izin", end);
       const sakitKe = (sakitSebelum ?? 0) + 1;
-      const kat = katLapor(H, shiftHari.jam_masuk, Date.now());
-      const denda = dendaIzinSakit(kat, sakitKe, !!fotoFile);
+      // Aturan yang dipakai = yang berlaku pada TANGGAL SAKIT (tanggal kejadian)
+      const rows = await muatAturan();
+      const jalur = jalurDariKategori(karyawan.kategori_dokumen) ?? "training";
+      const cS = cfgSakit(rows, jalur, H), cI = cfgIzin(rows, jalur, H);
+      const kat = katLapor(H, shiftHari.jam_masuk, Date.now(), cS);
+      const denda = dendaIzinSakit(kat, sakitKe, !!fotoFile, cS, cI);
 
       const { error: insErr } = await supabase.from("pengajuan_izin").insert({
         karyawan_id: karyawan.id, tanggal_izin: H, jenis: "izin_sakit", status: "aktif",
@@ -166,7 +171,11 @@ export default function IzinSakitPage() {
       // Surat masuk sebelum 20:00 → recompute denda (Pasal 3b: bisa jadi Rp0 jika sakit pertama & tepat waktu)
       const suratOnTime = !susulan.batas_upload_surat || Date.now() <= new Date(susulan.batas_upload_surat).getTime();
       const kat = (susulan.kategori_lapor as import("@/lib/izin").KatLapor) ?? "tepat_waktu";
-      const dendaBaru = dendaIzinSakit(kat, susulan.sakit_ke ?? 1, suratOnTime);
+      const rowsS = await muatAturan();
+      const jalurS = jalurDariKategori(karyawan.kategori_dokumen) ?? "training";
+      const cS2 = cfgSakit(rowsS, jalurS, susulan.tanggal_izin);
+      const cI2 = cfgIzin(rowsS, jalurS, susulan.tanggal_izin);
+      const dendaBaru = dendaIzinSakit(kat, susulan.sakit_ke ?? 1, suratOnTime, cS2, cI2);
       await supabase.from("pengajuan_izin").update({
         foto_surat_url: fotoUrl, status_surat: "surat_masuk", surat_uploaded_at: new Date().toISOString(), denda: dendaBaru,
       }).eq("id", susulan.id);

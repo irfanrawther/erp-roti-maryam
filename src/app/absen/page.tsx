@@ -3,10 +3,11 @@ import { useEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { hashPin } from "@/lib/auth";
 import { hitungDenda, bulanRange } from "@/lib/absensi";
+import { muatAturan, cfgTelat, jalurDariKategori } from "@/lib/aturan";
 import { poinTelat } from "@/lib/poin";
 import { Clock, MapPin, Camera, CheckCircle2, LogIn, LogOut, X, RefreshCw } from "lucide-react";
 
-interface Karyawan { id: string; nama: string; jabatan: string | null }
+interface Karyawan { id: string; nama: string; jabatan: string | null; kategori_dokumen: string | null }
 interface ShiftInfo { nama_shift: string; jam_masuk: string; jam_pulang: string }
 interface AbsensiRow {
   id: string; jam_checkin: string | null; jam_checkout: string | null;
@@ -71,7 +72,7 @@ export default function AbsenPage() {
     try {
       const hash = await hashPin(pin);
       const { data: k } = await supabase.from("karyawan")
-        .select("id, nama, jabatan").eq("pin_absensi", hash).eq("status", "aktif").maybeSingle();
+        .select("id, nama, jabatan, kategori_dokumen").eq("pin_absensi", hash).eq("status", "aktif").maybeSingle();
       if (!k) { setPinErr("PIN tidak ditemukan"); setBusy(false); return; }
       const kar = k as Karyawan;
       setKaryawan(kar);
@@ -318,7 +319,10 @@ function CheckInView({ karyawan, shiftName, setting, onCancel, onDone }: {
           .select("id", { count: "exact", head: true })
           .eq("karyawan_id", karyawan.id).eq("kategori_telat", "K1").eq("denda_dihapus_ampun", true)
           .gte("tanggal", start).lte("tanggal", end);
-        const res = hitungDenda(jamMasukResmi, checkinDate, count ?? 0);
+        // Aturan telat yang berlaku pada TANGGAL CHECK-IN (tanggal kejadian)
+        const rows = await muatAturan();
+        const jalur = jalurDariKategori(karyawan.kategori_dokumen) ?? "training";
+        const res = hitungDenda(jamMasukResmi, checkinDate, count ?? 0, cfgTelat(rows, jalur, today));
         payload.menit_telat         = res.menit_telat;
         payload.kategori_telat      = res.kategori_telat;
         payload.denda               = res.denda;

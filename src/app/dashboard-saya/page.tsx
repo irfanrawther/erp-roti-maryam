@@ -5,6 +5,7 @@ import { supabase } from "@/lib/supabase";
 import { hashPin } from "@/lib/auth";
 import { UserCircle, Clock, ClipboardList, CalendarDays, FileText, CheckCircle2, AlertCircle, X, ExternalLink, ShieldAlert, PenLine } from "lucide-react";
 import { kuartalSekarang, labelKuartal, POIN_PER_SP } from "@/lib/poin";
+import { jalurDariKategori } from "@/lib/aturan";
 
 const DokumenViewer = dynamic(() => import("@/app/dokumen/DokumenViewer"), { ssr: false });
 
@@ -67,8 +68,10 @@ export default function DashboardSayaPage() {
       const kar = k as Karyawan; setKaryawan(kar);
 
       const upTo = addDaysStr(today, 7);
-      const dokQuery = kar.kategori_dokumen
-        ? supabase.from("dokumen").select("id, nama, versi, wajib_ttd, file_pdf_url").eq("is_aktif", true).eq("kategori", kar.kategori_dokumen).order("created_at")
+      // Tiap jalur punya 2 dokumen terpisah (PK + PP) — keduanya wajib ditandatangani.
+      const jalurKar = jalurDariKategori(kar.kategori_dokumen);
+      const dokQuery = jalurKar
+        ? supabase.from("dokumen").select("id, nama, versi, wajib_ttd, file_pdf_url").eq("is_aktif", true).eq("jalur", jalurKar).order("jenis")
         : Promise.resolve({ data: [] as { id: string; nama: string; versi: number; wajib_ttd: boolean; file_pdf_url: string | null }[] });
       const [asg, abs, jd, dk, pj, pn, spr] = await Promise.all([
         supabase.from("shift_assignment").select("tanggal, is_libur, shift_id, shift_master:shift_id(nama_shift, jam_masuk, jam_pulang)")
@@ -99,9 +102,10 @@ export default function DashboardSayaPage() {
 
   async function refreshDocs() {
     if (!karyawan) return;
+    const jalurKar = jalurDariKategori(karyawan.kategori_dokumen);
     const [dk, pj] = await Promise.all([
-      karyawan.kategori_dokumen
-        ? supabase.from("dokumen").select("id, nama, versi, wajib_ttd, file_pdf_url").eq("is_aktif", true).eq("kategori", karyawan.kategori_dokumen).order("created_at")
+      jalurKar
+        ? supabase.from("dokumen").select("id, nama, versi, wajib_ttd, file_pdf_url").eq("is_aktif", true).eq("jalur", jalurKar).order("jenis")
         : Promise.resolve({ data: [] as { id: string; nama: string; versi: number; wajib_ttd: boolean; file_pdf_url: string | null }[] }),
       supabase.from("dokumen_persetujuan").select("dokumen_id, dokumen_versi, disetujui_at, tipe, tanda_tangan_url").eq("karyawan_id", karyawan.id),
     ]);
