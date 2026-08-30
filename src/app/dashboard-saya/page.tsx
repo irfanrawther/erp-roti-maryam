@@ -3,11 +3,11 @@ import { useState } from "react";
 import dynamic from "next/dynamic";
 import { supabase } from "@/lib/supabase";
 import { hashPin } from "@/lib/auth";
-import { UserCircle, Clock, ClipboardList, CalendarDays, FileText, CheckCircle2, AlertCircle, X, ExternalLink, ShieldAlert, PenLine } from "lucide-react";
+import { UserCircle, Clock, ClipboardList, CalendarDays, FileText, CheckCircle2, AlertCircle, X, ExternalLink, ShieldAlert, PenLine, Eye } from "lucide-react";
 import { kuartalSekarang, labelKuartal, POIN_PER_SP } from "@/lib/poin";
 import { jalurDariKategori } from "@/lib/aturan";
 
-const AlurTandaTangan = dynamic(() => import("./AlurTandaTangan"), { ssr: false });
+const TandaTanganDokumen = dynamic(() => import("./TandaTanganDokumen"), { ssr: false });
 
 interface Karyawan { id: string; nama: string; jabatan: string | null; kategori_dokumen: string | null }
 interface ShiftInfo { nama_shift: string; jam_masuk: string; jam_pulang: string }
@@ -51,7 +51,7 @@ export default function DashboardSayaPage() {
   const [poinRows, setPoinRows] = useState<{ tanggal: string; poin: number; sumber: string; master_pelanggaran: { nama_pelanggaran: string } | null; catatan: string | null }[]>([]);
   const [spLevel, setSpLevel] = useState(0);
   const [spBefore, setSpBefore] = useState(0);
-  const [alurTtd, setAlurTtd] = useState(false);
+  const [bukaDok, setBukaDok] = useState<{ dok: DokItem; mode: "baca" | "ttd" } | null>(null);
 
   const today = todayWIB();
   const monthStart = today.slice(0, 8) + "01";
@@ -157,8 +157,8 @@ export default function DashboardSayaPage() {
 
             {/* Pengingat tanda tangan — tidak memblokir absensi, supaya
                 karyawan baru tetap bisa check-in di hari pertama. */}
-            {!alurTtd && docs.length > 0 && docs.some((d) => !d.approved) && (
-              <button onClick={() => setAlurTtd(true)}
+            {!bukaDok && docs.length > 0 && docs.some((d) => !d.approved) && (
+              <button onClick={() => { const d = docs.find((x) => !x.approved); if (d) setBukaDok({ dok: d, mode: "baca" }); }}
                 className="w-full text-left bg-red-50 border border-red-200 rounded-2xl p-4 flex items-start gap-3 hover:bg-red-100 transition-colors">
                 <AlertCircle size={20} className="text-red-500 shrink-0 mt-0.5" />
                 <div className="min-w-0">
@@ -295,51 +295,74 @@ export default function DashboardSayaPage() {
             </div>
 
             {/* SECTION 4 — Dokumen */}
-            {alurTtd ? (
-              <AlurTandaTangan
-                docs={docs}
+            {bukaDok ? (
+              <TandaTanganDokumen
+                dok={bukaDok.dok}
+                modeAwal={bukaDok.mode}
                 karyawanId={karyawan.id}
                 karyawanNama={karyawan.nama}
-                onBack={() => { setAlurTtd(false); refreshDocs(); }}
-                onDone={() => { setAlurTtd(false); refreshDocs(); }}
+                onBack={() => { setBukaDok(null); refreshDocs(); }}
+                onDone={() => { setBukaDok(null); refreshDocs(); }}
               />
             ) : (
               <div className="bg-white rounded-2xl shadow-sm p-4 space-y-3">
-                <h2 className="font-bold text-gray-700 text-sm flex items-center gap-2"><FileText size={16} className="text-violet-500" /> Dokumen Saya</h2>
+                <div className="flex items-center justify-between gap-2">
+                  <h2 className="font-bold text-gray-700 text-sm flex items-center gap-2">
+                    <FileText size={16} className="text-violet-500" /> Dokumen Saya
+                  </h2>
+                  {docs.length > 0 && (
+                    <span className="text-[11px] text-gray-400">
+                      {docs.filter((d) => d.approved).length}/{docs.length} selesai
+                    </span>
+                  )}
+                </div>
 
                 {docs.length === 0 ? (
-                  <p className="text-sm text-gray-400">
+                  <p className="text-sm text-gray-400 py-2">
                     {karyawan.kategori_dokumen
                       ? "Dokumen untuk jalur kamu belum diupload admin."
                       : "Jalur dokumen kamu belum ditentukan admin."}
                   </p>
-                ) : (
-                  <>
-                    {docs.map((d) => (
-                      <div key={d.id} className="flex items-center justify-between gap-2 py-2 border-b border-gray-50 last:border-0">
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium text-gray-800 truncate">{d.nama}</p>
-                          {d.approved
-                            ? <p className="text-[11px] text-green-600">Sudah ditandatangani · {tglWaktu(d.approved.disetujui_at)}</p>
-                            : <p className="text-[11px] text-red-500">Belum ditandatangani</p>}
-                        </div>
-                        <div className="flex items-center gap-2 shrink-0">
-                          {d.approved && <CheckCircle2 size={16} className="text-green-500" />}
-                          {d.file_pdf_url && <a href={d.file_pdf_url} target="_blank" rel="noopener noreferrer" className="text-gray-300 hover:text-gray-500"><ExternalLink size={14} /></a>}
+                ) : docs.map((d) => (
+                  <div key={d.id} className={`rounded-xl border p-3 ${d.approved ? "border-gray-100 bg-gray-50/50" : "border-indigo-100 bg-indigo-50/30"}`}>
+                    <div className="flex items-start gap-2.5">
+                      <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${d.approved ? "bg-green-100" : "bg-indigo-100"}`}>
+                        {d.approved
+                          ? <CheckCircle2 size={17} className="text-green-600" />
+                          : <FileText size={17} className="text-indigo-500" />}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-semibold text-gray-800 leading-snug">{d.nama}</p>
+                        {d.approved ? (
+                          <p className="text-[11px] text-green-600 mt-0.5">
+                            Ditandatangani {tglWaktu(d.approved.disetujui_at)}
+                          </p>
+                        ) : (
+                          <p className="text-[11px] text-red-500 mt-0.5 font-medium">Belum ditandatangani</p>
+                        )}
+
+                        <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+                          <button onClick={() => setBukaDok({ dok: d, mode: "baca" })}
+                            className="text-[11px] font-semibold px-2.5 py-1.5 rounded-lg bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 flex items-center gap-1">
+                            <Eye size={12} /> Baca
+                          </button>
+                          {!d.approved && (
+                            <button onClick={() => setBukaDok({ dok: d, mode: "ttd" })}
+                              className="text-[11px] font-semibold px-2.5 py-1.5 rounded-lg bg-indigo-500 text-white hover:bg-indigo-600 flex items-center gap-1">
+                              <PenLine size={12} /> Isi & tanda tangani
+                            </button>
+                          )}
+                          {d.file_pdf_url && (
+                            <a href={d.file_pdf_url} target="_blank" rel="noopener noreferrer"
+                              className="text-[11px] text-gray-400 hover:text-gray-600 px-1.5 py-1.5 flex items-center gap-1">
+                              <ExternalLink size={12} /> File asli
+                            </a>
+                          )}
                         </div>
                       </div>
-                    ))}
-                    <button onClick={() => setAlurTtd(true)}
-                      className={`w-full py-2.5 rounded-xl text-sm font-semibold flex items-center justify-center gap-1.5 ${
-                        docs.every((d) => d.approved)
-                          ? "bg-gray-100 text-gray-600 hover:bg-gray-200"
-                          : "bg-indigo-500 text-white hover:bg-indigo-600"
-                      }`}>
-                      <PenLine size={14} />
-                      {docs.every((d) => d.approved) ? "Lihat dokumen saya" : "Tanda tangani sekarang"}
-                    </button>
-                  </>
-                )}
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
 
