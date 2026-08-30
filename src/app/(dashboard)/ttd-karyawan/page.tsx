@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { getUserSession, canAccessAdmin, type UserSession } from "@/lib/auth";
 import { homeRoute } from "@/lib/permissions";
-import { FileSignature, Search, CheckCircle2, AlertCircle, ChevronRight, ChevronLeft } from "lucide-react";
+import { FileSignature, Search, CheckCircle2, AlertCircle, ChevronRight, ChevronLeft, Printer } from "lucide-react";
 import { jalurDariKategori } from "@/lib/aturan";
 
 const DokumenViewerPerusahaan = dynamic(() => import("./DokumenViewerPerusahaan"), { ssr: false });
@@ -156,10 +156,9 @@ export default function TtdKaryawanPage() {
               const sK = statusKaryawan(selected, d);
               const sP = statusPerusahaan(selected, d);
               return (
-                <button key={d.id} onClick={() => setSelectedDok(d)}
-                  className="w-full text-left rounded-xl border border-gray-100 p-3 hover:border-amber-200 hover:bg-amber-50/40 transition-colors">
+                <div key={d.id} className="rounded-xl border border-gray-100 p-3 hover:border-amber-200 hover:bg-amber-50/40 transition-colors">
                   <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
+                    <button onClick={() => setSelectedDok(d)} className="min-w-0 text-left flex-1">
                       <p className="font-semibold text-sm text-gray-800">{d.nama}</p>
                       <p className="text-[11px] text-gray-400">Versi {d.versi}</p>
                       <div className="flex items-center gap-1.5 mt-1 flex-wrap">
@@ -170,10 +169,21 @@ export default function TtdKaryawanPage() {
                           {sP ? <CheckCircle2 size={10} /> : <AlertCircle size={10} />} Perusahaan {sP ? tglWaktu(sP.ditandatangani_at) : "belum TTD"}
                         </span>
                       </div>
+                    </button>
+                    <div className="flex items-center gap-1 shrink-0">
+                      {sK && (
+                        <a href={`/cetak-dokumen?d=${d.id}&k=${selected.id}`} target="_blank" rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          className="p-1.5 rounded-lg text-gray-400 hover:text-indigo-600 hover:bg-indigo-50" title="Unduh / Cetak">
+                          <Printer size={15} />
+                        </a>
+                      )}
+                      <button onClick={() => setSelectedDok(d)} className="text-gray-300 hover:text-amber-500">
+                        <ChevronRight size={18} />
+                      </button>
                     </div>
-                    <ChevronRight size={18} className="text-gray-300 shrink-0" />
                   </div>
-                </button>
+                </div>
               );
             })}
           </div>

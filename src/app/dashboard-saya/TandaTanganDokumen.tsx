@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
 import DokumenTerstruktur, { type NilaiField } from "@/components/DokumenTerstruktur";
 import { fieldMilik, type DefinisiField } from "@/lib/dokumenParse";
-import { ChevronLeft, Check, RotateCcw, PenLine, AlertCircle, CheckCircle2, Eye, Download } from "lucide-react";
+import { ChevronLeft, Check, RotateCcw, PenLine, AlertCircle, CheckCircle2, Eye, Download, Printer } from "lucide-react";
 
 export interface DokTtd {
   id: string; nama: string; versi: number; wajib_ttd: boolean;
@@ -230,9 +230,15 @@ export default function TandaTanganDokumen({
         )}
 
         {sudah ? (
-          <button onClick={onBack} className="w-full py-2.5 rounded-xl bg-gray-100 text-gray-700 font-semibold text-sm hover:bg-gray-200">
-            Kembali
-          </button>
+          <div className="space-y-2">
+            <a href={`/cetak-dokumen?d=${dok.id}&k=${karyawanId}`} target="_blank" rel="noopener noreferrer"
+              className="w-full py-2.5 rounded-xl bg-indigo-500 text-white font-semibold text-sm hover:bg-indigo-600 flex items-center justify-center gap-1.5">
+              <Printer size={15} /> Unduh / Cetak Dokumen
+            </a>
+            <button onClick={onBack} className="w-full py-2.5 rounded-xl bg-gray-100 text-gray-700 font-semibold text-sm hover:bg-gray-200">
+              Kembali
+            </button>
+          </div>
         ) : mode === "baca" ? (
           <button onClick={() => { setMode("ttd"); setSiapTtd(false); scrollRef.current?.scrollTo({ top: 0 }); }}
             disabled={!dok.konten_html}

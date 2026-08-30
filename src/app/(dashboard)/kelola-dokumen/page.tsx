@@ -6,7 +6,7 @@ import { getUserSession, canAccessAdmin, type UserSession } from "@/lib/auth";
 import { homeRoute } from "@/lib/permissions";
 import { jalurDariKategori } from "@/lib/aturan";
 import { SLOT_DOKUMEN, JALUR_LABEL_DOK, type SlotDokumen } from "@/lib/dokumen";
-import { FileText, Upload, X, CheckCircle2, AlertCircle, Archive, RefreshCw } from "lucide-react";
+import { FileText, Upload, X, CheckCircle2, AlertCircle, Archive, RefreshCw, Printer } from "lucide-react";
 
 interface Dokumen {
   id: string; nama: string; file_pdf_url: string | null; versi: number;
@@ -113,11 +113,18 @@ export default function KelolaDokumenPage() {
 
       const existing = dokSlot(s);
       if (existing) {
-        // Versi baru: tanda tangan versi lama tetap menunjuk file versi lama (snapshot).
-        const { error } = await supabase.from("dokumen")
-          .update({ file_pdf_url: url, versi: existing.versi + 1, uploaded_by: user?.nama ?? "",
-                    konten_html: html, konten_html_at: html ? new Date().toISOString() : null })
-          .eq("id", existing.id);
+        // Versi baru = BARIS BARU (id baru), bukan update di tempat — supaya
+        // tanda tangan yang sudah ada (menunjuk dokumen_id + dokumen_versi lama)
+        // tetap bisa mengambil isi & file versi lama itu untuk dicetak/dibaca,
+        // bukan cuma nomor versinya saja. Baris lama diarsipkan (is_aktif=false).
+        const { error: archErr } = await supabase.from("dokumen")
+          .update({ is_aktif: false }).eq("id", existing.id);
+        if (archErr) throw new Error(archErr.message);
+        const { error } = await supabase.from("dokumen").insert({
+          nama: s.nama, file_pdf_url: url, versi: existing.versi + 1, wajib_ttd: true, is_aktif: true,
+          jalur: s.jalur, jenis: s.jenis, kategori: s.jalur, uploaded_by: user?.nama ?? "",
+          konten_html: html, konten_html_at: html ? new Date().toISOString() : null,
+        });
         if (error) throw new Error(error.message);
       } else {
         const { error } = await supabase.from("dokumen").insert({
@@ -255,6 +262,10 @@ export default function KelolaDokumenPage() {
                     <img src={detail.p.tanda_tangan_url} alt="ttd" className="w-full rounded-lg border border-gray-200 bg-white" />
                   </div>
                 )}
+                <a href={`/cetak-dokumen?d=${detail.dok.id}&k=${detail.kar.id}`} target="_blank" rel="noopener noreferrer"
+                  className="w-full flex items-center justify-center gap-1.5 text-sm font-semibold px-3 py-2 rounded-lg bg-indigo-500 text-white hover:bg-indigo-600">
+                  <Printer size={14} /> Unduh / Cetak Dokumen
+                </a>
               </div>
             ) : (
               <p className="text-red-500 font-semibold flex items-center gap-1"><AlertCircle size={15} /> Belum menyetujui versi ini</p>
