@@ -7,7 +7,7 @@ import { UserCircle, Clock, ClipboardList, CalendarDays, FileText, CheckCircle2,
 import { kuartalSekarang, labelKuartal, POIN_PER_SP } from "@/lib/poin";
 import { jalurDariKategori } from "@/lib/aturan";
 
-const DokumenViewer = dynamic(() => import("@/app/dokumen/DokumenViewer"), { ssr: false });
+const AlurTandaTangan = dynamic(() => import("./AlurTandaTangan"), { ssr: false });
 
 interface Karyawan { id: string; nama: string; jabatan: string | null; kategori_dokumen: string | null }
 interface ShiftInfo { nama_shift: string; jam_masuk: string; jam_pulang: string }
@@ -18,7 +18,7 @@ interface AbsRow {
   shift_master: { nama_shift: string } | null;
 }
 interface Jobdesk { shift_id: string; jobdesk_awal: string | null; jobdesk_akhir: string | null }
-interface DokItem { id: string; nama: string; versi: number; wajib_ttd: boolean; file_pdf_url: string | null; approved: { disetujui_at: string; tipe: string; tanda_tangan_url: string | null } | null }
+interface DokItem { id: string; nama: string; versi: number; wajib_ttd: boolean; file_pdf_url: string | null; konten_html: string | null; approved: { disetujui_at: string; tipe: string; tanda_tangan_url: string | null; data_isian: Record<string,string> | null } | null }
 
 function todayWIB() { return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" }); }
 function addDaysStr(iso: string, n: number) { const d = new Date(`${iso}T00:00:00+07:00`); d.setDate(d.getDate() + n); return d.toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" }); }
@@ -51,7 +51,7 @@ export default function DashboardSayaPage() {
   const [poinRows, setPoinRows] = useState<{ tanggal: string; poin: number; sumber: string; master_pelanggaran: { nama_pelanggaran: string } | null; catatan: string | null }[]>([]);
   const [spLevel, setSpLevel] = useState(0);
   const [spBefore, setSpBefore] = useState(0);
-  const [signingDoc, setSigningDoc] = useState<DokItem | null>(null);
+  const [alurTtd, setAlurTtd] = useState(false);
 
   const today = todayWIB();
   const monthStart = today.slice(0, 8) + "01";
@@ -71,8 +71,8 @@ export default function DashboardSayaPage() {
       // Tiap jalur punya 2 dokumen terpisah (PK + PP) — keduanya wajib ditandatangani.
       const jalurKar = jalurDariKategori(kar.kategori_dokumen);
       const dokQuery = jalurKar
-        ? supabase.from("dokumen").select("id, nama, versi, wajib_ttd, file_pdf_url").eq("is_aktif", true).eq("jalur", jalurKar).order("jenis")
-        : Promise.resolve({ data: [] as { id: string; nama: string; versi: number; wajib_ttd: boolean; file_pdf_url: string | null }[] });
+        ? supabase.from("dokumen").select("id, nama, versi, wajib_ttd, file_pdf_url, konten_html").eq("is_aktif", true).eq("jalur", jalurKar).order("jenis")
+        : Promise.resolve({ data: [] as { id: string; nama: string; versi: number; wajib_ttd: boolean; file_pdf_url: string | null; konten_html: string | null }[] });
       const [asg, abs, jd, dk, pj, pn, spr] = await Promise.all([
         supabase.from("shift_assignment").select("tanggal, is_libur, shift_id, shift_master:shift_id(nama_shift, jam_masuk, jam_pulang)")
           .eq("karyawan_id", kar.id).gte("tanggal", monthStart).lte("tanggal", upTo).order("tanggal"),
@@ -80,15 +80,15 @@ export default function DashboardSayaPage() {
           .eq("karyawan_id", kar.id).gte("tanggal", monthStart).lte("tanggal", today).order("tanggal", { ascending: false }),
         supabase.from("jobdesk_shift").select("shift_id, jobdesk_awal, jobdesk_akhir"),
         dokQuery,
-        supabase.from("dokumen_persetujuan").select("dokumen_id, dokumen_versi, disetujui_at, tipe, tanda_tangan_url").eq("karyawan_id", kar.id),
+        supabase.from("dokumen_persetujuan").select("dokumen_id, dokumen_versi, disetujui_at, tipe, tanda_tangan_url, data_isian").eq("karyawan_id", kar.id),
         supabase.from("poin_karyawan").select("tanggal, poin, sumber, catatan, master_pelanggaran:pelanggaran_id(nama_pelanggaran)").eq("karyawan_id", kar.id).eq("kuartal", kuartalSekarang()).order("tanggal", { ascending: false }),
         supabase.from("status_sp_karyawan").select("level_sp, kuartal_kena").eq("karyawan_id", kar.id).eq("is_aktif", true),
       ]);
       setAssigns((asg.data as unknown as AssignRow[]) ?? []);
       setAbsensi((abs.data as unknown as AbsRow[]) ?? []);
       setJobdesks((jd.data as Jobdesk[]) ?? []);
-      const persetujuan = (pj.data as { dokumen_id: string; dokumen_versi: number; disetujui_at: string; tipe: string; tanda_tangan_url: string | null }[] | null) ?? [];
-      setDocs(((dk.data as { id: string; nama: string; versi: number; wajib_ttd: boolean; file_pdf_url: string | null }[] | null) ?? []).map((d) => ({
+      const persetujuan = (pj.data as { dokumen_id: string; dokumen_versi: number; disetujui_at: string; tipe: string; tanda_tangan_url: string | null; data_isian: Record<string,string> | null }[] | null) ?? [];
+      setDocs(((dk.data as { id: string; nama: string; versi: number; wajib_ttd: boolean; file_pdf_url: string | null; konten_html: string | null }[] | null) ?? []).map((d) => ({
         ...d, approved: persetujuan.find((p) => p.dokumen_id === d.id && p.dokumen_versi === d.versi) ?? null,
       })));
       setPoinRows((pn.data as unknown as { tanggal: string; poin: number; sumber: string; master_pelanggaran: { nama_pelanggaran: string } | null; catatan: string | null }[]) ?? []);
@@ -105,12 +105,12 @@ export default function DashboardSayaPage() {
     const jalurKar = jalurDariKategori(karyawan.kategori_dokumen);
     const [dk, pj] = await Promise.all([
       jalurKar
-        ? supabase.from("dokumen").select("id, nama, versi, wajib_ttd, file_pdf_url").eq("is_aktif", true).eq("jalur", jalurKar).order("jenis")
-        : Promise.resolve({ data: [] as { id: string; nama: string; versi: number; wajib_ttd: boolean; file_pdf_url: string | null }[] }),
-      supabase.from("dokumen_persetujuan").select("dokumen_id, dokumen_versi, disetujui_at, tipe, tanda_tangan_url").eq("karyawan_id", karyawan.id),
+        ? supabase.from("dokumen").select("id, nama, versi, wajib_ttd, file_pdf_url, konten_html").eq("is_aktif", true).eq("jalur", jalurKar).order("jenis")
+        : Promise.resolve({ data: [] as { id: string; nama: string; versi: number; wajib_ttd: boolean; file_pdf_url: string | null; konten_html: string | null }[] }),
+      supabase.from("dokumen_persetujuan").select("dokumen_id, dokumen_versi, disetujui_at, tipe, tanda_tangan_url, data_isian").eq("karyawan_id", karyawan.id),
     ]);
-    const persetujuan = (pj.data as { dokumen_id: string; dokumen_versi: number; disetujui_at: string; tipe: string; tanda_tangan_url: string | null }[] | null) ?? [];
-    setDocs(((dk.data as { id: string; nama: string; versi: number; wajib_ttd: boolean; file_pdf_url: string | null }[] | null) ?? []).map((d) => ({
+    const persetujuan = (pj.data as { dokumen_id: string; dokumen_versi: number; disetujui_at: string; tipe: string; tanda_tangan_url: string | null; data_isian: Record<string,string> | null }[] | null) ?? [];
+    setDocs(((dk.data as { id: string; nama: string; versi: number; wajib_ttd: boolean; file_pdf_url: string | null; konten_html: string | null }[] | null) ?? []).map((d) => ({
       ...d, approved: persetujuan.find((p) => p.dokumen_id === d.id && p.dokumen_versi === d.versi) ?? null,
     })));
   }
@@ -154,6 +154,23 @@ export default function DashboardSayaPage() {
               <div className="w-12 h-12 rounded-full bg-violet-100 flex items-center justify-center"><UserCircle size={28} className="text-violet-500" /></div>
               <div><p className="font-bold text-gray-800">{karyawan.nama}</p><p className="text-xs text-gray-500">{karyawan.jabatan ?? "Karyawan"}</p></div>
             </div>
+
+            {/* Pengingat tanda tangan — tidak memblokir absensi, supaya
+                karyawan baru tetap bisa check-in di hari pertama. */}
+            {!alurTtd && docs.length > 0 && docs.some((d) => !d.approved) && (
+              <button onClick={() => setAlurTtd(true)}
+                className="w-full text-left bg-red-50 border border-red-200 rounded-2xl p-4 flex items-start gap-3 hover:bg-red-100 transition-colors">
+                <AlertCircle size={20} className="text-red-500 shrink-0 mt-0.5" />
+                <div className="min-w-0">
+                  <p className="font-bold text-red-700 text-sm">
+                    {docs.filter((d) => !d.approved).length} dokumen belum kamu tandatangani
+                  </p>
+                  <p className="text-xs text-red-600 mt-0.5">
+                    Ketuk untuk membaca dan menandatangani sekarang. Absensi tetap bisa kamu pakai seperti biasa.
+                  </p>
+                </div>
+              </button>
+            )}
 
             {/* SECTION POIN */}
             {(() => {
@@ -278,33 +295,51 @@ export default function DashboardSayaPage() {
             </div>
 
             {/* SECTION 4 — Dokumen */}
-            {signingDoc ? (
-              <DokumenViewer
-                dok={signingDoc}
+            {alurTtd ? (
+              <AlurTandaTangan
+                docs={docs}
                 karyawanId={karyawan.id}
-                onBack={() => setSigningDoc(null)}
-                onDone={() => { setSigningDoc(null); refreshDocs(); }}
+                karyawanNama={karyawan.nama}
+                onBack={() => { setAlurTtd(false); refreshDocs(); }}
+                onDone={() => { setAlurTtd(false); refreshDocs(); }}
               />
             ) : (
               <div className="bg-white rounded-2xl shadow-sm p-4 space-y-3">
                 <h2 className="font-bold text-gray-700 text-sm flex items-center gap-2"><FileText size={16} className="text-violet-500" /> Dokumen Saya</h2>
-                {docs.length === 0 ? <p className="text-sm text-gray-400">Belum ada dokumen ditugaskan.</p> : docs.map((d) => (
-                  <div key={d.id} className="flex items-center justify-between gap-2 py-2 border-b border-gray-50 last:border-0">
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium text-gray-800 truncate">{d.nama}</p>
-                      {d.approved
-                        ? <p className="text-[11px] text-green-600">{d.approved.tipe === "ttd" ? "Sudah TTD" : "Sudah Baca"} · {tglWaktu(d.approved.disetujui_at)}</p>
-                        : <p className="text-[11px] text-red-500">Belum</p>}
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      {d.approved
-                        ? <CheckCircle2 size={16} className="text-green-500" />
-                        : <button onClick={() => setSigningDoc(d)} className="text-[11px] font-semibold text-indigo-600 hover:underline flex items-center gap-0.5"><PenLine size={11} /> Tanda tangani</button>}
-                      {d.file_pdf_url && <a href={d.file_pdf_url} target="_blank" rel="noopener noreferrer" className="text-gray-300 hover:text-gray-500"><ExternalLink size={14} /></a>}
-                      {d.approved?.tanda_tangan_url && <a href={d.approved.tanda_tangan_url} target="_blank" rel="noopener noreferrer" className="text-[10px] text-gray-400 hover:underline">TTD</a>}
-                    </div>
-                  </div>
-                ))}
+
+                {docs.length === 0 ? (
+                  <p className="text-sm text-gray-400">
+                    {karyawan.kategori_dokumen
+                      ? "Dokumen untuk jalur kamu belum diupload admin."
+                      : "Jalur dokumen kamu belum ditentukan admin."}
+                  </p>
+                ) : (
+                  <>
+                    {docs.map((d) => (
+                      <div key={d.id} className="flex items-center justify-between gap-2 py-2 border-b border-gray-50 last:border-0">
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-gray-800 truncate">{d.nama}</p>
+                          {d.approved
+                            ? <p className="text-[11px] text-green-600">Sudah ditandatangani · {tglWaktu(d.approved.disetujui_at)}</p>
+                            : <p className="text-[11px] text-red-500">Belum ditandatangani</p>}
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          {d.approved && <CheckCircle2 size={16} className="text-green-500" />}
+                          {d.file_pdf_url && <a href={d.file_pdf_url} target="_blank" rel="noopener noreferrer" className="text-gray-300 hover:text-gray-500"><ExternalLink size={14} /></a>}
+                        </div>
+                      </div>
+                    ))}
+                    <button onClick={() => setAlurTtd(true)}
+                      className={`w-full py-2.5 rounded-xl text-sm font-semibold flex items-center justify-center gap-1.5 ${
+                        docs.every((d) => d.approved)
+                          ? "bg-gray-100 text-gray-600 hover:bg-gray-200"
+                          : "bg-indigo-500 text-white hover:bg-indigo-600"
+                      }`}>
+                      <PenLine size={14} />
+                      {docs.every((d) => d.approved) ? "Lihat dokumen saya" : "Tanda tangani sekarang"}
+                    </button>
+                  </>
+                )}
               </div>
             )}
 

@@ -6,12 +6,13 @@ import { getUserSession, canAccessAdmin, type UserSession } from "@/lib/auth";
 import { homeRoute } from "@/lib/permissions";
 import { jalurDariKategori } from "@/lib/aturan";
 import { SLOT_DOKUMEN, JALUR_LABEL_DOK, type SlotDokumen } from "@/lib/dokumen";
-import { FileText, Upload, X, CheckCircle2, AlertCircle, Archive } from "lucide-react";
+import { FileText, Upload, X, CheckCircle2, AlertCircle, Archive, RefreshCw } from "lucide-react";
 
 interface Dokumen {
   id: string; nama: string; file_pdf_url: string | null; versi: number;
   wajib_ttd: boolean; is_aktif: boolean; created_at: string;
   jalur: string | null; jenis: string | null; uploaded_by: string | null;
+  konten_html: string | null;
 }
 interface Karyawan { id: string; nama: string; kategori_dokumen: string | null }
 interface Persetujuan {
@@ -43,7 +44,7 @@ export default function KelolaDokumenPage() {
   const fetchAll = useCallback(async () => {
     setLoading(true);
     const [dRes, kRes, pRes] = await Promise.all([
-      supabase.from("dokumen").select("id, nama, file_pdf_url, versi, wajib_ttd, is_aktif, jalur, jenis, uploaded_by, created_at").order("created_at"),
+      supabase.from("dokumen").select("id, nama, file_pdf_url, versi, wajib_ttd, is_aktif, jalur, jenis, uploaded_by, konten_html, created_at").order("created_at"),
       supabase.from("karyawan").select("id, nama, kategori_dokumen").eq("status", "aktif").order("nama"),
       supabase.from("dokumen_persetujuan").select("dokumen_id, dokumen_versi, karyawan_id, tipe, tanda_tangan_url, disetujui_at"),
     ]);
@@ -65,11 +66,46 @@ export default function KelolaDokumenPage() {
   const approvalOf = (dok: Dokumen, karId: string) =>
     approvals.find((p) => p.dokumen_id === dok.id && p.dokumen_versi === dok.versi && p.karyawan_id === karId) ?? null;
 
+  // Konversi docx → HTML terstruktur (heading, pasal, tabel tetap utuh).
+  async function konversiDocx(f: Blob): Promise<string | null> {
+    try {
+      const mammoth = await import("mammoth");
+      const buf = await f.arrayBuffer();
+      const res = await mammoth.convertToHtml({ arrayBuffer: buf });
+      return res.value || null;
+    } catch { return null; }
+  }
+
+  // Untuk file yang sudah diupload sebelum fitur konversi ada.
+  async function prosesUlang(d: Dokumen) {
+    if (!d.file_pdf_url) return;
+    setBusy(`re-${d.id}`); setErr("");
+    try {
+      const r = await fetch(d.file_pdf_url);
+      if (!r.ok) throw new Error("Gagal mengunduh file dari Storage.");
+      const blob = await r.blob();
+      const html = await konversiDocx(blob);
+      if (!html) throw new Error("Gagal membaca isi file. Hanya .docx yang bisa dirender terstruktur.");
+      const { error } = await supabase.from("dokumen")
+        .update({ konten_html: html, konten_html_at: new Date().toISOString() }).eq("id", d.id);
+      if (error) throw new Error(error.message);
+      await fetchAll();
+    } catch (e) { setErr(e instanceof Error ? e.message : "Gagal memproses"); }
+    finally { setBusy(null); }
+  }
+
   async function uploadSlot(s: SlotDokumen, f: File) {
     const key = `${s.jalur}-${s.jenis}`;
     setBusy(key); setErr("");
     try {
       const ext = f.name.toLowerCase().endsWith(".docx") ? "docx" : "pdf";
+      // docx dikonversi jadi HTML terstruktur sekali di sini, supaya halaman
+      // karyawan tinggal merender (cepat dibuka dari HP).
+      let html: string | null = null;
+      if (ext === "docx") {
+        html = await konversiDocx(f);
+        if (!html) throw new Error("Gagal membaca isi docx. Pastikan file .docx valid (bukan .doc lama).");
+      }
       const path = `${s.jalur}_${s.jenis}_${Date.now()}.${ext}`;
       const up = await supabase.storage.from("dokumen").upload(path, f, { contentType: f.type || "application/pdf", upsert: true });
       if (up.error) throw new Error("Gagal upload: " + up.error.message);
@@ -79,13 +115,15 @@ export default function KelolaDokumenPage() {
       if (existing) {
         // Versi baru: tanda tangan versi lama tetap menunjuk file versi lama (snapshot).
         const { error } = await supabase.from("dokumen")
-          .update({ file_pdf_url: url, versi: existing.versi + 1, uploaded_by: user?.nama ?? "" })
+          .update({ file_pdf_url: url, versi: existing.versi + 1, uploaded_by: user?.nama ?? "",
+                    konten_html: html, konten_html_at: html ? new Date().toISOString() : null })
           .eq("id", existing.id);
         if (error) throw new Error(error.message);
       } else {
         const { error } = await supabase.from("dokumen").insert({
           nama: s.nama, file_pdf_url: url, versi: 1, wajib_ttd: true, is_aktif: true,
           jalur: s.jalur, jenis: s.jenis, kategori: s.jalur, uploaded_by: user?.nama ?? "",
+          konten_html: html, konten_html_at: html ? new Date().toISOString() : null,
         });
         if (error) throw new Error(error.message);
       }
@@ -126,13 +164,24 @@ export default function KelolaDokumenPage() {
                         {d ? (
                           <p className="text-[11px] text-gray-400">
                             Versi {d.versi} · {sudah}/{wajib.length} karyawan sudah TTD
-                            {d.uploaded_by && <> · diupload {d.uploaded_by}</>} · {tglWaktu(d.created_at)}
+                            {d.uploaded_by && <> · diupload {d.uploaded_by}</>}
                           </p>
                         ) : (
                           <p className="text-[11px] text-amber-700 font-medium">Belum ada file — slot kosong</p>
                         )}
+                        {d && (
+                          <span className={`inline-block mt-1 text-[10px] px-1.5 py-0.5 rounded-full font-semibold ${d.konten_html ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"}`}>
+                            {d.konten_html ? "Isi siap ditandatangani" : "Isi belum diproses — klik \"Proses isi\""}
+                          </span>
+                        )}
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
+                        {d && !d.konten_html && (
+                          <button onClick={() => prosesUlang(d)} disabled={busy !== null}
+                            className="text-xs font-semibold px-2.5 py-1.5 rounded-lg bg-blue-100 text-blue-700 hover:bg-blue-200 flex items-center gap-1 disabled:opacity-40">
+                            <RefreshCw size={12} /> {busy === `re-${d.id}` ? "Memproses…" : "Proses isi"}
+                          </button>
+                        )}
                         {d?.file_pdf_url && (
                           <a href={d.file_pdf_url} target="_blank" rel="noopener noreferrer"
                             className="text-xs text-indigo-600 hover:underline">Lihat file</a>

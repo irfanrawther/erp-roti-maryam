@@ -20,7 +20,7 @@ const KATEGORI_OPTIONS = [
 ];
 
 interface Karyawan { id: string; nama: string; jabatan: string | null; kategori_dokumen: string | null }
-interface Dokumen { id: string; nama: string; file_pdf_url: string | null; versi: number; jalur: string | null; jenis: string | null; is_aktif: boolean }
+interface Dokumen { id: string; nama: string; file_pdf_url: string | null; versi: number; jalur: string | null; jenis: string | null; is_aktif: boolean; konten_html: string | null }
 interface PersetujuanKaryawan { dokumen_id: string; dokumen_versi: number; karyawan_id: string; disetujui_at: string }
 interface TtdPerusahaan { dokumen_id: string; dokumen_versi: number; karyawan_id: string; ditandatangani_at: string; diwakili_oleh: string | null; jabatan_perwakilan: string | null }
 
@@ -39,6 +39,7 @@ export default function TtdKaryawanPage() {
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<Karyawan | null>(null);
   const [selectedDok, setSelectedDok] = useState<Dokumen | null>(null);
+  const [filter, setFilter] = useState<"semua" | "belum_karyawan" | "belum_perusahaan" | "belum_jalur">("semua");
   const [catBusy, setCatBusy] = useState<string | null>(null);
 
   useEffect(() => {
@@ -51,7 +52,7 @@ export default function TtdKaryawanPage() {
     setLoading(true);
     const [kRes, dRes, pRes, tRes] = await Promise.all([
       supabase.from("karyawan").select("id, nama, jabatan, kategori_dokumen").eq("status", "aktif").order("nama"),
-      supabase.from("dokumen").select("id, nama, file_pdf_url, versi, jalur, jenis, is_aktif").eq("is_aktif", true).order("jenis"),
+      supabase.from("dokumen").select("id, nama, file_pdf_url, versi, jalur, jenis, is_aktif, konten_html").eq("is_aktif", true).order("jenis"),
       supabase.from("dokumen_persetujuan").select("dokumen_id, dokumen_versi, karyawan_id, disetujui_at"),
       supabase.from("dokumen_ttd_perusahaan").select("dokumen_id, dokumen_versi, karyawan_id, ditandatangani_at, diwakili_oleh, jabatan_perwakilan"),
     ]);
@@ -82,7 +83,23 @@ export default function TtdKaryawanPage() {
     return ttdPerusahaan.find((a) => a.dokumen_id === d.id && a.dokumen_versi === d.versi && a.karyawan_id === k.id) ?? null;
   }
 
-  const filtered = karyawan.filter((k) => k.nama.toLowerCase().includes(search.toLowerCase()));
+  const cocokFilter = (k: Karyawan) => {
+    const dl = dokumenUntuk(k);
+    if (filter === "belum_jalur") return !k.kategori_dokumen;
+    if (filter === "belum_karyawan") return dl.length > 0 && dl.some((d) => !statusKaryawan(k, d));
+    if (filter === "belum_perusahaan") return dl.length > 0 && dl.some((d) => !statusPerusahaan(k, d));
+    return true;
+  };
+  const filtered = karyawan
+    .filter((k) => k.nama.toLowerCase().includes(search.toLowerCase()))
+    .filter(cocokFilter);
+
+  const FILTER_TAB = [
+    { key: "semua" as const,            label: "Semua" },
+    { key: "belum_karyawan" as const,   label: "Belum TTD karyawan" },
+    { key: "belum_perusahaan" as const, label: "Belum TTD perusahaan" },
+    { key: "belum_jalur" as const,      label: "Jalur belum diatur" },
+  ];
 
   if (selected) {
     const dokList = dokumenUntuk(selected);
@@ -179,6 +196,23 @@ export default function TtdKaryawanPage() {
         <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
         <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cari nama karyawan…"
           className="input pl-9" />
+      </div>
+
+      <div className="flex gap-1.5 flex-wrap">
+        {FILTER_TAB.map((f) => {
+          const n = karyawan.filter((k) => (f.key === "semua" ? true : (() => {
+            const dl = dokumenUntuk(k);
+            if (f.key === "belum_jalur") return !k.kategori_dokumen;
+            if (f.key === "belum_karyawan") return dl.length > 0 && dl.some((d) => !statusKaryawan(k, d));
+            return dl.length > 0 && dl.some((d) => !statusPerusahaan(k, d));
+          })())).length;
+          return (
+            <button key={f.key} onClick={() => setFilter(f.key)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${filter === f.key ? "bg-gray-800 text-white" : "bg-white border border-gray-200 text-gray-600 hover:bg-gray-50"}`}>
+              {f.label} <span className={filter === f.key ? "text-gray-300" : "text-gray-400"}>({n})</span>
+            </button>
+          );
+        })}
       </div>
 
       <div className="card space-y-1">
