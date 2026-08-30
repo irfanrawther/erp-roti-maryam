@@ -6,7 +6,8 @@ import { getUserSession, canAccessAdmin, type UserSession } from "@/lib/auth";
 import { homeRoute } from "@/lib/permissions";
 import { jalurDariKategori } from "@/lib/aturan";
 import { SLOT_DOKUMEN, JALUR_LABEL_DOK, type SlotDokumen } from "@/lib/dokumen";
-import { FileText, Upload, X, CheckCircle2, AlertCircle, Archive, RefreshCw, Printer } from "lucide-react";
+import { FileText, Upload, X, CheckCircle2, AlertCircle, Archive, RefreshCw, Printer, Pencil, Save } from "lucide-react";
+import { fieldDikenalMilik } from "@/lib/dokumenParse";
 
 interface Dokumen {
   id: string; nama: string; file_pdf_url: string | null; versi: number;
@@ -17,7 +18,7 @@ interface Dokumen {
 interface Karyawan { id: string; nama: string; kategori_dokumen: string | null }
 interface Persetujuan {
   dokumen_id: string; dokumen_versi: number; karyawan_id: string; tipe: string;
-  tanda_tangan_url: string | null; disetujui_at: string;
+  tanda_tangan_url: string | null; disetujui_at: string; data_isian: Record<string, string> | null;
 }
 
 function tglWaktu(iso: string) {
@@ -34,6 +35,9 @@ export default function KelolaDokumenPage() {
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState("");
   const [detail, setDetail] = useState<{ dok: Dokumen; kar: Karyawan; p: Persetujuan | null } | null>(null);
+  const [editData, setEditData] = useState(false);
+  const [draftIsian, setDraftIsian] = useState<Record<string, string>>({});
+  const [savingIsian, setSavingIsian] = useState(false);
 
   useEffect(() => {
     const u = getUserSession(); setUser(u);
@@ -46,7 +50,7 @@ export default function KelolaDokumenPage() {
     const [dRes, kRes, pRes] = await Promise.all([
       supabase.from("dokumen").select("id, nama, file_pdf_url, versi, wajib_ttd, is_aktif, jalur, jenis, uploaded_by, konten_html, created_at").order("created_at"),
       supabase.from("karyawan").select("id, nama, kategori_dokumen").eq("status", "aktif").order("nama"),
-      supabase.from("dokumen_persetujuan").select("dokumen_id, dokumen_versi, karyawan_id, tipe, tanda_tangan_url, disetujui_at"),
+      supabase.from("dokumen_persetujuan").select("dokumen_id, dokumen_versi, karyawan_id, tipe, tanda_tangan_url, disetujui_at, data_isian"),
     ]);
     setDocs((dRes.data as Dokumen[]) ?? []);
     setKaryawan((kRes.data as Karyawan[]) ?? []);
@@ -77,6 +81,37 @@ export default function KelolaDokumenPage() {
   }
 
   // Untuk file yang sudah diupload sebelum fitur konversi ada.
+  // Koreksi field yang sudah ditandatangani (mis. salah ketik Tanggal Mulai
+  // Kerja) — tidak butuh tanda tangan ulang, tapi setiap perubahan dicatat
+  // ke dokumen_data_edit_log (siapa, kapan, nilai lama → baru).
+  async function simpanKoreksiIsian(dok: Dokumen, p: Persetujuan) {
+    setSavingIsian(true);
+    try {
+      const lama = p.data_isian ?? {};
+      const perubahan = Object.entries(draftIsian).filter(([k, v]) => (lama[k] ?? "") !== v);
+      if (perubahan.length === 0) { setEditData(false); return; }
+
+      const nilaiBaru = { ...lama, ...draftIsian };
+      const { error } = await supabase.from("dokumen_persetujuan")
+        .update({ data_isian: nilaiBaru })
+        .eq("dokumen_id", p.dokumen_id).eq("dokumen_versi", p.dokumen_versi).eq("karyawan_id", p.karyawan_id);
+      if (error) throw new Error(error.message);
+
+      await supabase.from("dokumen_data_edit_log").insert(
+        perubahan.map(([field_key, nilai_baru]) => ({
+          dokumen_id: p.dokumen_id, dokumen_versi: p.dokumen_versi, karyawan_id: p.karyawan_id,
+          pemilik: "karyawan", field_key, nilai_lama: lama[field_key] ?? null, nilai_baru,
+          diedit_oleh: user?.nama ?? "",
+        }))
+      );
+
+      await fetchAll();
+      setEditData(false);
+      setDetail((d) => (d && d.p) ? { ...d, p: { ...d.p, data_isian: nilaiBaru } } : d);
+    } catch (e) { setErr(e instanceof Error ? e.message : "Gagal menyimpan koreksi"); }
+    finally { setSavingIsian(false); }
+  }
+
   async function prosesUlang(d: Dokumen) {
     if (!d.file_pdf_url) return;
     setBusy(`re-${d.id}`); setErr("");
@@ -206,7 +241,7 @@ export default function KelolaDokumenPage() {
                         {wajib.map((k) => {
                           const p = approvalOf(d, k.id);
                           return (
-                            <button key={k.id} onClick={() => setDetail({ dok: d, kar: k, p })}
+                            <button key={k.id} onClick={() => { setDetail({ dok: d, kar: k, p }); setEditData(false); setDraftIsian({}); }}
                               className={`text-[10px] px-2 py-1 rounded-full font-medium flex items-center gap-1 ${p ? "bg-green-50 text-green-600 hover:bg-green-100" : "bg-red-50 text-red-500 hover:bg-red-100"}`}>
                               {p ? <CheckCircle2 size={10} /> : <AlertCircle size={10} />} {k.nama}
                             </button>
@@ -266,6 +301,38 @@ export default function KelolaDokumenPage() {
                   className="w-full flex items-center justify-center gap-1.5 text-sm font-semibold px-3 py-2 rounded-lg bg-indigo-500 text-white hover:bg-indigo-600">
                   <Printer size={14} /> Unduh / Cetak Dokumen
                 </a>
+
+                {!editData ? (
+                  <button onClick={() => { setDraftIsian(detail.p!.data_isian ?? {}); setEditData(true); }}
+                    className="w-full flex items-center justify-center gap-1.5 text-sm font-semibold px-3 py-2 rounded-lg bg-amber-100 text-amber-700 hover:bg-amber-200">
+                    <Pencil size={14} /> Koreksi Data yang Sudah Diisi
+                  </button>
+                ) : (
+                  <div className="space-y-2 border-t border-gray-100 pt-3 mt-1">
+                    <p className="text-xs font-semibold text-gray-600">Koreksi field — dokumen tetap sah, tidak perlu TTD ulang</p>
+                    {fieldDikenalMilik("karyawan").map((f) => (
+                      <div key={f.key}>
+                        <label className="text-[11px] text-gray-500">{f.label}</label>
+                        <input
+                          type={f.tipe === "date" ? "date" : f.tipe === "tel" ? "tel" : "text"}
+                          value={draftIsian[f.key] ?? ""}
+                          onChange={(e) => setDraftIsian((d) => ({ ...d, [f.key]: e.target.value }))}
+                          className="input py-1.5 text-sm w-full"
+                        />
+                      </div>
+                    ))}
+                    <div className="flex gap-2 pt-1">
+                      <button onClick={() => setEditData(false)}
+                        className="flex-1 text-sm font-semibold px-3 py-2 rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200">
+                        Batal
+                      </button>
+                      <button onClick={() => simpanKoreksiIsian(detail.dok, detail.p!)} disabled={savingIsian}
+                        className="flex-1 flex items-center justify-center gap-1.5 text-sm font-semibold px-3 py-2 rounded-lg bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-40">
+                        <Save size={14} /> {savingIsian ? "Menyimpan…" : "Simpan"}
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             ) : (
               <p className="text-red-500 font-semibold flex items-center gap-1"><AlertCircle size={15} /> Belum menyetujui versi ini</p>

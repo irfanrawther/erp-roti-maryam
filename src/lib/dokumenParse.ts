@@ -118,3 +118,13 @@ export function siapkanDokumen(htmlAsli: string): HasilParse {
 export function fieldMilik(fields: DefinisiField[], pemilik: PemilikField): DefinisiField[] {
   return fields.filter((f) => f.pemilik === pemilik);
 }
+
+// Daftar field unik (per key) yang dikenal sistem, dipakai admin untuk
+// mengoreksi data_isian setelah dokumen ditandatangani — tidak tergantung
+// parsing HTML tertentu, jadi tetap tersedia walau dokumennya lagi tidak dibuka.
+export const SEMUA_FIELD_DIKENAL: DefinisiField[] = Object.values(
+  Object.fromEntries([...Object.values(FIELD_BY_LABEL), FIELD_TANGGAL_DOKUMEN].map((f) => [f.key, f]))
+);
+export function fieldDikenalMilik(pemilik: PemilikField): DefinisiField[] {
+  return SEMUA_FIELD_DIKENAL.filter((f) => f.pemilik === pemilik);
+}
