@@ -17,7 +17,6 @@ interface OpenSession {
   shift: { nama_shift: string; jam_pulang: string } | null;
 }
 interface Setting { latitude_dapur: number; longitude_dapur: number; radius_meter: number }
-interface IzinAktif { nama: string; tanggal_izin: string; jenis: string }
 
 // Window checkout wajar = sampai N jam setelah jam_pulang shift
 const CHECKOUT_WINDOW_JAM = 8;
@@ -43,10 +42,6 @@ function hitungJarak(lat1: number, lng1: number, lat2: number, lng2: number) {
 }
 
 function todayWIB() { return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" }); }
-function addDaysStr(iso: string, n: number) {
-  const d = new Date(`${iso}T00:00:00+07:00`); d.setDate(d.getDate() + n);
-  return d.toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" });
-}
 const ID_BULAN = ["Jan","Feb","Mar","Apr","Mei","Jun","Jul","Agu","Sep","Okt","Nov","Des"];
 function tglLabel(iso: string) { const [y,m,d] = iso.split("-").map(Number); return `${d} ${ID_BULAN[m-1]} ${y}`; }
 function jamWIB(iso?: string | null) {
@@ -65,7 +60,6 @@ export default function AbsenPage() {
   const [absensi, setAbsensi]     = useState<AbsensiRow | null>(null);
   const [openSession, setOpenSession] = useState<OpenSession | null>(null);
   const [setting, setSetting]     = useState<Setting | null>(null);
-  const [izinAktif, setIzinAktif] = useState<IzinAktif[]>([]); // siapa saja yang izin/sakit hari ini & besok
 
   // jam real-time
   const [now, setNow] = useState(() => jamWIB());
@@ -93,8 +87,7 @@ export default function AbsenPage() {
 
   async function loadStatus(karyawanId: string) {
     const today = todayWIB();
-    const besok = addDaysStr(today, 1);
-    const [sa, ab, st, open, izin] = await Promise.all([
+    const [sa, ab, st, open] = await Promise.all([
       supabase.from("shift_assignment")
         .select("is_libur, shift_master:shift_id(nama_shift, jam_masuk, jam_pulang)")
         .eq("karyawan_id", karyawanId).eq("tanggal", today).maybeSingle(),
@@ -108,18 +101,11 @@ export default function AbsenPage() {
         .eq("karyawan_id", karyawanId)
         .not("jam_checkin", "is", null).is("jam_checkout", null).eq("is_checkout_flagged", false)
         .order("tanggal", { ascending: false }).limit(1).maybeSingle(),
-      // Siapa saja yang izin/sakit aktif hari ini atau besok — biar semua karyawan tahu
-      supabase.from("pengajuan_izin")
-        .select("tanggal_izin, jenis, karyawan:karyawan_id(nama)")
-        .in("tanggal_izin", [today, besok]).eq("status", "aktif")
-        .order("tanggal_izin", { ascending: true }),
     ]);
     const saData = sa.data as { is_libur: boolean; shift_master: ShiftInfo | null } | null;
     setShift(saData?.is_libur ? null : (saData?.shift_master ?? null));
     setAbsensi((ab.data as AbsensiRow | null) ?? null);
     setSetting((st.data as Setting | null) ?? null);
-    const izinRows = (izin.data as { tanggal_izin: string; jenis: string; karyawan: { nama: string } | null }[] | null) ?? [];
-    setIzinAktif(izinRows.filter((r) => r.karyawan).map((r) => ({ nama: r.karyawan!.nama, tanggal_izin: r.tanggal_izin, jenis: r.jenis })));
 
     // Evaluasi sesi open
     const openRow = open.data as { id: string; tanggal: string; jam_checkin: string; shift_master: { nama_shift: string; jam_pulang: string } | null } | null;
@@ -139,7 +125,7 @@ export default function AbsenPage() {
   }
 
   function reset() {
-    setStep("pin"); setPin(""); setPinErr(""); setKaryawan(null); setShift(null); setAbsensi(null); setOpenSession(null); setIzinAktif([]);
+    setStep("pin"); setPin(""); setPinErr(""); setKaryawan(null); setShift(null); setAbsensi(null); setOpenSession(null);
   }
 
   // status hari ini (sesi open ditangani lewat openSession)
@@ -186,17 +172,6 @@ export default function AbsenPage() {
                 {shift ? `${shift.nama_shift} (${shift.jam_masuk.slice(0, 5)} - ${shift.jam_pulang.slice(0, 5)})` : "Belum ada jadwal hari ini"}
               </div>
             </div>
-
-            {izinAktif.length > 0 && (
-              <div className="rounded-xl bg-sky-50 border border-sky-100 p-3 text-xs text-sky-800 space-y-1">
-                {izinAktif.map((r, i) => (
-                  <p key={i}>
-                    <b>{r.nama}</b> tidak masuk <b>{r.tanggal_izin === todayWIB() ? "hari ini" : "besok"}</b>
-                    {" "}({r.jenis === "izin_sakit" ? "Sakit" : "Izin"})
-                  </p>
-                ))}
-              </div>
-            )}
 
             {openSession ? (
               <>

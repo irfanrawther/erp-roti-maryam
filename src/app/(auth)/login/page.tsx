@@ -1,9 +1,17 @@
 "use client";
 import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { supabase } from "@/lib/supabase";
 import { loginWithPin, saveUserSession, getUserSession } from "@/lib/auth";
 import { homeRoute } from "@/lib/permissions";
 import { ChevronLeft, UserCog, Factory, Truck, ShieldCheck, ClipboardList, MapPin, FileText, Stethoscope, UserCircle } from "lucide-react";
+
+interface IzinAktif { nama: string; tanggal_izin: string; jenis: string }
+function todayWIB() { return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" }); }
+function addDaysStr(iso: string, n: number) {
+  const d = new Date(`${iso}T00:00:00+07:00`); d.setDate(d.getDate() + n);
+  return d.toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" });
+}
 
 type RoleChoice = {
   role: "spv" | "staff_produksi" | "pic" | "staff_packing_pengiriman" | "super_admin";
@@ -35,11 +43,25 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const inputs = useRef<(HTMLInputElement | null)[]>([]);
   const router = useRouter();
+  const [izinAktif, setIzinAktif] = useState<IzinAktif[]>([]); // siapa saja yang izin/sakit hari ini & besok
 
   useEffect(() => {
     const u = getUserSession();
     if (u) router.replace(homeRoute(u));
   }, [router]);
+
+  useEffect(() => {
+    const today = todayWIB();
+    const besok = addDaysStr(today, 1);
+    supabase.from("pengajuan_izin")
+      .select("tanggal_izin, jenis, karyawan:karyawan_id(nama)")
+      .in("tanggal_izin", [today, besok]).eq("status", "aktif")
+      .order("tanggal_izin", { ascending: true })
+      .then(({ data }) => {
+        const rows = (data as { tanggal_izin: string; jenis: string; karyawan: { nama: string } | null }[] | null) ?? [];
+        setIzinAktif(rows.filter((r) => r.karyawan).map((r) => ({ nama: r.karyawan!.nama, tanggal_izin: r.tanggal_izin, jenis: r.jenis })));
+      });
+  }, []);
 
   useEffect(() => {
     if (selectedRole) setTimeout(() => inputs.current[0]?.focus(), 50);
@@ -96,6 +118,17 @@ export default function LoginPage() {
             {selectedRole ? `Masuk sebagai ${selectedRole.label}` : "Pilih role Anda"}
           </p>
         </div>
+
+        {!selectedRole && izinAktif.length > 0 && (
+          <div className="rounded-xl bg-sky-50 border border-sky-100 p-3 text-xs text-sky-800 space-y-1 mb-4">
+            {izinAktif.map((r, i) => (
+              <p key={i}>
+                <b>{r.nama}</b> tidak masuk <b>{r.tanggal_izin === todayWIB() ? "hari ini" : "besok"}</b>
+                {" "}({r.jenis === "izin_sakit" ? "Sakit" : "Izin"})
+              </p>
+            ))}
+          </div>
+        )}
 
         {/* Step 1: Pilih role */}
         {!selectedRole && (
