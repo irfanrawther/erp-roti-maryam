@@ -4,8 +4,8 @@ import { supabase } from "@/lib/supabase";
 import { hashPin } from "@/lib/auth";
 import { Stethoscope, Camera, CheckCircle2, X, AlertTriangle, Clock } from "lucide-react";
 import { bulanRange } from "@/lib/absensi";
-import { katLapor, dendaIzinSakit } from "@/lib/izin";
-import { muatAturan, cfgIzin, cfgSakit, jalurDariKategori } from "@/lib/aturan";
+import { katLapor, dendaIzinSakit, jamSebelumByMasuk } from "@/lib/izin";
+import { muatAturan, cfgIzin, cfgSakit, jalurDariKategori, type CfgSakit } from "@/lib/aturan";
 
 interface Karyawan { id: string; nama: string; jabatan: string | null; kategori_dokumen: string | null }
 interface ShiftHari { nama_shift: string; jam_masuk: string; jam_pulang: string }
@@ -29,6 +29,12 @@ function wibHM(): { h: number; m: number } {
 }
 function jamToMin(hhmm: string) { const [h, m] = hhmm.split(":").map(Number); return h * 60 + m; }
 function minToJam(min: number) { const h = Math.floor(min / 60) % 24; const m = min % 60; return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`; }
+// Jam "tepat waktu" lapor sakit = sekian jam sebelum shift mulai (Pasal 3, sesuai aturan yang berlaku)
+function deadlineLapor(jamMasuk: string, cfg: CfgSakit): string {
+  const jamSebelum = jamSebelumByMasuk(jamMasuk, cfg);
+  const totalMin = ((jamToMin(jamMasuk.slice(0, 5)) - jamSebelum * 60) % 1440 + 1440) % 1440;
+  return minToJam(totalMin);
+}
 
 export default function IzinSakitPage() {
   const [step, setStep] = useState<"pin" | "form" | "susulan" | "done">("pin");
@@ -46,6 +52,7 @@ export default function IzinSakitPage() {
   const [fotoFile, setFotoFile] = useState<File | null>(null);
   const [err, setErr] = useState("");
   const [doneMsg, setDoneMsg] = useState("");
+  const [cfgFull, setCfgFull] = useState<CfgSakit | null>(null);
 
   async function submitPin() {
     setPinErr("");
@@ -82,19 +89,24 @@ export default function IzinSakitPage() {
 
       if (!shift) {
         setWindowErr("Kamu tidak ada jadwal shift (atau libur) pada tanggal ini, tidak perlu lapor sakit.");
-      } else if (H === today) {
-        const { h: nh, m: nm } = wibHM();
-        const nowMin = nh * 60 + nm;
-        // Batas lapor sakit di hari yang sama: sekian jam setelah shift mulai (diatur di Aturan & Nominal)
+        setCfgFull(null);
+      } else {
+        // Aturan yang dipakai = yang berlaku pada TANGGAL SAKIT (tanggal kejadian)
         const rows = await muatAturan();
         const jalur = jalurDariKategori(kar.kategori_dokumen) ?? "training";
         const cfg = cfgSakit(rows, jalur, H);
-        const batasJam = cfg.batas_jam_setelah_shift ?? 2;
-        const cutoffMin = jamToMin(shift.jam_masuk.slice(0, 5)) + batasJam * 60;
-        if (nowMin > cutoffMin) {
-          setWindowErr(`Batas lapor sakit untuk hari ini adalah ${batasJam} jam setelah shift mulai (jam ${minToJam(cutoffMin)}). Saat ini sudah lewat, jadi kamu tidak bisa lapor sakit dan otomatis dihitung Alpha.`);
+        setCfgFull(cfg);
+        if (H === today) {
+          const { h: nh, m: nm } = wibHM();
+          const nowMin = nh * 60 + nm;
+          // Batas lapor sakit di hari yang sama: sekian jam setelah shift mulai (diatur di Aturan & Nominal)
+          const batasJam = cfg.batas_jam_setelah_shift ?? 2;
+          const cutoffMin = jamToMin(shift.jam_masuk.slice(0, 5)) + batasJam * 60;
+          if (nowMin > cutoffMin) {
+            setWindowErr(`Batas lapor sakit untuk hari ini adalah ${batasJam} jam setelah shift mulai (jam ${minToJam(cutoffMin)}). Saat ini sudah lewat, jadi kamu tidak bisa lapor sakit dan otomatis dihitung Alpha.`);
+          } else setWindowErr("");
         } else setWindowErr("");
-      } else setWindowErr("");
+      }
       setStep("form");
     } catch { setPinErr("Terjadi kesalahan, coba lagi"); }
     finally { setBusy(false); }
@@ -193,7 +205,7 @@ export default function IzinSakitPage() {
 
   function reset() {
     setStep("pin"); setPin(""); setPinErr(""); setKaryawan(null); setFoto(null); setFotoFile(null);
-    setErr(""); setTanggalH(null); setShiftHari(null); setWindowErr(""); setSusulan(null);
+    setErr(""); setTanggalH(null); setShiftHari(null); setWindowErr(""); setSusulan(null); setCfgFull(null);
   }
 
   const FotoPicker = ({ label }: { label: string }) => (
@@ -255,9 +267,9 @@ export default function IzinSakitPage() {
                 <div className="rounded-xl bg-teal-50 border border-teal-100 p-3 text-center">
                   <p className="text-xs text-gray-500">Lapor sakit untuk tanggal</p>
                   <p className="text-lg font-bold text-teal-700">{labelTgl(tanggalH!)}</p>
-                  {shiftHari && (
+                  {shiftHari && cfgFull && (
                     <p className="text-xs text-gray-500 mt-1 flex items-center justify-center gap-1">
-                      <Clock size={12} /> {shiftHari.nama_shift} · batas lapor {deadlineLapor(shiftHari.jam_masuk)}
+                      <Clock size={12} /> {shiftHari.nama_shift} · batas lapor tepat waktu {deadlineLapor(shiftHari.jam_masuk, cfgFull)}
                     </p>
                   )}
                 </div>
