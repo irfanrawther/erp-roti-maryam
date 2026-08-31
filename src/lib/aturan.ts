@@ -28,6 +28,7 @@ export interface CfgTelat {
 export interface TarifLapor { denda: number; poin: number }
 export interface CfgIzin {
   jam_sebelum_by_shift: Record<string, number>;
+  batas_jam_setelah_shift?: number;
   tepat_waktu: TarifLapor; telat_sebelum_shift: TarifLapor; setelah_shift: TarifLapor;
   alpha: TarifLapor;
   kuota_izin_per_hari: number;
@@ -36,6 +37,7 @@ export interface CfgIzin {
 }
 export interface CfgSakit {
   jam_sebelum_by_shift: Record<string, number>;
+  batas_jam_setelah_shift?: number;
   batas_kirim_surat_jam: string;
   tepat_waktu_bersurat: TarifLapor; telat_sebelum_shift: TarifLapor; setelah_shift: TarifLapor;
   bebas_denda_berlaku_semua_kejadian: boolean;
@@ -173,6 +175,7 @@ export const TELAT_LAMA: CfgTelat = {
 const DEADLINE_LAMA = { "06:00": 1, "08:00": 2, "10:00": 2, "13:00": 3 };
 export const IZIN_LAMA: CfgIzin = {
   jam_sebelum_by_shift: DEADLINE_LAMA,
+  batas_jam_setelah_shift: 2,
   tepat_waktu:         { denda: 150000, poin: 0 },
   telat_sebelum_shift: { denda: 200000, poin: 0 },
   setelah_shift:       { denda: 300000, poin: 0 },
@@ -183,6 +186,7 @@ export const IZIN_LAMA: CfgIzin = {
 };
 export const SAKIT_LAMA: CfgSakit = {
   jam_sebelum_by_shift: DEADLINE_LAMA,
+  batas_jam_setelah_shift: 2,
   batas_kirim_surat_jam: "20:00",
   tepat_waktu_bersurat: { denda: 0,     poin: 0 },
   telat_sebelum_shift:  { denda: 25000, poin: 0 },

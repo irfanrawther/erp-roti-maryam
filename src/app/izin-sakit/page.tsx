@@ -84,10 +84,14 @@ export default function IzinSakitPage() {
       } else if (H === today) {
         const { h: nh, m: nm } = wibHM();
         const nowMin = nh * 60 + nm;
-        // Batas lapor sakit di hari yang sama: maksimal 2 jam setelah shift mulai
-        const cutoffMin = jamToMin(shift.jam_masuk.slice(0, 5)) + 120;
+        // Batas lapor sakit di hari yang sama: sekian jam setelah shift mulai (diatur di Aturan & Nominal)
+        const rows = await muatAturan();
+        const jalur = jalurDariKategori(kar.kategori_dokumen) ?? "training";
+        const cfg = cfgSakit(rows, jalur, H);
+        const batasJam = cfg.batas_jam_setelah_shift ?? 2;
+        const cutoffMin = jamToMin(shift.jam_masuk.slice(0, 5)) + batasJam * 60;
         if (nowMin > cutoffMin) {
-          setWindowErr(`Batas lapor sakit untuk hari ini adalah 2 jam setelah shift mulai (jam ${minToJam(cutoffMin)}). Saat ini sudah lewat, jadi kamu tidak bisa lapor sakit dan otomatis dihitung Alpha.`);
+          setWindowErr(`Batas lapor sakit untuk hari ini adalah ${batasJam} jam setelah shift mulai (jam ${minToJam(cutoffMin)}). Saat ini sudah lewat, jadi kamu tidak bisa lapor sakit dan otomatis dihitung Alpha.`);
         } else setWindowErr("");
       } else setWindowErr("");
       setStep("form");

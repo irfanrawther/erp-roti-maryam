@@ -57,7 +57,8 @@ export default function IzinPage() {
   const [kuotaOleh, setKuotaOleh] = useState<string | null>(null); // nama karyawan lain yg sudah izin di tgl ini
   const [dendaInfo, setDendaInfo] = useState<{ denda: number; kat: KatLapor; adaShift: boolean } | null>(null);
   const [sudahIzin, setSudahIzin] = useState(false); // karyawan ini sudah lapor izin di tgl terpilih
-  const [lewatBatas, setLewatBatas] = useState(false); // hari ini & sudah >2 jam setelah shift mulai → tidak bisa izin, otomatis alpha
+  const [lewatBatas, setLewatBatas] = useState(false); // hari ini & sudah lewat batas jam setelah shift mulai → tidak bisa izin, otomatis alpha
+  const [batasJamSetelahShift, setBatasJamSetelahShift] = useState(2); // diatur di halaman Aturan & Nominal
 
   // Cek kuota (Pasal 3c) + hitung preview denda izin biasa (Pasal 3a) sesuai waktu lapor
   useEffect(() => {
@@ -84,10 +85,12 @@ export default function IzinPage() {
         const cfg = cfgIzin(rows, jalur, tglIzin);
         const kat = katLapor(tglIzin, saRow.shift_master.jam_masuk, Date.now(), cfg);
         setDendaInfo({ denda: dendaIzinBiasa(kat, false, cfg), kat, adaShift: true });
-        // Batas lapor izin di hari yang sama: maksimal 2 jam setelah shift mulai
+        // Batas lapor izin di hari yang sama: sekian jam setelah shift mulai (diatur di Aturan & Nominal)
         const jm = saRow.shift_master.jam_masuk.slice(0, 8).padEnd(8, ":00");
         const shiftStart = new Date(`${tglIzin}T${jm}+07:00`).getTime();
-        setLewatBatas(tglIzin === todayWIB() && Date.now() > shiftStart + 2 * 3600_000);
+        const batasJam = cfg.batas_jam_setelah_shift ?? 2;
+        setBatasJamSetelahShift(batasJam);
+        setLewatBatas(tglIzin === todayWIB() && Date.now() > shiftStart + batasJam * 3600_000);
       } else {
         setDendaInfo({ denda: 0, kat: "tepat_waktu", adaShift: false });
         setLewatBatas(false);
@@ -120,7 +123,7 @@ export default function IzinPage() {
 
   async function submit() {
     if (!karyawan || !tglIzin || !fotoFile) return;
-    if (lewatBatas) { setErr("Sudah lewat 2 jam setelah shift mulai — tidak bisa lapor izin untuk hari ini (otomatis Alpha)."); return; }
+    if (lewatBatas) { setErr(`Sudah lewat ${batasJamSetelahShift} jam setelah shift mulai — tidak bisa lapor izin untuk hari ini (otomatis Alpha).`); return; }
     setErr(""); setBusy(true);
     try {
       const tgl = tglIzin;
@@ -239,7 +242,7 @@ export default function IzinPage() {
                 {!sudahIzin && lewatBatas && (
                   <div className="rounded-xl bg-red-50 border-2 border-red-300 p-3 text-sm text-red-700 flex items-start gap-2">
                     <AlertTriangle size={18} className="text-red-500 shrink-0 mt-0.5" />
-                    <span>Batas lapor izin untuk hari ini adalah <b>2 jam setelah shift mulai</b>. Waktu itu sudah lewat, jadi kamu <b>tidak bisa lapor izin</b> untuk hari ini dan otomatis dihitung <b>Alpha</b>. Untuk izin, pilih tanggal berikutnya.</span>
+                    <span>Batas lapor izin untuk hari ini adalah <b>{batasJamSetelahShift} jam setelah shift mulai</b>. Waktu itu sudah lewat, jadi kamu <b>tidak bisa lapor izin</b> untuk hari ini dan otomatis dihitung <b>Alpha</b>. Untuk izin, pilih tanggal berikutnya.</span>
                   </div>
                 )}
 
