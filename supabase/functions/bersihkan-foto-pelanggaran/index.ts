@@ -51,7 +51,11 @@ Deno.serve(async (req) => {
 
   const supabase = createClient(
     Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, // otomatis tersedia di tiap Edge Function
+    // Sebagian project pakai sistem API key baru Supabase, di mana
+    // SUPABASE_SERVICE_ROLE_KEY otomatis tidak lagi punya akses penuh —
+    // jadi kita pasang manual lewat secret SERVICE_ROLE_KEY sebagai
+    // cadangan utama.
+    Deno.env.get("SERVICE_ROLE_KEY") ?? Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
   );
 
   const batasTanggal = new Date(Date.now() - HARI_RETENSI * 86_400_000).toISOString();
