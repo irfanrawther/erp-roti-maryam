@@ -68,9 +68,10 @@ export default function IzinSakitPage() {
       if (sk) { setSusulan(sk as SakitAktif); setStep("susulan"); return; }
 
       // 2) Tentukan tanggal-H + shift + window
+      // Mulai jam 18:00 (6 sore) hari sebelumnya, lapor sakit dianggap untuk shift BESOK.
       const { h } = wibHM();
       const today = todayWIB();
-      const H = h >= 17 ? addDaysStr(today, 1) : today;
+      const H = h >= 18 ? addDaysStr(today, 1) : today;
       setTanggalH(H);
       const { data: sa } = await supabase.from("shift_assignment")
         .select("is_libur, shift_master:shift_id(nama_shift, jam_masuk, jam_pulang)")
