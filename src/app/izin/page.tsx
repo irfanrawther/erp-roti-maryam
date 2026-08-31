@@ -239,40 +239,30 @@ export default function IzinPage() {
                 </div>
 
                 {!sudahIzin && cfgFull && (
-                  <div className="rounded-xl bg-gray-50 border border-gray-200 p-3 text-xs text-gray-700 space-y-2">
-                    <p className="font-bold text-gray-800 flex items-center gap-1.5">
-                      <AlertTriangle size={14} className="text-amber-500" /> Pasal 3a — Baca dulu konsekuensi izin biasa
+                  <div className="rounded-xl bg-gray-50 border border-gray-200 p-3 text-[11px] text-gray-700 space-y-1.5">
+                    <p className="font-bold text-gray-800 flex items-center gap-1.5 text-xs">
+                      <AlertTriangle size={13} className="text-amber-500 shrink-0" /> Pasal 3a — Konsekuensi izin biasa
                     </p>
-                    <table className="w-full">
-                      <tbody>
-                        <tr className={dendaInfo?.kat === "tepat_waktu" ? "text-sky-700 font-semibold" : ""}>
-                          <td className="py-1 pr-2">Lapor tepat waktu (sebelum deadline)</td>
-                          <td className="py-1 text-right whitespace-nowrap">
-                            Rp {cfgFull.tepat_waktu.denda.toLocaleString("id-ID")}{cfgFull.tepat_waktu.poin ? ` + ${cfgFull.tepat_waktu.poin} poin` : ""}
-                          </td>
-                        </tr>
-                        <tr className={dendaInfo?.kat === "telat_sebelum_shift" ? "text-amber-700 font-semibold" : ""}>
-                          <td className="py-1 pr-2">Lapor telat (lewat deadline, tapi sebelum shift mulai)</td>
-                          <td className="py-1 text-right whitespace-nowrap">
-                            Rp {cfgFull.telat_sebelum_shift.denda.toLocaleString("id-ID")}{cfgFull.telat_sebelum_shift.poin ? ` + ${cfgFull.telat_sebelum_shift.poin} poin` : ""}
-                          </td>
-                        </tr>
-                        <tr className={dendaInfo?.kat === "setelah_shift" ? "text-orange-700 font-semibold" : ""}>
-                          <td className="py-1 pr-2">Lapor setelah shift mulai (maks {batasJamSetelahShift} jam)</td>
-                          <td className="py-1 text-right whitespace-nowrap">
-                            Rp {cfgFull.setelah_shift.denda.toLocaleString("id-ID")}{cfgFull.setelah_shift.poin ? ` + ${cfgFull.setelah_shift.poin} poin` : ""}
-                          </td>
-                        </tr>
-                        <tr className="text-red-600 font-semibold">
-                          <td className="py-1 pr-2">Lewat {batasJamSetelahShift} jam setelah shift mulai / tidak lapor sama sekali</td>
-                          <td className="py-1 text-right whitespace-nowrap">
-                            Otomatis Alpha — Rp {cfgFull.alpha.denda.toLocaleString("id-ID")}{cfgFull.alpha.poin ? ` + ${cfgFull.alpha.poin} poin` : ""}
-                          </td>
-                        </tr>
-                      </tbody>
-                    </table>
-                    <p className="text-gray-500">
-                      Kuota izin tanpa tambahan denda: maksimal <b>{cfgFull.kuota_izin_per_hari} orang/hari</b>. Kalau kuota sudah penuh, ada tambahan denda <b>Rp {cfgFull.denda_tambahan_kuota_penuh.toLocaleString("id-ID")}</b> di luar denda kategori di atas.
+                    <div className="space-y-1">
+                      <div className={`flex items-center justify-between gap-2 ${dendaInfo?.kat === "tepat_waktu" ? "text-sky-700 font-semibold" : ""}`}>
+                        <span className="truncate">Lapor tepat waktu</span>
+                        <span className="shrink-0 whitespace-nowrap">Rp{cfgFull.tepat_waktu.denda.toLocaleString("id-ID")}{cfgFull.tepat_waktu.poin ? ` +${cfgFull.tepat_waktu.poin}p` : ""}</span>
+                      </div>
+                      <div className={`flex items-center justify-between gap-2 ${dendaInfo?.kat === "telat_sebelum_shift" ? "text-amber-700 font-semibold" : ""}`}>
+                        <span className="truncate">Telat, sebelum shift mulai</span>
+                        <span className="shrink-0 whitespace-nowrap">Rp{cfgFull.telat_sebelum_shift.denda.toLocaleString("id-ID")}{cfgFull.telat_sebelum_shift.poin ? ` +${cfgFull.telat_sebelum_shift.poin}p` : ""}</span>
+                      </div>
+                      <div className={`flex items-center justify-between gap-2 ${dendaInfo?.kat === "setelah_shift" ? "text-orange-700 font-semibold" : ""}`}>
+                        <span className="truncate">Setelah shift mulai (≤{batasJamSetelahShift}j)</span>
+                        <span className="shrink-0 whitespace-nowrap">Rp{cfgFull.setelah_shift.denda.toLocaleString("id-ID")}{cfgFull.setelah_shift.poin ? ` +${cfgFull.setelah_shift.poin}p` : ""}</span>
+                      </div>
+                      <div className="flex items-center justify-between gap-2 text-red-600 font-semibold">
+                        <span className="truncate">Lewat {batasJamSetelahShift}j / tidak lapor → Alpha</span>
+                        <span className="shrink-0 whitespace-nowrap">Rp{cfgFull.alpha.denda.toLocaleString("id-ID")}{cfgFull.alpha.poin ? ` +${cfgFull.alpha.poin}p` : ""}</span>
+                      </div>
+                    </div>
+                    <p className="text-gray-500 pt-0.5 border-t border-gray-200">
+                      Kuota tanpa tambahan denda: <b>{cfgFull.kuota_izin_per_hari} orang/hari</b>. Kuota penuh → tambahan <b>Rp{cfgFull.denda_tambahan_kuota_penuh.toLocaleString("id-ID")}</b>.
                     </p>
                   </div>
                 )}
