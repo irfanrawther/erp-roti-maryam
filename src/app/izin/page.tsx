@@ -5,7 +5,7 @@ import { hashPin } from "@/lib/auth";
 import { FileText, Camera, CheckCircle2, X, AlertTriangle } from "lucide-react";
 import IndonesianDatePicker from "@/components/IndonesianDatePicker";
 import { katLapor, dendaIzinBiasa, labelKatLapor, type KatLapor } from "@/lib/izin";
-import { muatAturan, cfgIzin, jalurDariKategori } from "@/lib/aturan";
+import { muatAturan, cfgIzin, jalurDariKategori, type CfgIzin } from "@/lib/aturan";
 
 interface Karyawan { id: string; nama: string; jabatan: string | null; kategori_dokumen: string | null }
 
@@ -59,10 +59,11 @@ export default function IzinPage() {
   const [sudahIzin, setSudahIzin] = useState(false); // karyawan ini sudah lapor izin di tgl terpilih
   const [lewatBatas, setLewatBatas] = useState(false); // hari ini & sudah lewat batas jam setelah shift mulai → tidak bisa izin, otomatis alpha
   const [batasJamSetelahShift, setBatasJamSetelahShift] = useState(2); // diatur di halaman Aturan & Nominal
+  const [cfgFull, setCfgFull] = useState<CfgIzin | null>(null); // aturan lengkap Pasal 3a, ditampilkan supaya karyawan baca konsekuensinya
 
   // Cek kuota (Pasal 3c) + hitung preview denda izin biasa (Pasal 3a) sesuai waktu lapor
   useEffect(() => {
-    if (step !== "form" || !karyawan) { setKuotaOleh(null); setDendaInfo(null); setSudahIzin(false); setLewatBatas(false); return; }
+    if (step !== "form" || !karyawan) { setKuotaOleh(null); setDendaInfo(null); setSudahIzin(false); setLewatBatas(false); setCfgFull(null); return; }
     let active = true;
     (async () => {
       const [kRes, sRes, dupRes] = await Promise.all([
@@ -77,12 +78,13 @@ export default function IzinPage() {
       setSudahIzin(!!(dupRes.data && dupRes.data.length > 0));
       const kuota = (kRes.data?.[0] as { karyawan: { nama: string } | null } | undefined)?.karyawan?.nama ?? null;
       setKuotaOleh(kuota);
+      // Aturan yang dipakai = yang berlaku pada TANGGAL IZIN (tanggal kejadian)
+      const rows = await muatAturan();
+      const jalur = jalurDariKategori(karyawan.kategori_dokumen) ?? "training";
+      const cfg = cfgIzin(rows, jalur, tglIzin);
+      setCfgFull(cfg);
       const saRow = sRes.data as { is_libur: boolean; shift_master: { jam_masuk: string } | null } | null;
       if (saRow && !saRow.is_libur && saRow.shift_master) {
-        // Aturan yang dipakai = yang berlaku pada TANGGAL IZIN (tanggal kejadian)
-        const rows = await muatAturan();
-        const jalur = jalurDariKategori(karyawan.kategori_dokumen) ?? "training";
-        const cfg = cfgIzin(rows, jalur, tglIzin);
         const kat = katLapor(tglIzin, saRow.shift_master.jam_masuk, Date.now(), cfg);
         setDendaInfo({ denda: dendaIzinBiasa(kat, false, cfg), kat, adaShift: true });
         // Batas lapor izin di hari yang sama: sekian jam setelah shift mulai (diatur di Aturan & Nominal)
@@ -93,6 +95,7 @@ export default function IzinPage() {
         setLewatBatas(tglIzin === todayWIB() && Date.now() > shiftStart + batasJam * 3600_000);
       } else {
         setDendaInfo({ denda: 0, kat: "tepat_waktu", adaShift: false });
+        setBatasJamSetelahShift(cfg.batas_jam_setelah_shift ?? 2);
         setLewatBatas(false);
       }
     })();
@@ -122,7 +125,7 @@ export default function IzinPage() {
   }
 
   async function submit() {
-    if (!karyawan || !tglIzin || !fotoFile) return;
+    if (!karyawan || !tglIzin) return;
     if (lewatBatas) { setErr(`Sudah lewat ${batasJamSetelahShift} jam setelah shift mulai — tidak bisa lapor izin untuk hari ini (otomatis Alpha).`); return; }
     setErr(""); setBusy(true);
     try {
@@ -132,11 +135,14 @@ export default function IzinPage() {
         .select("id").eq("karyawan_id", karyawan.id).eq("tanggal_izin", tgl).eq("status", "aktif").maybeSingle();
       if (dup) { setErr("Kamu sudah lapor izin untuk tanggal ini."); setBusy(false); return; }
 
-      // Upload foto bukti
-      const path = `izin/${karyawan.id}/${tgl}_${Date.now()}.jpg`;
-      const up = await supabase.storage.from("foto-absensi").upload(path, fotoFile, { contentType: fotoFile.type || "image/jpeg", upsert: true });
-      if (up.error) throw new Error("Gagal upload foto: " + up.error.message);
-      const fotoUrl = supabase.storage.from("foto-absensi").getPublicUrl(path).data.publicUrl;
+      // Foto bukti opsional untuk izin biasa
+      let fotoUrl: string | null = null;
+      if (fotoFile) {
+        const path = `izin/${karyawan.id}/${tgl}_${Date.now()}.jpg`;
+        const up = await supabase.storage.from("foto-absensi").upload(path, fotoFile, { contentType: fotoFile.type || "image/jpeg", upsert: true });
+        if (up.error) throw new Error("Gagal upload foto: " + up.error.message);
+        fotoUrl = supabase.storage.from("foto-absensi").getPublicUrl(path).data.publicUrl;
+      }
 
       // Pasal 3a + 3c: hitung denda izin biasa berdasarkan waktu lapor vs shift pada tanggal izin
       let denda = 0; let kategori: string | null = null;
@@ -232,6 +238,45 @@ export default function IzinPage() {
                   )}
                 </div>
 
+                {!sudahIzin && cfgFull && (
+                  <div className="rounded-xl bg-gray-50 border border-gray-200 p-3 text-xs text-gray-700 space-y-2">
+                    <p className="font-bold text-gray-800 flex items-center gap-1.5">
+                      <AlertTriangle size={14} className="text-amber-500" /> Pasal 3a — Baca dulu konsekuensi izin biasa
+                    </p>
+                    <table className="w-full">
+                      <tbody>
+                        <tr className={dendaInfo?.kat === "tepat_waktu" ? "text-sky-700 font-semibold" : ""}>
+                          <td className="py-1 pr-2">Lapor tepat waktu (sebelum deadline)</td>
+                          <td className="py-1 text-right whitespace-nowrap">
+                            Rp {cfgFull.tepat_waktu.denda.toLocaleString("id-ID")}{cfgFull.tepat_waktu.poin ? ` + ${cfgFull.tepat_waktu.poin} poin` : ""}
+                          </td>
+                        </tr>
+                        <tr className={dendaInfo?.kat === "telat_sebelum_shift" ? "text-amber-700 font-semibold" : ""}>
+                          <td className="py-1 pr-2">Lapor telat (lewat deadline, tapi sebelum shift mulai)</td>
+                          <td className="py-1 text-right whitespace-nowrap">
+                            Rp {cfgFull.telat_sebelum_shift.denda.toLocaleString("id-ID")}{cfgFull.telat_sebelum_shift.poin ? ` + ${cfgFull.telat_sebelum_shift.poin} poin` : ""}
+                          </td>
+                        </tr>
+                        <tr className={dendaInfo?.kat === "setelah_shift" ? "text-orange-700 font-semibold" : ""}>
+                          <td className="py-1 pr-2">Lapor setelah shift mulai (maks {batasJamSetelahShift} jam)</td>
+                          <td className="py-1 text-right whitespace-nowrap">
+                            Rp {cfgFull.setelah_shift.denda.toLocaleString("id-ID")}{cfgFull.setelah_shift.poin ? ` + ${cfgFull.setelah_shift.poin} poin` : ""}
+                          </td>
+                        </tr>
+                        <tr className="text-red-600 font-semibold">
+                          <td className="py-1 pr-2">Lewat {batasJamSetelahShift} jam setelah shift mulai / tidak lapor sama sekali</td>
+                          <td className="py-1 text-right whitespace-nowrap">
+                            Otomatis Alpha — Rp {cfgFull.alpha.denda.toLocaleString("id-ID")}{cfgFull.alpha.poin ? ` + ${cfgFull.alpha.poin} poin` : ""}
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                    <p className="text-gray-500">
+                      Kuota izin tanpa tambahan denda: maksimal <b>{cfgFull.kuota_izin_per_hari} orang/hari</b>. Kalau kuota sudah penuh, ada tambahan denda <b>Rp {cfgFull.denda_tambahan_kuota_penuh.toLocaleString("id-ID")}</b> di luar denda kategori di atas.
+                    </p>
+                  </div>
+                )}
+
                 {sudahIzin && (
                   <div className="rounded-xl bg-emerald-50 border-2 border-emerald-300 p-3 text-sm text-emerald-800 flex items-start gap-2">
                     <CheckCircle2 size={18} className="text-emerald-500 shrink-0 mt-0.5" />
@@ -248,33 +293,24 @@ export default function IzinPage() {
 
                 {!sudahIzin && !lewatBatas && dendaInfo?.adaShift && (
                   <div className="rounded-xl bg-amber-50 border-2 border-amber-300 p-3 text-xs text-amber-800 space-y-1.5">
-                    <p className="font-bold flex items-center gap-1.5"><AlertTriangle size={14} className="text-amber-500" /> Izin biasa dikenakan denda</p>
+                    <p className="font-bold flex items-center gap-1.5"><AlertTriangle size={14} className="text-amber-500" /> Kalau submit sekarang</p>
                     <p>
-                      Berdasarkan <b>Pasal 3a</b>, jika kamu submit izin sekarang masih terhitung{" "}
-                      <b>
-                        {dendaInfo.kat === "tepat_waktu"
-                          ? "sebelum deadline (tepat waktu)"
-                          : dendaInfo.kat === "telat_sebelum_shift"
-                          ? "telat (lewat deadline, tapi sebelum shift mulai)"
-                          : "telat (setelah shift mulai)"}
-                      </b>
-                      , sehingga sesuai Pasal 3a denda kamu <b>Rp {dendaInfo.denda.toLocaleString("id-ID")}</b>.
+                      Waktu lapor kamu sekarang terhitung <b>{labelKatLapor(dendaInfo.kat).toLowerCase()}</b>, jadi denda yang berlaku <b>Rp {dendaInfo.denda.toLocaleString("id-ID")}</b> (lihat tabel Pasal 3a di atas).
                     </p>
                     {kuotaOleh && (
-                      <p className="text-red-700">⚠️ Sudah ada karyawan lain (<b>{kuotaOleh}</b>) yang izin di tanggal ini — kuota harian (1 orang) terisi, jadi ada <b>tambahan Rp100.000</b>. Total denda kamu jadi <b>Rp {(dendaInfo.denda + 100000).toLocaleString("id-ID")}</b>. Disarankan pilih tanggal lain atau tetap masuk.</p>
+                      <p className="text-red-700">⚠️ Sudah ada karyawan lain (<b>{kuotaOleh}</b>) yang izin di tanggal ini — kuota harian ({cfgFull?.kuota_izin_per_hari ?? 1} orang) terisi, jadi ada <b>tambahan Rp{(cfgFull?.denda_tambahan_kuota_penuh ?? 100000).toLocaleString("id-ID")}</b>. Total denda kamu jadi <b>Rp {(dendaInfo.denda + (cfgFull?.denda_tambahan_kuota_penuh ?? 100000)).toLocaleString("id-ID")}</b>. Disarankan pilih tanggal lain atau tetap masuk.</p>
                     )}
-                    <p className="text-amber-600">Hindari lapor izin telat untuk menghindari denda yang lebih besar.</p>
                   </div>
                 )}
 
                 {!sudahIzin && !lewatBatas && (
                 <div className="rounded-xl bg-gray-50 border border-gray-100 p-3 text-xs text-gray-600">
-                  Tuliskan di kertas: <b>alasan izin dan keperluan kamu untuk hari itu saja</b>, lalu foto tulisan tersebut. Jika ingin izin lebih dari 1 hari, kamu harus lapor lagi untuk tiap tanggalnya.
+                  Kalau ingin izin lebih dari 1 hari, kamu harus lapor lagi untuk tiap tanggalnya.
                 </div>
                 )}
                 {!sudahIzin && !lewatBatas && (
                 <>
-                {/* Foto bukti */}
+                {/* Foto bukti — opsional */}
                 {foto ? (
                   <div className="space-y-2">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -288,8 +324,8 @@ export default function IzinPage() {
                   </div>
                 ) : (
                   <label className="block">
-                    <span className="w-full inline-flex items-center justify-center gap-2 py-2.5 rounded-xl bg-gray-800 text-white text-sm font-semibold hover:bg-gray-900 cursor-pointer">
-                      <Camera size={16} /> Foto Bukti Tulisan (Wajib)
+                    <span className="w-full inline-flex items-center justify-center gap-2 py-2.5 rounded-xl border border-gray-200 text-gray-600 text-sm font-medium hover:bg-gray-50 cursor-pointer">
+                      <Camera size={16} /> Foto Bukti Tulisan (opsional)
                     </span>
                     <input type="file" accept="image/*" capture="environment" className="hidden" onChange={pilihFoto} />
                   </label>
@@ -297,11 +333,10 @@ export default function IzinPage() {
 
                 {err && <p className="text-sm text-red-500">{err}</p>}
 
-                <button onClick={submit} disabled={busy || !fotoFile}
+                <button onClick={submit} disabled={busy}
                   className="w-full py-3 rounded-xl bg-sky-500 text-white font-semibold hover:bg-sky-600 disabled:opacity-40 flex items-center justify-center gap-2">
                   <FileText size={18} /> {busy ? "Mengirim..." : (kuotaOleh ? "Tetap Lapor Izin" : "Lapor Izin")}
                 </button>
-                {!fotoFile && <p className="text-[11px] text-gray-400 text-center">Foto bukti wajib sebelum submit</p>}
                 </>
                 )}
               </>
