@@ -6,6 +6,7 @@ import { hashPin } from "@/lib/auth";
 import { UserCircle, Clock, ClipboardList, CalendarDays, FileText, CheckCircle2, AlertCircle, X, ExternalLink, ShieldAlert, PenLine, Eye } from "lucide-react";
 import { kuartalSekarang, labelKuartal, POIN_PER_SP } from "@/lib/poin";
 import { jalurDariKategori } from "@/lib/aturan";
+import { hitungKlarifikasiDeadline, type StatusLaporan } from "@/lib/pelanggaranAlur";
 
 const TandaTanganDokumen = dynamic(() => import("./TandaTanganDokumen"), { ssr: false });
 
@@ -49,6 +50,11 @@ export default function DashboardSayaPage() {
   const [jobdesks, setJobdesks] = useState<Jobdesk[]>([]);
   const [docs, setDocs] = useState<DokItem[]>([]);
   const [poinRows, setPoinRows] = useState<{ tanggal: string; poin: number; sumber: string; master_pelanggaran: { nama_pelanggaran: string } | null; catatan: string | null }[]>([]);
+  const [perluKlarifikasi, setPerluKlarifikasi] = useState<{
+    id: string; tanggal_kejadian: string; status: StatusLaporan; respon_deadline: string | null;
+    master_pelanggaran: { nama_pelanggaran: string; poin: number } | null;
+  }[]>([]);
+  const [busyKlarifikasi, setBusyKlarifikasi] = useState<string | null>(null);
   const [spLevel, setSpLevel] = useState(0);
   const [spBefore, setSpBefore] = useState(0);
   const [bukaDok, setBukaDok] = useState<{ dok: DokItem; mode: "baca" | "ttd" } | null>(null);
@@ -73,7 +79,7 @@ export default function DashboardSayaPage() {
       const dokQuery = jalurKar
         ? supabase.from("dokumen").select("id, nama, versi, wajib_ttd, file_pdf_url, konten_html").eq("is_aktif", true).eq("jalur", jalurKar).order("jenis")
         : Promise.resolve({ data: [] as { id: string; nama: string; versi: number; wajib_ttd: boolean; file_pdf_url: string | null; konten_html: string | null }[] });
-      const [asg, abs, jd, dk, pj, pn, spr] = await Promise.all([
+      const [asg, abs, jd, dk, pj, pn, spr, kl] = await Promise.all([
         supabase.from("shift_assignment").select("tanggal, is_libur, shift_id, shift_master:shift_id(nama_shift, jam_masuk, jam_pulang)")
           .eq("karyawan_id", kar.id).gte("tanggal", monthStart).lte("tanggal", upTo).order("tanggal"),
         supabase.from("absensi").select("tanggal, jam_checkin, jam_checkout, menit_telat, status_kehadiran, is_flagged, is_override, shift_master:shift_id(nama_shift)")
@@ -83,7 +89,10 @@ export default function DashboardSayaPage() {
         supabase.from("dokumen_persetujuan").select("dokumen_id, dokumen_versi, disetujui_at, tipe, tanda_tangan_url, data_isian").eq("karyawan_id", kar.id),
         supabase.from("poin_karyawan").select("tanggal, poin, sumber, catatan, master_pelanggaran:pelanggaran_id(nama_pelanggaran)").eq("karyawan_id", kar.id).eq("kuartal", kuartalSekarang()).order("tanggal", { ascending: false }),
         supabase.from("status_sp_karyawan").select("level_sp, kuartal_kena").eq("karyawan_id", kar.id).eq("is_aktif", true),
+        supabase.from("laporan_pelanggaran").select("id, tanggal_kejadian, status, respon_deadline, master_pelanggaran:pelanggaran_id(nama_pelanggaran, poin)")
+          .eq("karyawan_id", kar.id).in("status", ["pending", "menunggu_klarifikasi"]).order("created_at", { ascending: false }),
       ]);
+      setPerluKlarifikasi((kl.data as unknown as typeof perluKlarifikasi) ?? []);
       setAssigns((asg.data as unknown as AssignRow[]) ?? []);
       setAbsensi((abs.data as unknown as AbsRow[]) ?? []);
       setJobdesks((jd.data as Jobdesk[]) ?? []);
@@ -113,6 +122,25 @@ export default function DashboardSayaPage() {
     setDocs(((dk.data as { id: string; nama: string; versi: number; wajib_ttd: boolean; file_pdf_url: string | null; konten_html: string | null }[] | null) ?? []).map((d) => ({
       ...d, approved: persetujuan.find((p) => p.dokumen_id === d.id && p.dokumen_versi === d.versi) ?? null,
     })));
+  }
+
+  // Pasal 6: karyawan boleh minta klarifikasi tatap muka ke Manajer
+  // Operasional. Kalau diam sampai respon_deadline, dianggap tidak
+  // keberatan dan poin otomatis ditetapkan (diproses lazy saat Manajer
+  // membuka halaman Pelanggaran & Poin).
+  async function mintaKlarifikasi(laporanId: string) {
+    if (!karyawan) return;
+    setBusyKlarifikasi(laporanId);
+    const nowIso = new Date().toISOString();
+    await supabase.from("laporan_pelanggaran").update({
+      status: "menunggu_klarifikasi", klarifikasi_diminta_at: nowIso,
+      klarifikasi_deadline: hitungKlarifikasiDeadline(nowIso),
+    }).eq("id", laporanId);
+    const { data } = await supabase.from("laporan_pelanggaran")
+      .select("id, tanggal_kejadian, status, respon_deadline, master_pelanggaran:pelanggaran_id(nama_pelanggaran, poin)")
+      .eq("karyawan_id", karyawan.id).in("status", ["pending", "menunggu_klarifikasi"]).order("created_at", { ascending: false });
+    setPerluKlarifikasi((data as unknown as typeof perluKlarifikasi) ?? []);
+    setBusyKlarifikasi(null);
   }
 
   function reset() { setStep("pin"); setPin(""); setPinErr(""); setKaryawan(null); }
@@ -170,6 +198,37 @@ export default function DashboardSayaPage() {
                   </p>
                 </div>
               </button>
+            )}
+
+            {/* SECTION KLARIFIKASI PELANGGARAN */}
+            {perluKlarifikasi.length > 0 && (
+              <div className="bg-white rounded-2xl shadow-sm p-4 space-y-3 border-2 border-blue-200">
+                <h2 className="font-bold text-gray-700 text-sm flex items-center gap-2"><ShieldAlert size={16} className="text-blue-500" /> Perlu Klarifikasi</h2>
+                {perluKlarifikasi.map((l) => (
+                  <div key={l.id} className="rounded-xl bg-blue-50 p-3 space-y-2">
+                    <div>
+                      <p className="text-sm font-semibold text-gray-800">{l.master_pelanggaran?.nama_pelanggaran}</p>
+                      <p className="text-xs text-gray-500">{hariTglPendek(l.tanggal_kejadian)} · {l.master_pelanggaran?.poin} poin</p>
+                    </div>
+                    {l.status === "pending" ? (
+                      <>
+                        <p className="text-[11px] text-gray-500">
+                          Kalau tidak keberatan, tidak perlu lakukan apa-apa — poin akan ditetapkan otomatis
+                          {l.respon_deadline ? ` setelah ${tglWaktu(l.respon_deadline)}` : ""}.
+                        </p>
+                        <button onClick={() => mintaKlarifikasi(l.id)} disabled={busyKlarifikasi === l.id}
+                          className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-40">
+                          {busyKlarifikasi === l.id ? "Memproses…" : "Saya akan klarifikasi"}
+                        </button>
+                      </>
+                    ) : (
+                      <p className="text-[11px] text-blue-700 font-medium">
+                        Ditunggu — datangi Manajer Operasional langsung untuk menyampaikan klarifikasi.
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
             )}
 
             {/* SECTION POIN */}
