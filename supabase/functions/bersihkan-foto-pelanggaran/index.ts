@@ -23,7 +23,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const BUCKET = "foto-absensi";
-const HARI_RETENSI = 90;
+const HARI_RETENSI = 180;
 
 interface LaporanRow {
   id: string;
