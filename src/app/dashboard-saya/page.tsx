@@ -411,7 +411,12 @@ export default function DashboardSayaPage() {
                               <PenLine size={12} /> Isi & tanda tangani
                             </button>
                           )}
-                          {d.file_pdf_url && (
+                          {d.approved && d.konten_html ? (
+                            <a href={`/cetak-dokumen?d=${d.id}&k=${karyawan?.id}`} target="_blank" rel="noopener noreferrer"
+                              className="text-[11px] text-gray-400 hover:text-gray-600 px-1.5 py-1.5 flex items-center gap-1">
+                              <ExternalLink size={12} /> Buka & unduh PDF
+                            </a>
+                          ) : d.file_pdf_url && (
                             <a href={d.file_pdf_url} target="_blank" rel="noopener noreferrer"
                               className="text-[11px] text-gray-400 hover:text-gray-600 px-1.5 py-1.5 flex items-center gap-1">
                               <ExternalLink size={12} /> File asli

@@ -173,7 +173,7 @@ export default function IzinSakitPage() {
 
       setDoneMsg(fotoFile
         ? `Lapor sakit untuk ${labelTgl(H)} berhasil. Surat dokter sudah diterima.`
-        : `Lapor sakit untuk ${labelTgl(H)} berhasil. Jangan lupa upload surat dokter maksimal jam 20:00 hari ini.`);
+        : `Lapor sakit untuk ${labelTgl(H)} berhasil. Jangan lupa upload surat dokter maksimal ${labelTgl(H)} jam 20:00.`);
       setStep("done");
     } catch (e) { setErr(e instanceof Error ? e.message : "Gagal lapor sakit"); }
     finally { setBusy(false); }
@@ -275,7 +275,7 @@ export default function IzinSakitPage() {
                 </div>
 
                 <div className="rounded-xl bg-red-50 border border-red-100 p-3 text-xs text-red-600">
-                  Surat dokter/klinik/RS <b>wajib</b> diupload maksimal <b>jam 20:00 hari ini</b>. Jika tidak, status menjadi <b>Alpha</b>.
+                  Surat dokter/klinik/RS <b>wajib</b> diupload maksimal <b>{labelTgl(tanggalH!)} jam 20:00</b>. Jika tidak, status menjadi <b>Alpha</b>.
                 </div>
 
                 <FotoPicker label="Upload Surat Dokter (opsional sekarang)" />
