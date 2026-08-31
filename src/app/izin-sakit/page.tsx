@@ -278,6 +278,11 @@ export default function IzinSakitPage() {
                   Surat dokter/klinik/RS <b>wajib</b> diupload maksimal <b>{labelTgl(tanggalH!)} jam 20:00</b>. Jika tidak, status menjadi <b>Alpha</b>.
                 </div>
 
+                <div className="rounded-xl bg-amber-50 border border-amber-200 p-3 text-xs text-amber-700 flex items-start gap-2">
+                  <AlertTriangle size={14} className="text-amber-500 shrink-0 mt-0.5" />
+                  <span>Pastikan foto surat sakit <b>sah dan jelas</b>. Jika tidak, akan dianggap <b>Alpha</b>.</span>
+                </div>
+
                 <FotoPicker label="Upload Surat Dokter (opsional sekarang)" />
                 {err && <p className="text-sm text-red-500">{err}</p>}
 
