@@ -14,6 +14,15 @@ interface RosterRow {
 }
 
 const HARI = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
+const TUGAS_AWAL: string[] = [
+  "Cuci Meja Ngadon", "Lap Tampah", "Cuci Meja Bikin", "Parut Keju", "Timbang Bahan",
+  "Sapu + Pel Area Bikin + Sampah", "Lap Kaca", "Cuci Kompor + Cuci Meja", "Lap Alat Tekan + Lap Rak",
+  "Cuci Meja Packing", "Cuci Mesin", "Prepare Bahan Ngadon", "Sapu Area Ngadon + Cuci Meja Ngadon",
+  "Cuci Meja Bikin + Rak & Ember Minyak", "Cuci Lap + Cuci Ember Bekas Limbah", "Cuci Peralatan + Cuci Sink",
+  "Cuci Tampah", "Isi Box Mentega", "Lap Alat Tekan + Lap Kaca", "Cuci Meja + Nyapu + Lap Freezer",
+  "Lap Vacuum + Ngepel + Sampah",
+];
+const OPSI_BARU = "__baru__";
 
 function todayWIB() { return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" }); }
 function addDaysStr(iso: string, n: number) {
@@ -45,12 +54,15 @@ export default function AuditKebersihanRosterPage() {
   const [karyawan, setKaryawan] = useState<Karyawan[]>([]);
   const [shifts, setShifts] = useState<ShiftMaster[]>([]);
   const [rows, setRows] = useState<RosterRow[]>([]);
+  const [daftarTugas, setDaftarTugas] = useState<string[]>(TUGAS_AWAL);
 
   const [tambahUntuk, setTambahUntuk] = useState<string | null>(null); // tanggal yang lagi diisi form tambah
   const [fKaryawanId, setFKaryawanId] = useState("");
   const [fShiftId, setFShiftId] = useState("");
   const [fTugasDatang, setFTugasDatang] = useState("");
+  const [fTugasDatangBaru, setFTugasDatangBaru] = useState(false);
   const [fTugas, setFTugas] = useState("");
+  const [fTugasBaru, setFTugasBaru] = useState(false);
 
   useEffect(() => {
     const u = getUserSession(); setUser(u);
@@ -59,12 +71,17 @@ export default function AuditKebersihanRosterPage() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fetchMaster = useCallback(async () => {
-    const [kRes, sRes] = await Promise.all([
+    const [kRes, sRes, tRes] = await Promise.all([
       supabase.from("karyawan").select("id, nama, kategori_dokumen").eq("status", "aktif").order("nama"),
       supabase.from("shift_master").select("id, nama_shift, jam_masuk").order("nama_shift"),
+      supabase.from("audit_kebersihan_roster_harian").select("nama_tugas, nama_tugas_datang").limit(2000),
     ]);
     setKaryawan((kRes.data as Karyawan[]) ?? []);
     setShifts((sRes.data as ShiftMaster[]) ?? []);
+    const histRows = (tRes.data as { nama_tugas: string; nama_tugas_datang: string | null }[] | null) ?? [];
+    const histSet = new Set<string>(TUGAS_AWAL);
+    histRows.forEach((r) => { if (r.nama_tugas) histSet.add(r.nama_tugas); if (r.nama_tugas_datang) histSet.add(r.nama_tugas_datang); });
+    setDaftarTugas(Array.from(histSet).sort((a, b) => a.localeCompare(b)));
   }, []);
 
   const fetchRows = useCallback(async () => {
@@ -80,7 +97,8 @@ export default function AuditKebersihanRosterPage() {
   useEffect(() => { fetchRows(); }, [fetchRows]);
 
   function bukaForm(tanggal: string) {
-    setTambahUntuk(tanggal); setFKaryawanId(""); setFShiftId(""); setFTugasDatang(""); setFTugas(""); setErr("");
+    setTambahUntuk(tanggal); setFKaryawanId(""); setFShiftId("");
+    setFTugasDatang(""); setFTugasDatangBaru(false); setFTugas(""); setFTugasBaru(false); setErr("");
   }
 
   async function tambahBaris() {
@@ -94,6 +112,12 @@ export default function AuditKebersihanRosterPage() {
     }, { onConflict: "tanggal,karyawan_id" });
     setBusy(false);
     if (error) { setErr(error.message); return; }
+    setDaftarTugas((prev) => {
+      const next = new Set(prev);
+      next.add(fTugas.trim());
+      if (fTugasDatang.trim()) next.add(fTugasDatang.trim());
+      return Array.from(next).sort((a, b) => a.localeCompare(b));
+    });
     setTambahUntuk(null);
     fetchRows();
   }
@@ -190,8 +214,38 @@ export default function AuditKebersihanRosterPage() {
                       <option value="">Shift (opsional)…</option>
                       {shifts.map((s) => <option key={s.id} value={s.id}>{s.nama_shift}</option>)}
                     </select>
-                    <input className="input text-sm" placeholder="Job desc datang (opsional, mis. Cuci Meja Ngadon)" value={fTugasDatang} onChange={(e) => setFTugasDatang(e.target.value)} />
-                    <input className="input text-sm" placeholder="Job desc pulang (mis. Cuci Mesin) — wajib, ini yang diaudit" value={fTugas} onChange={(e) => setFTugas(e.target.value)} />
+                    <div>
+                      <label className="text-[11px] text-gray-500 mb-0.5 block">Job desc datang (opsional)</label>
+                      {fTugasDatangBaru ? (
+                        <div className="flex gap-1.5">
+                          <input className="input text-sm flex-1" placeholder="Tulis tugas baru…" value={fTugasDatang} onChange={(e) => setFTugasDatang(e.target.value)} autoFocus />
+                          <button onClick={() => { setFTugasDatangBaru(false); setFTugasDatang(""); }} className="text-xs text-gray-400 hover:text-gray-600 px-1">Batal</button>
+                        </div>
+                      ) : (
+                        <select className="input text-sm" value={fTugasDatang}
+                          onChange={(e) => { if (e.target.value === OPSI_BARU) { setFTugasDatangBaru(true); setFTugasDatang(""); } else setFTugasDatang(e.target.value); }}>
+                          <option value="">Tidak ada / pilih…</option>
+                          {daftarTugas.map((t) => <option key={t} value={t}>{t}</option>)}
+                          <option value={OPSI_BARU}>+ Tugas baru…</option>
+                        </select>
+                      )}
+                    </div>
+                    <div>
+                      <label className="text-[11px] text-gray-500 mb-0.5 block">Job desc pulang — wajib, ini yang diaudit</label>
+                      {fTugasBaru ? (
+                        <div className="flex gap-1.5">
+                          <input className="input text-sm flex-1" placeholder="Tulis tugas baru…" value={fTugas} onChange={(e) => setFTugas(e.target.value)} autoFocus />
+                          <button onClick={() => { setFTugasBaru(false); setFTugas(""); }} className="text-xs text-gray-400 hover:text-gray-600 px-1">Batal</button>
+                        </div>
+                      ) : (
+                        <select className="input text-sm" value={fTugas}
+                          onChange={(e) => { if (e.target.value === OPSI_BARU) { setFTugasBaru(true); setFTugas(""); } else setFTugas(e.target.value); }}>
+                          <option value="">Pilih tugas…</option>
+                          {daftarTugas.map((t) => <option key={t} value={t}>{t}</option>)}
+                          <option value={OPSI_BARU}>+ Tugas baru…</option>
+                        </select>
+                      )}
+                    </div>
                     {err && <p className="text-xs text-red-500">{err}</p>}
                     <div className="flex gap-2">
                       <button onClick={tambahBaris} disabled={busy} className="flex-1 py-1.5 rounded-lg bg-teal-500 text-white text-xs font-semibold hover:bg-teal-600 disabled:opacity-40">Simpan</button>
