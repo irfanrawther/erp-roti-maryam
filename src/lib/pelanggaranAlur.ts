@@ -58,7 +58,7 @@ export function hitungKlarifikasiDeadline(dariIso: string, tambahanJam = JAM_RES
   return new Date(new Date(dariIso).getTime() + tambahanJam * 3600_000).toISOString();
 }
 
-interface LaporanUntukAuto { id: string; karyawan_id: string; pelanggaran_id: string; tanggal_kejadian: string; respon_deadline: string | null }
+interface LaporanUntukAuto { id: string; karyawan_id: string; pelanggaran_id: string; tanggal_kejadian: string; respon_deadline: string | null; poin_override: number | null }
 
 /**
  * "Cron ringan": jalan tiap kali Manajer Operasional membuka halaman
@@ -73,12 +73,15 @@ interface LaporanUntukAuto { id: string; karyawan_id: string; pelanggaran_id: st
 export async function prosesOtomatisTanpaKlarifikasi(): Promise<number> {
   const nowIso = new Date().toISOString();
   const { data } = await supabase.from("laporan_pelanggaran")
-    .select("id, karyawan_id, pelanggaran_id, tanggal_kejadian, respon_deadline")
+    .select("id, karyawan_id, pelanggaran_id, tanggal_kejadian, respon_deadline, poin_override")
     .eq("status", "pending").lt("respon_deadline", nowIso);
   const rows = (data as LaporanUntukAuto[] | null) ?? [];
   for (const r of rows) {
-    const { data: mp } = await supabase.from("master_pelanggaran").select("poin").eq("id", r.pelanggaran_id).maybeSingle();
-    const poin = Number((mp as { poin: number } | null)?.poin ?? 0);
+    let poin = r.poin_override ?? 0;
+    if (r.poin_override == null) {
+      const { data: mp } = await supabase.from("master_pelanggaran").select("poin").eq("id", r.pelanggaran_id).maybeSingle();
+      poin = Number((mp as { poin: number } | null)?.poin ?? 0);
+    }
     await supabase.from("laporan_pelanggaran").update({
       status: "diterima", direview_oleh: "Sistem", direview_at: nowIso,
       catatan_review: "Otomatis diterima — tidak ada klarifikasi dalam 2x24 jam (Pasal 6).",

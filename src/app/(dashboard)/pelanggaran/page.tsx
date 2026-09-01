@@ -18,9 +18,12 @@ interface Laporan {
   keterangan: string | null; foto_bukti_urls: string[] | null; status: StatusLaporan; dilaporkan_oleh: string;
   catatan_review: string | null; created_at: string; respon_deadline: string | null;
   klarifikasi_diminta_at: string | null; klarifikasi_deadline: string | null; klarifikasi_catatan: string | null;
-  saksi_manual: string | null; saksi_karyawan_id: string | null;
+  saksi_manual: string | null; saksi_karyawan_id: string | null; poin_override: number | null; audit_hasil_id: string | null;
   karyawan: { nama: string } | null; master_pelanggaran: { nama_pelanggaran: string; poin: number; tier: string } | null;
   saksi: { nama: string } | null;
+}
+function poinLaporan(l: Laporan): number {
+  return l.poin_override ?? Number(l.master_pelanggaran?.poin ?? 0);
 }
 interface PoinRow { id: string; karyawan_id: string; poin: number; sumber: string; tanggal: string; kuartal: string; catatan: string | null; master_pelanggaran: { nama_pelanggaran: string } | null }
 interface SPRow { karyawan_id: string; level_sp: number; kuartal_kena: string; tanggal_sp: string }
@@ -79,7 +82,7 @@ export default function PelanggaranPage() {
   const fetchAll = useCallback(async () => {
     const [lRes, kRes, iRes] = await Promise.all([
       supabase.from("laporan_pelanggaran")
-        .select("id, karyawan_id, pelanggaran_id, tanggal_kejadian, jam_kejadian, keterangan, foto_bukti_urls, status, dilaporkan_oleh, catatan_review, created_at, respon_deadline, klarifikasi_diminta_at, klarifikasi_deadline, klarifikasi_catatan, saksi_manual, saksi_karyawan_id, karyawan:karyawan_id(nama), master_pelanggaran:pelanggaran_id(nama_pelanggaran, poin, tier), saksi:saksi_karyawan_id(nama)")
+        .select("id, karyawan_id, pelanggaran_id, tanggal_kejadian, jam_kejadian, keterangan, foto_bukti_urls, status, dilaporkan_oleh, catatan_review, created_at, respon_deadline, klarifikasi_diminta_at, klarifikasi_deadline, klarifikasi_catatan, saksi_manual, saksi_karyawan_id, poin_override, audit_hasil_id, karyawan:karyawan_id(nama), master_pelanggaran:pelanggaran_id(nama_pelanggaran, poin, tier), saksi:saksi_karyawan_id(nama)")
         .order("created_at", { ascending: false }).limit(300),
       supabase.from("karyawan").select("id, nama, kategori_dokumen").eq("status", "aktif").order("nama"),
       supabase.from("laporan_insiden_berat").select("id, jenis_insiden, tanggal_kejadian, keterangan, foto_bukti_urls, status, dilaporkan_oleh, karyawan:karyawan_id(nama)").order("created_at", { ascending: false }).limit(100),
@@ -103,7 +106,7 @@ export default function PelanggaranPage() {
     if (!user || !l.master_pelanggaran) return;
     setBusyId(l.id);
     await supabase.from("laporan_pelanggaran").update({ status: "diterima", direview_oleh: user.nama, direview_at: new Date().toISOString() }).eq("id", l.id);
-    await tambahPoin({ karyawan_id: l.karyawan_id, pelanggaran_id: l.pelanggaran_id, poin: Number(l.master_pelanggaran.poin), sumber: "manual", tanggal: l.tanggal_kejadian, laporan_id: l.id });
+    await tambahPoin({ karyawan_id: l.karyawan_id, pelanggaran_id: l.pelanggaran_id, poin: poinLaporan(l), sumber: "manual", tanggal: l.tanggal_kejadian, laporan_id: l.id });
     setBusyId(null); fetchAll();
   }
   async function tolakLangsung(l: Laporan) {
@@ -131,7 +134,7 @@ export default function PelanggaranPage() {
     await supabase.from("laporan_pelanggaran").update({
       status: "diterima", direview_oleh: user.nama, direview_at: new Date().toISOString(), catatan_review: catatan,
     }).eq("id", l.id);
-    await tambahPoin({ karyawan_id: l.karyawan_id, pelanggaran_id: l.pelanggaran_id, poin: Number(l.master_pelanggaran.poin), sumber: "manual", tanggal: l.tanggal_kejadian, laporan_id: l.id, catatan });
+    await tambahPoin({ karyawan_id: l.karyawan_id, pelanggaran_id: l.pelanggaran_id, poin: poinLaporan(l), sumber: "manual", tanggal: l.tanggal_kejadian, laporan_id: l.id, catatan });
     setBusyId(null); fetchAll();
   }
   async function simpanKlarifikasi(keputusan: "diterima" | "ditolak") {
@@ -143,7 +146,7 @@ export default function PelanggaranPage() {
       klarifikasi_catatan: klarifikasiCatatan.trim(), catatan_review: klarifikasiCatatan.trim(),
     }).eq("id", l.id);
     if (keputusan === "diterima" && l.master_pelanggaran) {
-      await tambahPoin({ karyawan_id: l.karyawan_id, pelanggaran_id: l.pelanggaran_id, poin: Number(l.master_pelanggaran.poin), sumber: "manual", tanggal: l.tanggal_kejadian, laporan_id: l.id, catatan: klarifikasiCatatan.trim() });
+      await tambahPoin({ karyawan_id: l.karyawan_id, pelanggaran_id: l.pelanggaran_id, poin: poinLaporan(l), sumber: "manual", tanggal: l.tanggal_kejadian, laporan_id: l.id, catatan: klarifikasiCatatan.trim() });
     }
     setBusyId(null); setKlarifikasiModal(null); setKlarifikasiCatatan(""); fetchAll();
   }
@@ -227,7 +230,7 @@ export default function PelanggaranPage() {
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
                         <p className="font-semibold text-sm text-gray-800">{l.karyawan?.nama}</p>
-                        <p className="text-xs text-gray-600">{l.master_pelanggaran?.nama_pelanggaran} <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${TIER_BADGE[l.master_pelanggaran?.tier ?? ""] ?? "bg-gray-100 text-gray-600"}`}>{l.master_pelanggaran?.poin} poin</span></p>
+                        <p className="text-xs text-gray-600">{l.master_pelanggaran?.nama_pelanggaran} <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${TIER_BADGE[l.master_pelanggaran?.tier ?? ""] ?? "bg-gray-100 text-gray-600"}`}>{poinLaporan(l)} poin</span>{l.audit_hasil_id && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-teal-100 text-teal-700 ml-1">Audit Kebersihan</span>}</p>
                         <p className="text-xs text-gray-500 mt-0.5">{l.tanggal_kejadian}{l.jam_kejadian ? ` ${l.jam_kejadian.slice(0, 5)}` : ""} · oleh {l.dilaporkan_oleh}</p>
                         {l.keterangan && <p className="text-xs text-gray-600 italic mt-0.5">&ldquo;{l.keterangan}&rdquo;</p>}
                         {(l.saksi?.nama || l.saksi_manual) && <p className="text-[11px] text-gray-400 mt-0.5">Saksi: {l.saksi?.nama ?? l.saksi_manual}</p>}
@@ -242,7 +245,7 @@ export default function PelanggaranPage() {
                       )}
                     </div>
                     <div className="flex gap-2">
-                      <button onClick={() => terimaLangsung(l)} disabled={busyId === l.id} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-green-500 text-white hover:bg-green-600 disabled:opacity-40">Terima Sekarang (+{l.master_pelanggaran?.poin} poin)</button>
+                      <button onClick={() => terimaLangsung(l)} disabled={busyId === l.id} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-green-500 text-white hover:bg-green-600 disabled:opacity-40">Terima Sekarang (+{poinLaporan(l)} poin)</button>
                       <button onClick={() => tolakLangsung(l)} disabled={busyId === l.id} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-red-100 text-red-600 hover:bg-red-200 disabled:opacity-40">Tolak</button>
                     </div>
                   </div>
@@ -259,7 +262,7 @@ export default function PelanggaranPage() {
                   <div key={l.id} className={`rounded-xl border p-3 space-y-2 ${sisa?.lewat ? "border-blue-300 bg-blue-50/60" : "border-blue-100 bg-blue-50/30"}`}>
                     <div>
                       <p className="font-semibold text-sm text-gray-800">{l.karyawan?.nama}</p>
-                      <p className="text-xs text-gray-600">{l.master_pelanggaran?.nama_pelanggaran} <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600">{l.master_pelanggaran?.poin} poin</span></p>
+                      <p className="text-xs text-gray-600">{l.master_pelanggaran?.nama_pelanggaran} <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600">{poinLaporan(l)} poin</span>{l.audit_hasil_id && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-teal-100 text-teal-700 ml-1">Audit Kebersihan</span>}</p>
                       <p className="text-xs text-gray-500 mt-0.5">Minta klarifikasi sejak {l.klarifikasi_diminta_at ? tglWaktu(l.klarifikasi_diminta_at) : "-"}</p>
                       {sisa && <p className={`text-[11px] mt-1 flex items-center gap-1 ${sisa.lewat ? "text-blue-700 font-semibold" : "text-gray-400"}`}><Clock size={11} /> {sisa.teks}</p>}
                     </div>
@@ -384,7 +387,7 @@ export default function PelanggaranPage() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="font-bold text-gray-800">{klarifikasiModal.karyawan?.nama}</p>
-                <p className="text-xs text-gray-500">{klarifikasiModal.master_pelanggaran?.nama_pelanggaran} · {klarifikasiModal.master_pelanggaran?.poin} poin</p>
+                <p className="text-xs text-gray-500">{klarifikasiModal.master_pelanggaran?.nama_pelanggaran} · {poinLaporan(klarifikasiModal)} poin</p>
               </div>
               <button onClick={() => setKlarifikasiModal(null)} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
             </div>
