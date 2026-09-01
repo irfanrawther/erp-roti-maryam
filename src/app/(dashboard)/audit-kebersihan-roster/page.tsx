@@ -82,7 +82,11 @@ export default function AuditKebersihanRosterPage() {
 
     const byHari: Record<string, BarisHari[]> = {};
     hariList.forEach((tgl) => {
-      const shiftHariItu = saRows.filter((r) => r.tanggal === tgl).sort((a, b) => (a.karyawan?.nama ?? "").localeCompare(b.karyawan?.nama ?? ""));
+      const shiftHariItu = saRows.filter((r) => r.tanggal === tgl).sort((a, b) => {
+        const shiftCmp = (a.shift_master?.nama_shift ?? "").localeCompare(b.shift_master?.nama_shift ?? "", undefined, { numeric: true });
+        if (shiftCmp !== 0) return shiftCmp;
+        return (a.karyawan?.nama ?? "").localeCompare(b.karyawan?.nama ?? "");
+      });
       byHari[tgl] = shiftHariItu.map((r) => {
         const roster = rhRows.find((x) => x.tanggal === tgl && x.karyawan_id === r.karyawan_id);
         return {
