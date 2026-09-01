@@ -4,13 +4,14 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { getUserSession, type UserSession } from "@/lib/auth";
 import { getCapabilities, homeRoute } from "@/lib/permissions";
-import { ClipboardList, ChevronLeft, ChevronRight, Plus, Trash2, Copy } from "lucide-react";
+import { ClipboardList, ChevronLeft, ChevronRight, ChevronDown, Copy, Check } from "lucide-react";
 
-interface Karyawan { id: string; nama: string; kategori_dokumen: string | null }
-interface ShiftMaster { id: string; nama_shift: string; jam_masuk: string }
-interface RosterRow {
-  id: string; tanggal: string; karyawan_id: string; shift_id: string | null; nama_tugas: string; nama_tugas_datang: string | null; urutan: number;
-  karyawan: { nama: string } | null; shift_master: { nama_shift: string } | null;
+interface ShiftAssignRow { karyawan_id: string; shift_id: string | null; karyawan: { nama: string } | null; shift_master: { nama_shift: string } | null }
+interface RosterRow { id: string; tanggal: string; karyawan_id: string; shift_id: string | null; nama_tugas: string; nama_tugas_datang: string | null }
+
+interface BarisHari {
+  karyawan_id: string; nama: string; shift_id: string | null; shift_nama: string | null;
+  roster_id: string | null; tugas_datang: string; tugas_pulang: string;
 }
 
 const HARI = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
@@ -29,10 +30,9 @@ function addDaysStr(iso: string, n: number) {
   const d = new Date(`${iso}T00:00:00+07:00`); d.setDate(d.getDate() + n);
   return d.toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" });
 }
-// Senin minggu yang memuat tanggal `iso`
 function seninMinggu(iso: string): string {
   const d = new Date(`${iso}T00:00:00+07:00`);
-  const dow = d.getDay(); // 0=Minggu..6=Sabtu
+  const dow = d.getDay();
   const mundur = dow === 0 ? 6 : dow - 1;
   return addDaysStr(iso, -mundur);
 }
@@ -45,212 +45,204 @@ export default function AuditKebersihanRosterPage() {
   const router = useRouter();
   const [user, setUser] = useState<UserSession | null>(null);
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [savingKey, setSavingKey] = useState<string | null>(null);
+  const [savedKey, setSavedKey] = useState<string | null>(null);
 
-  const [seninAwal, setSeninAwal] = useState(() => addDaysStr(seninMinggu(todayWIB()), 7)); // default: minggu depan
+  const [seninAwal, setSeninAwal] = useState(() => addDaysStr(seninMinggu(todayWIB()), 7));
   const hariList = useMemo(() => Array.from({ length: 7 }, (_, i) => addDaysStr(seninAwal, i)), [seninAwal]);
+  const [expanded, setExpanded] = useState<string | null>(hariList[0]);
 
-  const [karyawan, setKaryawan] = useState<Karyawan[]>([]);
-  const [shifts, setShifts] = useState<ShiftMaster[]>([]);
-  const [rows, setRows] = useState<RosterRow[]>([]);
+  const [dataHari, setDataHari] = useState<Record<string, BarisHari[]>>({});
   const [daftarTugas, setDaftarTugas] = useState<string[]>(TUGAS_AWAL);
-
-  const [tambahUntuk, setTambahUntuk] = useState<string | null>(null); // tanggal yang lagi diisi form tambah
-  const [fKaryawanId, setFKaryawanId] = useState("");
-  const [fShiftId, setFShiftId] = useState("");
-  const [fTugasDatang, setFTugasDatang] = useState("");
-  const [fTugasDatangBaru, setFTugasDatangBaru] = useState(false);
-  const [fTugas, setFTugas] = useState("");
-  const [fTugasBaru, setFTugasBaru] = useState(false);
 
   useEffect(() => {
     const u = getUserSession(); setUser(u);
     if (!u || !getCapabilities(u).auditKebersihan) { router.replace(homeRoute(u)); return; }
-    fetchMaster();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const fetchMaster = useCallback(async () => {
-    const [kRes, sRes, tRes] = await Promise.all([
-      supabase.from("karyawan").select("id, nama, kategori_dokumen").eq("status", "aktif").order("nama"),
-      supabase.from("shift_master").select("id, nama_shift, jam_masuk").order("nama_shift"),
+  const muatMinggu = useCallback(async () => {
+    setLoading(true);
+    const [saRes, rhRes, histRes] = await Promise.all([
+      supabase.from("shift_assignment")
+        .select("tanggal, karyawan_id, shift_id, karyawan:karyawan_id(nama), shift_master:shift_id(nama_shift)")
+        .gte("tanggal", hariList[0]).lte("tanggal", hariList[6]).eq("is_libur", false).not("shift_id", "is", null),
+      supabase.from("audit_kebersihan_roster_harian")
+        .select("id, tanggal, karyawan_id, shift_id, nama_tugas, nama_tugas_datang")
+        .gte("tanggal", hariList[0]).lte("tanggal", hariList[6]).eq("is_aktif", true),
       supabase.from("audit_kebersihan_roster_harian").select("nama_tugas, nama_tugas_datang").limit(2000),
     ]);
-    setKaryawan((kRes.data as Karyawan[]) ?? []);
-    setShifts((sRes.data as ShiftMaster[]) ?? []);
-    const histRows = (tRes.data as { nama_tugas: string; nama_tugas_datang: string | null }[] | null) ?? [];
+    const saRows = (saRes.data as unknown as (ShiftAssignRow & { tanggal: string })[] | null) ?? [];
+    const rhRows = (rhRes.data as RosterRow[] | null) ?? [];
+    const histRows = (histRes.data as { nama_tugas: string; nama_tugas_datang: string | null }[] | null) ?? [];
+
     const histSet = new Set<string>(TUGAS_AWAL);
     histRows.forEach((r) => { if (r.nama_tugas) histSet.add(r.nama_tugas); if (r.nama_tugas_datang) histSet.add(r.nama_tugas_datang); });
     setDaftarTugas(Array.from(histSet).sort((a, b) => a.localeCompare(b)));
-  }, []);
 
-  const fetchRows = useCallback(async () => {
-    setLoading(true);
-    const { data } = await supabase.from("audit_kebersihan_roster_harian")
-      .select("id, tanggal, karyawan_id, shift_id, nama_tugas, nama_tugas_datang, urutan, karyawan:karyawan_id(nama), shift_master:shift_id(nama_shift)")
-      .gte("tanggal", hariList[0]).lte("tanggal", hariList[6]).eq("is_aktif", true)
-      .order("tanggal").order("urutan");
-    setRows((data as unknown as RosterRow[]) ?? []);
+    const byHari: Record<string, BarisHari[]> = {};
+    hariList.forEach((tgl) => {
+      const shiftHariItu = saRows.filter((r) => r.tanggal === tgl).sort((a, b) => (a.karyawan?.nama ?? "").localeCompare(b.karyawan?.nama ?? ""));
+      byHari[tgl] = shiftHariItu.map((r) => {
+        const roster = rhRows.find((x) => x.tanggal === tgl && x.karyawan_id === r.karyawan_id);
+        return {
+          karyawan_id: r.karyawan_id, nama: r.karyawan?.nama ?? "-", shift_id: r.shift_id, shift_nama: r.shift_master?.nama_shift ?? null,
+          roster_id: roster?.id ?? null, tugas_datang: roster?.nama_tugas_datang ?? "", tugas_pulang: roster?.nama_tugas ?? "",
+        };
+      });
+    });
+    setDataHari(byHari);
     setLoading(false);
   }, [hariList]);
 
-  useEffect(() => { fetchRows(); }, [fetchRows]);
+  useEffect(() => { muatMinggu(); }, [muatMinggu]);
 
-  function bukaForm(tanggal: string) {
-    setTambahUntuk(tanggal); setFKaryawanId(""); setFShiftId("");
-    setFTugasDatang(""); setFTugasDatangBaru(false); setFTugas(""); setFTugasBaru(false); setErr("");
-  }
+  async function simpanSel(tgl: string, baris: BarisHari, field: "tugas_datang" | "tugas_pulang", nilai: string) {
+    const key = `${tgl}|${baris.karyawan_id}`;
+    setSavingKey(key); setErr("");
+    const updated: BarisHari = { ...baris, [field]: nilai };
+    setDataHari((d) => ({ ...d, [tgl]: d[tgl].map((b) => b.karyawan_id === baris.karyawan_id ? updated : b) }));
 
-  async function tambahBaris() {
-    if (!tambahUntuk || !fKaryawanId || !fTugas.trim()) { setErr("Karyawan dan job desc pulang wajib diisi."); return; }
-    setBusy(true); setErr("");
-    const urutan = rows.filter((r) => r.tanggal === tambahUntuk).length;
-    const { error } = await supabase.from("audit_kebersihan_roster_harian").upsert({
-      tanggal: tambahUntuk, karyawan_id: fKaryawanId, shift_id: fShiftId || null,
-      nama_tugas_datang: fTugasDatang.trim() || null, nama_tugas: fTugas.trim(),
-      urutan, created_by: user?.nama ?? null, is_aktif: true,
-    }, { onConflict: "tanggal,karyawan_id" });
-    setBusy(false);
+    const { data, error } = await supabase.from("audit_kebersihan_roster_harian").upsert({
+      id: baris.roster_id ?? undefined,
+      tanggal: tgl, karyawan_id: baris.karyawan_id, shift_id: baris.shift_id,
+      nama_tugas_datang: updated.tugas_datang.trim() || null, nama_tugas: updated.tugas_pulang.trim(),
+      created_by: user?.nama ?? null, is_aktif: true,
+    }, { onConflict: "tanggal,karyawan_id" }).select("id").single();
+
+    setSavingKey(null);
     if (error) { setErr(error.message); return; }
-    setDaftarTugas((prev) => {
-      const next = new Set(prev);
-      next.add(fTugas.trim());
-      if (fTugasDatang.trim()) next.add(fTugasDatang.trim());
-      return Array.from(next).sort((a, b) => a.localeCompare(b));
-    });
-    setTambahUntuk(null);
-    fetchRows();
+    const newId = (data as { id: string } | null)?.id ?? baris.roster_id;
+    setDataHari((d) => ({ ...d, [tgl]: d[tgl].map((b) => b.karyawan_id === baris.karyawan_id ? { ...updated, roster_id: newId } : b) }));
+    if (nilai.trim() && !daftarTugas.includes(nilai.trim())) {
+      setDaftarTugas((prev) => Array.from(new Set([...prev, nilai.trim()])).sort((a, b) => a.localeCompare(b)));
+    }
+    setSavedKey(key);
+    setTimeout(() => setSavedKey((k) => (k === key ? null : k)), 1500);
   }
 
-  async function hapusBaris(id: string) {
-    if (!confirm("Hapus baris ini?")) return;
-    setBusy(true);
-    await supabase.from("audit_kebersihan_roster_harian").delete().eq("id", id);
-    setBusy(false);
-    fetchRows();
+  function pilihAtauBaru(tgl: string, baris: BarisHari, field: "tugas_datang" | "tugas_pulang", value: string) {
+    if (value === OPSI_BARU) {
+      const teks = prompt("Tulis tugas baru:");
+      if (teks && teks.trim()) simpanSel(tgl, baris, field, teks.trim());
+      return;
+    }
+    simpanSel(tgl, baris, field, value);
   }
 
   async function salinDariMingguLalu() {
-    if (rows.length > 0 && !confirm("Minggu ini sudah ada isian. Tetap salin dari minggu lalu? (baris yang sudah ada tidak akan ditimpa)")) return;
-    setBusy(true); setErr("");
+    const totalIsi = Object.values(dataHari).reduce((n, rows) => n + rows.filter((r) => r.tugas_pulang).length, 0);
+    if (totalIsi > 0 && !confirm("Minggu ini sudah ada isian. Tetap salin dari minggu lalu? (baris yang sudah diisi tidak akan ditimpa)")) return;
+    setErr("");
     const seninLalu = addDaysStr(seninAwal, -7);
     const { data: lama } = await supabase.from("audit_kebersihan_roster_harian")
-      .select("tanggal, karyawan_id, shift_id, nama_tugas, nama_tugas_datang, urutan")
+      .select("tanggal, karyawan_id, shift_id, nama_tugas, nama_tugas_datang")
       .gte("tanggal", seninLalu).lte("tanggal", addDaysStr(seninLalu, 6)).eq("is_aktif", true);
-    const lamaRows = (lama as { tanggal: string; karyawan_id: string; shift_id: string | null; nama_tugas: string; nama_tugas_datang: string | null; urutan: number }[] | null) ?? [];
-    if (lamaRows.length === 0) { setErr("Minggu lalu tidak ada data untuk disalin."); setBusy(false); return; }
-    const existing = new Set(rows.map((r) => `${r.tanggal}|${r.karyawan_id}`));
+    const lamaRows = (lama as { tanggal: string; karyawan_id: string; shift_id: string | null; nama_tugas: string; nama_tugas_datang: string | null }[] | null) ?? [];
+    if (lamaRows.length === 0) { setErr("Minggu lalu tidak ada data untuk disalin."); return; }
+    const existing = new Set<string>();
+    Object.entries(dataHari).forEach(([tgl, rows]) => rows.forEach((r) => { if (r.tugas_pulang) existing.add(`${tgl}|${r.karyawan_id}`); }));
     const baru = lamaRows
       .map((r) => ({ ...r, tanggal: addDaysStr(r.tanggal, 7) }))
       .filter((r) => !existing.has(`${r.tanggal}|${r.karyawan_id}`))
       .map((r) => ({ ...r, created_by: user?.nama ?? null, is_aktif: true }));
-    if (baru.length > 0) {
-      await supabase.from("audit_kebersihan_roster_harian").upsert(baru, { onConflict: "tanggal,karyawan_id" });
-    }
-    setBusy(false);
-    fetchRows();
+    if (baru.length > 0) await supabase.from("audit_kebersihan_roster_harian").upsert(baru, { onConflict: "tanggal,karyawan_id" });
+    muatMinggu();
   }
 
   return (
-    <div className="p-4 space-y-4 max-w-2xl mx-auto pb-24">
+    <div className="p-4 space-y-4 max-w-3xl mx-auto pb-24">
       <div className="flex items-center gap-2">
         <ClipboardList size={20} className="text-teal-500" />
         <h1 className="text-xl font-bold text-gray-800">Roster Job Desc</h1>
       </div>
       <p className="text-sm text-gray-500">
-        Isi siapa kerja apa untuk minggu depan. Job Desc Pulang wajib diisi (ini yang diaudit SPV setiap hari); Job Desc Datang opsional, cuma tampil ke karyawan di Dashboard Saya. Assignment boleh beda-beda tiap minggu.
+        Nama karyawan otomatis dari jadwal shift. Job Desc Pulang wajib (ini yang diaudit SPV setiap hari); Job Desc Datang opsional, cuma tampil ke karyawan di Dashboard Saya. Klik dropdown langsung tersimpan.
       </p>
 
       <div className="card flex items-center justify-between gap-2">
         <button onClick={() => setSeninAwal(addDaysStr(seninAwal, -7))} className="p-2 rounded-lg hover:bg-gray-50 text-gray-500"><ChevronLeft size={18} /></button>
         <div className="text-center">
           <p className="text-sm font-bold text-gray-800">{labelTglPendek(hariList[0])} – {labelTglPendek(hariList[6])} {hariList[0].slice(0, 4)}</p>
-          <button onClick={salinDariMingguLalu} disabled={busy}
-            className="text-xs font-semibold text-teal-600 hover:text-teal-700 flex items-center gap-1 mx-auto mt-1 disabled:opacity-40">
+          <button onClick={salinDariMingguLalu} className="text-xs font-semibold text-teal-600 hover:text-teal-700 flex items-center gap-1 mx-auto mt-1">
             <Copy size={12} /> Salin dari minggu lalu
           </button>
         </div>
         <button onClick={() => setSeninAwal(addDaysStr(seninAwal, 7))} className="p-2 rounded-lg hover:bg-gray-50 text-gray-500"><ChevronRight size={18} /></button>
       </div>
 
-      {err && !tambahUntuk && <p className="text-sm text-red-500 text-center">{err}</p>}
+      {err && <p className="text-sm text-red-500 text-center">{err}</p>}
 
       {loading ? <p className="text-gray-400 text-sm text-center py-6">Memuat…</p> : (
-        <div className="space-y-3">
+        <div className="space-y-2">
           {hariList.map((tgl) => {
             const dow = new Date(`${tgl}T00:00:00+07:00`).getDay();
-            const rowsHari = rows.filter((r) => r.tanggal === tgl);
+            const rows = dataHari[tgl] ?? [];
+            const jumlahIsi = rows.filter((r) => r.tugas_pulang).length;
+            const buka = expanded === tgl;
             return (
-              <div key={tgl} className="card space-y-2">
-                <div className="flex items-center justify-between">
-                  <p className="font-semibold text-sm text-gray-700">{HARI[dow]}, {labelTglPendek(tgl)}</p>
-                  <button onClick={() => bukaForm(tgl)} className="text-xs font-semibold text-teal-600 hover:text-teal-700 flex items-center gap-1">
-                    <Plus size={12} /> Tambah
-                  </button>
-                </div>
-
-                {rowsHari.length === 0 && tambahUntuk !== tgl && <p className="text-xs text-gray-400 py-1">Belum ada assignment</p>}
-
-                {rowsHari.map((r) => (
-                  <div key={r.id} className="flex items-center justify-between gap-2 py-1.5 border-b border-gray-50 last:border-0">
-                    <div className="min-w-0">
-                      <p className="text-sm text-gray-800">
-                        <b>{r.karyawan?.nama}</b>{r.shift_master && <span className="text-gray-400"> · {r.shift_master.nama_shift}</span>}
-                      </p>
-                      {r.nama_tugas_datang && <p className="text-xs text-gray-500 truncate">Datang: {r.nama_tugas_datang}</p>}
-                      <p className="text-xs text-gray-500 truncate">Pulang: {r.nama_tugas}</p>
-                    </div>
-                    <button onClick={() => hapusBaris(r.id)} className="text-gray-300 hover:text-red-500 shrink-0"><Trash2 size={14} /></button>
+              <div key={tgl} className="card overflow-hidden !p-0">
+                <button onClick={() => setExpanded(buka ? null : tgl)} className="w-full flex items-center justify-between px-4 py-3 hover:bg-gray-50">
+                  <div className="flex items-center gap-2">
+                    <ChevronDown size={16} className={`text-gray-400 transition-transform ${buka ? "rotate-180" : ""}`} />
+                    <span className="font-semibold text-sm text-gray-700">{HARI[dow]}, {labelTglPendek(tgl)}</span>
                   </div>
-                ))}
+                  <span className="text-xs text-gray-400">{rows.length === 0 ? "Tidak ada shift" : `${jumlahIsi}/${rows.length} diisi`}</span>
+                </button>
 
-                {tambahUntuk === tgl && (
-                  <div className="rounded-xl bg-teal-50 border border-teal-100 p-2.5 space-y-2 mt-1">
-                    <select className="input text-sm" value={fKaryawanId} onChange={(e) => setFKaryawanId(e.target.value)}>
-                      <option value="">Pilih karyawan…</option>
-                      {karyawan.map((k) => <option key={k.id} value={k.id}>{k.nama}</option>)}
-                    </select>
-                    <select className="input text-sm" value={fShiftId} onChange={(e) => setFShiftId(e.target.value)}>
-                      <option value="">Shift (opsional)…</option>
-                      {shifts.map((s) => <option key={s.id} value={s.id}>{s.nama_shift}</option>)}
-                    </select>
-                    <div>
-                      <label className="text-[11px] text-gray-500 mb-0.5 block">Job desc datang (opsional)</label>
-                      {fTugasDatangBaru ? (
-                        <div className="flex gap-1.5">
-                          <input className="input text-sm flex-1" placeholder="Tulis tugas baru…" value={fTugasDatang} onChange={(e) => setFTugasDatang(e.target.value)} autoFocus />
-                          <button onClick={() => { setFTugasDatangBaru(false); setFTugasDatang(""); }} className="text-xs text-gray-400 hover:text-gray-600 px-1">Batal</button>
-                        </div>
-                      ) : (
-                        <select className="input text-sm" value={fTugasDatang}
-                          onChange={(e) => { if (e.target.value === OPSI_BARU) { setFTugasDatangBaru(true); setFTugasDatang(""); } else setFTugasDatang(e.target.value); }}>
-                          <option value="">Tidak ada / pilih…</option>
-                          {daftarTugas.map((t) => <option key={t} value={t}>{t}</option>)}
-                          <option value={OPSI_BARU}>+ Tugas baru…</option>
-                        </select>
-                      )}
-                    </div>
-                    <div>
-                      <label className="text-[11px] text-gray-500 mb-0.5 block">Job desc pulang — wajib, ini yang diaudit</label>
-                      {fTugasBaru ? (
-                        <div className="flex gap-1.5">
-                          <input className="input text-sm flex-1" placeholder="Tulis tugas baru…" value={fTugas} onChange={(e) => setFTugas(e.target.value)} autoFocus />
-                          <button onClick={() => { setFTugasBaru(false); setFTugas(""); }} className="text-xs text-gray-400 hover:text-gray-600 px-1">Batal</button>
-                        </div>
-                      ) : (
-                        <select className="input text-sm" value={fTugas}
-                          onChange={(e) => { if (e.target.value === OPSI_BARU) { setFTugasBaru(true); setFTugas(""); } else setFTugas(e.target.value); }}>
-                          <option value="">Pilih tugas…</option>
-                          {daftarTugas.map((t) => <option key={t} value={t}>{t}</option>)}
-                          <option value={OPSI_BARU}>+ Tugas baru…</option>
-                        </select>
-                      )}
-                    </div>
-                    {err && <p className="text-xs text-red-500">{err}</p>}
-                    <div className="flex gap-2">
-                      <button onClick={tambahBaris} disabled={busy} className="flex-1 py-1.5 rounded-lg bg-teal-500 text-white text-xs font-semibold hover:bg-teal-600 disabled:opacity-40">Simpan</button>
-                      <button onClick={() => setTambahUntuk(null)} className="flex-1 py-1.5 rounded-lg border border-gray-200 text-gray-600 text-xs font-semibold hover:bg-gray-50">Batal</button>
-                    </div>
+                {buka && (
+                  <div className="px-4 pb-4">
+                    {rows.length === 0 ? (
+                      <p className="text-xs text-gray-400 py-2">Belum ada jadwal shift untuk tanggal ini (isi dulu jadwal shift-nya).</p>
+                    ) : (
+                      <div className="overflow-x-auto -mx-1">
+                        <table className="w-full text-sm min-w-[560px]">
+                          <thead>
+                            <tr className="text-left text-[11px] text-gray-400 uppercase">
+                              <th className="font-semibold pb-1.5 pr-2">Nama</th>
+                              <th className="font-semibold pb-1.5 pr-2">Job Desc Datang</th>
+                              <th className="font-semibold pb-1.5 pr-2">Job Desc Pulang</th>
+                              <th className="w-5"></th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {rows.map((r) => {
+                              const key = `${tgl}|${r.karyawan_id}`;
+                              return (
+                                <tr key={r.karyawan_id} className="border-t border-gray-50">
+                                  <td className="py-1.5 pr-2 align-top">
+                                    <p className="font-medium text-gray-700">{r.nama}</p>
+                                    {r.shift_nama && <p className="text-[10px] text-gray-400">{r.shift_nama}</p>}
+                                  </td>
+                                  <td className="py-1.5 pr-2 align-top">
+                                    <select className="input text-xs py-1.5" value={r.tugas_datang}
+                                      onChange={(e) => pilihAtauBaru(tgl, r, "tugas_datang", e.target.value)}>
+                                      <option value="">—</option>
+                                      {r.tugas_datang && !daftarTugas.includes(r.tugas_datang) && <option value={r.tugas_datang}>{r.tugas_datang}</option>}
+                                      {daftarTugas.map((t) => <option key={t} value={t}>{t}</option>)}
+                                      <option value={OPSI_BARU}>+ Tugas baru…</option>
+                                    </select>
+                                  </td>
+                                  <td className="py-1.5 pr-2 align-top">
+                                    <select className="input text-xs py-1.5" value={r.tugas_pulang}
+                                      onChange={(e) => pilihAtauBaru(tgl, r, "tugas_pulang", e.target.value)}>
+                                      <option value="">Pilih…</option>
+                                      {r.tugas_pulang && !daftarTugas.includes(r.tugas_pulang) && <option value={r.tugas_pulang}>{r.tugas_pulang}</option>}
+                                      {daftarTugas.map((t) => <option key={t} value={t}>{t}</option>)}
+                                      <option value={OPSI_BARU}>+ Tugas baru…</option>
+                                    </select>
+                                  </td>
+                                  <td className="py-1.5 align-top text-center">
+                                    {savingKey === key && <span className="text-[10px] text-gray-400">…</span>}
+                                    {savedKey === key && <Check size={13} className="text-green-500" />}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
