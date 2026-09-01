@@ -25,6 +25,7 @@ export interface Capabilities {
   laporPelanggaran: boolean; // SPV lapor pelanggaran
   pelanggaran: boolean;   // Super Admin kelola pelanggaran & poin
   aturan: boolean;        // Super Admin kelola rules engine (nominal/poin/jam)
+  auditKebersihan: boolean; // SPV isi audit kebersihan terjadwal + roster harian
   isSuperAdmin: boolean;
 }
 
@@ -33,7 +34,7 @@ const NONE: Capabilities = {
   adonan: false, rendam: false, packingFreezer: false, produksiRiwayat: false,
   pengiriman: false, produkReject: false, kelolaUser: false, masterResep: false,
   stockOpname: false, absensi: false, daftarIzin: false, dokumen: false,
-  laporPelanggaran: false, pelanggaran: false, aturan: false, isSuperAdmin: false,
+  laporPelanggaran: false, pelanggaran: false, aturan: false, auditKebersihan: false, isSuperAdmin: false,
 };
 
 export function getCapabilities(user: UserSession | null): Capabilities {
@@ -47,7 +48,7 @@ export function getCapabilities(user: UserSession | null): Capabilities {
       adonan: true, rendam: true, packingFreezer: true, produksiRiwayat: true,
       pengiriman: true, produkReject: true, kelolaUser: true, masterResep: true,
       stockOpname: true, absensi: true, daftarIzin: false, dokumen: true,
-      laporPelanggaran: false, pelanggaran: true, aturan: true, isSuperAdmin: true,
+      laporPelanggaran: false, pelanggaran: true, aturan: true, auditKebersihan: true, isSuperAdmin: true,
     };
   }
 
@@ -67,9 +68,9 @@ export function getCapabilities(user: UserSession | null): Capabilities {
   if (role === "spv") {
     // SPV: + Dashboard (card Stok Cane saja) + Stok Produk Reject (read-only)
     if (scope === "packing") {
-      return { ...NONE, dashboard: true, produkReject: true, produksiFlow: true, packingFreezer: true, produksiRiwayat: true, daftarIzin: true, laporPelanggaran: true };
+      return { ...NONE, dashboard: true, produkReject: true, produksiFlow: true, packingFreezer: true, produksiRiwayat: true, daftarIzin: true, laporPelanggaran: true, auditKebersihan: true };
     }
-    return { ...NONE, dashboard: true, produkReject: true, produksiFlow: true, adonan: true, rendam: true, produksiRiwayat: true, daftarIzin: true, laporPelanggaran: true };
+    return { ...NONE, dashboard: true, produkReject: true, produksiFlow: true, adonan: true, rendam: true, produksiRiwayat: true, daftarIzin: true, laporPelanggaran: true, auditKebersihan: true };
   }
 
   return { ...NONE };

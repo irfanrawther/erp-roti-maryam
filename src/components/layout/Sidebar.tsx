@@ -18,6 +18,7 @@ import {
   FileSignature,
   ShieldAlert,
   SlidersHorizontal,
+  ClipboardCheck,
   LogOut,
   X,
 } from "lucide-react";
@@ -43,6 +44,8 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
     { href: "/stock-opname",  label: "Stock Opname",  icon: ClipboardList,   show: caps.stockOpname },
     { href: "/daftar-izin",   label: "Daftar Izin",   icon: CalendarClock,   show: caps.daftarIzin },
     { href: "/lapor-pelanggaran", label: "Lapor Pelanggaran", icon: ShieldAlert, show: caps.laporPelanggaran },
+    { href: "/audit-kebersihan", label: "Audit Kebersihan", icon: ClipboardCheck, show: caps.auditKebersihan },
+    { href: "/audit-kebersihan-roster", label: "Roster Job Desc", icon: CalendarClock, show: caps.auditKebersihan },
   ].filter((i) => i.show);
 
   const adminItems = [
