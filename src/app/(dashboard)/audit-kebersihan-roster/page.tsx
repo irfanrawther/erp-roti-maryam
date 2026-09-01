@@ -9,7 +9,7 @@ import { ClipboardList, ChevronLeft, ChevronRight, Plus, Trash2, Copy } from "lu
 interface Karyawan { id: string; nama: string; kategori_dokumen: string | null }
 interface ShiftMaster { id: string; nama_shift: string; jam_masuk: string }
 interface RosterRow {
-  id: string; tanggal: string; karyawan_id: string; shift_id: string | null; nama_tugas: string; urutan: number;
+  id: string; tanggal: string; karyawan_id: string; shift_id: string | null; nama_tugas: string; nama_tugas_datang: string | null; urutan: number;
   karyawan: { nama: string } | null; shift_master: { nama_shift: string } | null;
 }
 
@@ -49,6 +49,7 @@ export default function AuditKebersihanRosterPage() {
   const [tambahUntuk, setTambahUntuk] = useState<string | null>(null); // tanggal yang lagi diisi form tambah
   const [fKaryawanId, setFKaryawanId] = useState("");
   const [fShiftId, setFShiftId] = useState("");
+  const [fTugasDatang, setFTugasDatang] = useState("");
   const [fTugas, setFTugas] = useState("");
 
   useEffect(() => {
@@ -69,7 +70,7 @@ export default function AuditKebersihanRosterPage() {
   const fetchRows = useCallback(async () => {
     setLoading(true);
     const { data } = await supabase.from("audit_kebersihan_roster_harian")
-      .select("id, tanggal, karyawan_id, shift_id, nama_tugas, urutan, karyawan:karyawan_id(nama), shift_master:shift_id(nama_shift)")
+      .select("id, tanggal, karyawan_id, shift_id, nama_tugas, nama_tugas_datang, urutan, karyawan:karyawan_id(nama), shift_master:shift_id(nama_shift)")
       .gte("tanggal", hariList[0]).lte("tanggal", hariList[6]).eq("is_aktif", true)
       .order("tanggal").order("urutan");
     setRows((data as unknown as RosterRow[]) ?? []);
@@ -79,15 +80,16 @@ export default function AuditKebersihanRosterPage() {
   useEffect(() => { fetchRows(); }, [fetchRows]);
 
   function bukaForm(tanggal: string) {
-    setTambahUntuk(tanggal); setFKaryawanId(""); setFShiftId(""); setFTugas(""); setErr("");
+    setTambahUntuk(tanggal); setFKaryawanId(""); setFShiftId(""); setFTugasDatang(""); setFTugas(""); setErr("");
   }
 
   async function tambahBaris() {
-    if (!tambahUntuk || !fKaryawanId || !fTugas.trim()) { setErr("Karyawan dan tugas wajib diisi."); return; }
+    if (!tambahUntuk || !fKaryawanId || !fTugas.trim()) { setErr("Karyawan dan job desc pulang wajib diisi."); return; }
     setBusy(true); setErr("");
     const urutan = rows.filter((r) => r.tanggal === tambahUntuk).length;
     const { error } = await supabase.from("audit_kebersihan_roster_harian").upsert({
-      tanggal: tambahUntuk, karyawan_id: fKaryawanId, shift_id: fShiftId || null, nama_tugas: fTugas.trim(),
+      tanggal: tambahUntuk, karyawan_id: fKaryawanId, shift_id: fShiftId || null,
+      nama_tugas_datang: fTugasDatang.trim() || null, nama_tugas: fTugas.trim(),
       urutan, created_by: user?.nama ?? null, is_aktif: true,
     }, { onConflict: "tanggal,karyawan_id" });
     setBusy(false);
@@ -109,9 +111,9 @@ export default function AuditKebersihanRosterPage() {
     setBusy(true); setErr("");
     const seninLalu = addDaysStr(seninAwal, -7);
     const { data: lama } = await supabase.from("audit_kebersihan_roster_harian")
-      .select("tanggal, karyawan_id, shift_id, nama_tugas, urutan")
+      .select("tanggal, karyawan_id, shift_id, nama_tugas, nama_tugas_datang, urutan")
       .gte("tanggal", seninLalu).lte("tanggal", addDaysStr(seninLalu, 6)).eq("is_aktif", true);
-    const lamaRows = (lama as { tanggal: string; karyawan_id: string; shift_id: string | null; nama_tugas: string; urutan: number }[] | null) ?? [];
+    const lamaRows = (lama as { tanggal: string; karyawan_id: string; shift_id: string | null; nama_tugas: string; nama_tugas_datang: string | null; urutan: number }[] | null) ?? [];
     if (lamaRows.length === 0) { setErr("Minggu lalu tidak ada data untuk disalin."); setBusy(false); return; }
     const existing = new Set(rows.map((r) => `${r.tanggal}|${r.karyawan_id}`));
     const baru = lamaRows
@@ -129,10 +131,10 @@ export default function AuditKebersihanRosterPage() {
     <div className="p-4 space-y-4 max-w-2xl mx-auto pb-24">
       <div className="flex items-center gap-2">
         <ClipboardList size={20} className="text-teal-500" />
-        <h1 className="text-xl font-bold text-gray-800">Roster Job Desc Pulang</h1>
+        <h1 className="text-xl font-bold text-gray-800">Roster Job Desc</h1>
       </div>
       <p className="text-sm text-gray-500">
-        Isi siapa kerja apa (tugas pulang) untuk minggu depan — ini yang akan diaudit SPV tiap hari. Assignment boleh beda-beda tiap minggu.
+        Isi siapa kerja apa untuk minggu depan. Job Desc Pulang wajib diisi (ini yang diaudit SPV setiap hari); Job Desc Datang opsional, cuma tampil ke karyawan di Dashboard Saya. Assignment boleh beda-beda tiap minggu.
       </p>
 
       <div className="card flex items-center justify-between gap-2">
@@ -171,7 +173,8 @@ export default function AuditKebersihanRosterPage() {
                       <p className="text-sm text-gray-800">
                         <b>{r.karyawan?.nama}</b>{r.shift_master && <span className="text-gray-400"> · {r.shift_master.nama_shift}</span>}
                       </p>
-                      <p className="text-xs text-gray-500 truncate">{r.nama_tugas}</p>
+                      {r.nama_tugas_datang && <p className="text-xs text-gray-500 truncate">Datang: {r.nama_tugas_datang}</p>}
+                      <p className="text-xs text-gray-500 truncate">Pulang: {r.nama_tugas}</p>
                     </div>
                     <button onClick={() => hapusBaris(r.id)} className="text-gray-300 hover:text-red-500 shrink-0"><Trash2 size={14} /></button>
                   </div>
@@ -187,7 +190,8 @@ export default function AuditKebersihanRosterPage() {
                       <option value="">Shift (opsional)…</option>
                       {shifts.map((s) => <option key={s.id} value={s.id}>{s.nama_shift}</option>)}
                     </select>
-                    <input className="input text-sm" placeholder="Job desc pulang (mis. Cuci Mesin)" value={fTugas} onChange={(e) => setFTugas(e.target.value)} />
+                    <input className="input text-sm" placeholder="Job desc datang (opsional, mis. Cuci Meja Ngadon)" value={fTugasDatang} onChange={(e) => setFTugasDatang(e.target.value)} />
+                    <input className="input text-sm" placeholder="Job desc pulang (mis. Cuci Mesin) — wajib, ini yang diaudit" value={fTugas} onChange={(e) => setFTugas(e.target.value)} />
                     {err && <p className="text-xs text-red-500">{err}</p>}
                     <div className="flex gap-2">
                       <button onClick={tambahBaris} disabled={busy} className="flex-1 py-1.5 rounded-lg bg-teal-500 text-white text-xs font-semibold hover:bg-teal-600 disabled:opacity-40">Simpan</button>

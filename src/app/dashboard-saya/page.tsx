@@ -18,7 +18,7 @@ interface AbsRow {
   menit_telat: number; status_kehadiran: string; is_flagged: boolean; is_override: boolean;
   shift_master: { nama_shift: string } | null;
 }
-interface Jobdesk { shift_id: string; jobdesk_awal: string | null; jobdesk_akhir: string | null }
+interface RosterJobdesk { tanggal: string; nama_tugas_datang: string | null; nama_tugas: string }
 interface DokItem { id: string; nama: string; versi: number; wajib_ttd: boolean; file_pdf_url: string | null; konten_html: string | null; approved: { disetujui_at: string; tipe: string; tanda_tangan_url: string | null; data_isian: Record<string,string> | null } | null }
 
 function todayWIB() { return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" }); }
@@ -47,7 +47,7 @@ export default function DashboardSayaPage() {
 
   const [assigns, setAssigns] = useState<AssignRow[]>([]);
   const [absensi, setAbsensi] = useState<AbsRow[]>([]);
-  const [jobdesks, setJobdesks] = useState<Jobdesk[]>([]);
+  const [rosterMinggu, setRosterMinggu] = useState<RosterJobdesk[]>([]);
   const [docs, setDocs] = useState<DokItem[]>([]);
   const [poinRows, setPoinRows] = useState<{ tanggal: string; poin: number; sumber: string; master_pelanggaran: { nama_pelanggaran: string } | null; catatan: string | null }[]>([]);
   const [perluKlarifikasi, setPerluKlarifikasi] = useState<{
@@ -84,7 +84,8 @@ export default function DashboardSayaPage() {
           .eq("karyawan_id", kar.id).gte("tanggal", monthStart).lte("tanggal", upTo).order("tanggal"),
         supabase.from("absensi").select("tanggal, jam_checkin, jam_checkout, menit_telat, status_kehadiran, is_flagged, is_override, shift_master:shift_id(nama_shift)")
           .eq("karyawan_id", kar.id).gte("tanggal", monthStart).lte("tanggal", today).order("tanggal", { ascending: false }),
-        supabase.from("jobdesk_shift").select("shift_id, jobdesk_awal, jobdesk_akhir"),
+        supabase.from("audit_kebersihan_roster_harian").select("tanggal, nama_tugas_datang, nama_tugas")
+          .eq("karyawan_id", kar.id).eq("is_aktif", true).gte("tanggal", today).lte("tanggal", upTo).order("tanggal"),
         dokQuery,
         supabase.from("dokumen_persetujuan").select("dokumen_id, dokumen_versi, disetujui_at, tipe, tanda_tangan_url, data_isian").eq("karyawan_id", kar.id),
         supabase.from("poin_karyawan").select("tanggal, poin, sumber, catatan, master_pelanggaran:pelanggaran_id(nama_pelanggaran)").eq("karyawan_id", kar.id).eq("kuartal", kuartalSekarang()).order("tanggal", { ascending: false }),
@@ -95,7 +96,7 @@ export default function DashboardSayaPage() {
       setPerluKlarifikasi((kl.data as unknown as typeof perluKlarifikasi) ?? []);
       setAssigns((asg.data as unknown as AssignRow[]) ?? []);
       setAbsensi((abs.data as unknown as AbsRow[]) ?? []);
-      setJobdesks((jd.data as Jobdesk[]) ?? []);
+      setRosterMinggu((jd.data as RosterJobdesk[]) ?? []);
       const persetujuan = (pj.data as { dokumen_id: string; dokumen_versi: number; disetujui_at: string; tipe: string; tanda_tangan_url: string | null; data_isian: Record<string,string> | null }[] | null) ?? [];
       setDocs(((dk.data as { id: string; nama: string; versi: number; wajib_ttd: boolean; file_pdf_url: string | null; konten_html: string | null }[] | null) ?? []).map((d) => ({
         ...d, approved: persetujuan.find((p) => p.dokumen_id === d.id && p.dokumen_versi === d.versi) ?? null,
@@ -148,7 +149,6 @@ export default function DashboardSayaPage() {
   const shiftHariIni = assigns.find((a) => a.tanggal === today);
   const jadwalDepan = assigns.filter((a) => a.tanggal > today);
   const riwayatJadwal = assigns.filter((a) => a.tanggal < today);
-  const jobdeskHariIni = shiftHariIni && !shiftHariIni.is_libur ? jobdesks.find((j) => j.shift_id === shiftHariIni.shift_id) : null;
 
   const shiftLabel = (a: AssignRow) => a.is_libur ? "Libur" : a.shift_master ? `${a.shift_master.nama_shift} (${a.shift_master.jam_masuk.slice(0, 5)}-${a.shift_master.jam_pulang.slice(0, 5)})` : "—";
 
@@ -304,23 +304,22 @@ export default function DashboardSayaPage() {
               )}
             </div>
 
-            {/* SECTION 2 — Jobdesk */}
+            {/* SECTION 2 — Jobdesk (roster minggu ini, diisi SPV) */}
             <div className="bg-white rounded-2xl shadow-sm p-4 space-y-3">
-              <h2 className="font-bold text-gray-700 text-sm flex items-center gap-2"><ClipboardList size={16} className="text-violet-500" /> Jobdesk Hari Ini</h2>
-              {!shiftHariIni || shiftHariIni.is_libur ? (
-                <p className="text-sm text-gray-400">Tidak ada shift hari ini.</p>
-              ) : !jobdeskHariIni || (!jobdeskHariIni.jobdesk_awal && !jobdeskHariIni.jobdesk_akhir) ? (
-                <p className="text-sm text-gray-400">Jobdesk belum diatur untuk shift ini.</p>
+              <h2 className="font-bold text-gray-700 text-sm flex items-center gap-2"><ClipboardList size={16} className="text-violet-500" /> Jobdesk Minggu Ini</h2>
+              {rosterMinggu.length === 0 ? (
+                <p className="text-sm text-gray-400">Belum ada jobdesk yang diatur untuk kamu minggu ini.</p>
               ) : (
                 <div className="space-y-2">
-                  <div className="rounded-xl bg-green-50 p-3">
-                    <p className="text-xs font-semibold text-green-600 mb-0.5">Tugas Awal Shift</p>
-                    <p className="text-sm text-gray-700 whitespace-pre-line">{jobdeskHariIni.jobdesk_awal || "—"}</p>
-                  </div>
-                  <div className="rounded-xl bg-amber-50 p-3">
-                    <p className="text-xs font-semibold text-amber-600 mb-0.5">Tugas Akhir Shift</p>
-                    <p className="text-sm text-gray-700 whitespace-pre-line">{jobdeskHariIni.jobdesk_akhir || "—"}</p>
-                  </div>
+                  {rosterMinggu.map((r) => (
+                    <div key={r.tanggal} className={`rounded-xl p-3 ${r.tanggal === today ? "bg-violet-50 border border-violet-200" : "bg-gray-50"}`}>
+                      <p className={`text-xs font-semibold mb-1 ${r.tanggal === today ? "text-violet-600" : "text-gray-500"}`}>
+                        {hariTglPendek(r.tanggal)}{r.tanggal === today ? " · Hari ini" : ""}
+                      </p>
+                      {r.nama_tugas_datang && <p className="text-sm text-gray-700"><span className="text-gray-400">Datang:</span> {r.nama_tugas_datang}</p>}
+                      <p className="text-sm text-gray-700"><span className="text-gray-400">Pulang:</span> {r.nama_tugas}</p>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
