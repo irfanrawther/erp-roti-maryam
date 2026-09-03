@@ -32,6 +32,11 @@ interface Insiden { id: string; jenis_insiden: string; tanggal_kejadian: string;
 function tglWaktu(iso: string) {
   return new Date(iso).toLocaleString("id-ID", { timeZone: "Asia/Jakarta", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
+// tanggal_kejadian (YYYY-MM-DD) + jam_kejadian (HH:MM:SS) → "DD/MM/YYYY HH:MM"
+function tglJamKejadian(tanggal: string, jam: string | null) {
+  const [y, m, d] = tanggal.split("-");
+  return `${d}/${m}/${y}${jam ? ` ${jam.slice(0, 5)}` : ""}`;
+}
 function jalurDariKategori(k: string | null): "training" | "staff" | "spv" | null {
   if (!k) return null;
   if (k.startsWith("training")) return "training";
@@ -231,7 +236,7 @@ export default function PelanggaranPage() {
                       <div className="min-w-0">
                         <p className="font-semibold text-sm text-gray-800">{l.karyawan?.nama}</p>
                         <p className="text-xs text-gray-600">{l.master_pelanggaran?.nama_pelanggaran} <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${TIER_BADGE[l.master_pelanggaran?.tier ?? ""] ?? "bg-gray-100 text-gray-600"}`}>{poinLaporan(l)} poin</span>{l.audit_hasil_id && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-teal-100 text-teal-700 ml-1">Audit Kebersihan</span>}</p>
-                        <p className="text-xs text-gray-500 mt-0.5">{l.tanggal_kejadian}{l.jam_kejadian ? ` ${l.jam_kejadian.slice(0, 5)}` : ""} · oleh {l.dilaporkan_oleh}</p>
+                        <p className="text-xs text-gray-500 mt-0.5">{tglJamKejadian(l.tanggal_kejadian, l.jam_kejadian)} · oleh {l.dilaporkan_oleh}</p>
                         {l.keterangan && <p className="text-xs text-gray-600 italic mt-0.5">&ldquo;{l.keterangan}&rdquo;</p>}
                         {(l.saksi?.nama || l.saksi_manual) && <p className="text-[11px] text-gray-400 mt-0.5">Saksi: {l.saksi?.nama ?? l.saksi_manual}</p>}
                         {sisa && <p className={`text-[11px] mt-1 flex items-center gap-1 ${sisa.lewat ? "text-red-500 font-semibold" : "text-gray-400"}`}><Clock size={11} /> {sisa.teks}</p>}
@@ -304,7 +309,7 @@ export default function PelanggaranPage() {
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
                     <p className="font-bold text-sm text-red-700 flex items-center gap-1"><AlertTriangle size={14} /> {i.jenis_insiden}</p>
-                    <p className="text-xs text-gray-700 font-medium">{i.karyawan?.nama} · {i.tanggal_kejadian}</p>
+                    <p className="text-xs text-gray-700 font-medium">{i.karyawan?.nama} · {tglJamKejadian(i.tanggal_kejadian, null)}</p>
                     {i.keterangan && <p className="text-xs text-gray-600 italic mt-0.5">&ldquo;{i.keterangan}&rdquo;</p>}
                     <p className="text-[11px] text-gray-400">Dilapor oleh {i.dilaporkan_oleh}</p>
                   </div>
