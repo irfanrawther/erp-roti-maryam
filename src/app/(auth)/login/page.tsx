@@ -160,9 +160,8 @@ export default function LoginPage() {
               })}
             </div>
 
-            {/* Divider + Absensi Karyawan */}
-            <div className="pt-4 mt-2 border-t border-gray-100">
-              <p className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-2.5">Absensi Karyawan</p>
+            {/* Absensi */}
+            <div className="pt-4 mt-2 border-t border-gray-100 space-y-2">
               <button onClick={() => router.push("/absen")}
                 className="w-full flex items-center gap-3 p-4 rounded-2xl border-2 border-rose-200 bg-rose-50 hover:border-rose-400 hover:bg-rose-100 transition-all text-left">
                 <div className="flex items-center justify-center w-11 h-11 rounded-xl bg-rose-500 text-white shrink-0">
@@ -173,36 +172,8 @@ export default function LoginPage() {
                   <p className="text-xs text-rose-500 mt-0.5">Check-in / Check-out</p>
                 </div>
               </button>
-            </div>
 
-            {/* Divider + Izin */}
-            <div className="pt-4 mt-2 border-t border-gray-100">
-              <p className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-2.5">Lapor Izin</p>
-              <button onClick={() => router.push("/izin")}
-                className="w-full flex items-center gap-3 p-4 rounded-2xl border-2 border-sky-200 bg-sky-50 hover:border-sky-400 hover:bg-sky-100 transition-all text-left">
-                <div className="flex items-center justify-center w-11 h-11 rounded-xl bg-sky-500 text-white shrink-0">
-                  <FileText size={22} />
-                </div>
-                <div>
-                  <p className="text-base font-bold text-sky-700 leading-tight">LAPOR IZIN</p>
-                  <p className="text-xs text-sky-500 mt-0.5">Lapor izin tidak masuk</p>
-                </div>
-              </button>
-              <button onClick={() => router.push("/izin-sakit")}
-                className="w-full mt-2 flex items-center gap-3 p-4 rounded-2xl border-2 border-teal-200 bg-teal-50 hover:border-teal-400 hover:bg-teal-100 transition-all text-left">
-                <div className="flex items-center justify-center w-11 h-11 rounded-xl bg-teal-500 text-white shrink-0">
-                  <Stethoscope size={22} />
-                </div>
-                <div>
-                  <p className="text-base font-bold text-teal-700 leading-tight">LAPOR IZIN SAKIT</p>
-                  <p className="text-xs text-teal-500 mt-0.5">Sakit + surat dokter</p>
-                </div>
-              </button>
-            </div>
-
-            {/* Divider + Dashboard Karyawan */}
-            <div className="pt-4 mt-2 border-t border-gray-100">
-              <p className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-2.5">Dashboard Karyawan</p>
+              {/* Dashboard Saya */}
               <button onClick={() => router.push("/dashboard-saya")}
                 className="w-full flex items-center gap-3 p-4 rounded-2xl border-2 border-violet-200 bg-violet-50 hover:border-violet-400 hover:bg-violet-100 transition-all text-left">
                 <div className="flex items-center justify-center w-11 h-11 rounded-xl bg-violet-500 text-white shrink-0">
@@ -211,6 +182,30 @@ export default function LoginPage() {
                 <div>
                   <p className="text-base font-bold text-violet-700 leading-tight">DASHBOARD SAYA</p>
                   <p className="text-xs text-violet-500 mt-0.5">Jadwal, kehadiran & dokumen saya</p>
+                </div>
+              </button>
+            </div>
+
+            {/* Izin — 2 kolom sejajar */}
+            <div className="pt-2 grid grid-cols-2 gap-2">
+              <button onClick={() => router.push("/izin")}
+                className="flex flex-col items-center justify-center gap-2 p-4 rounded-2xl border-2 border-sky-200 bg-sky-50 hover:border-sky-400 hover:bg-sky-100 transition-all text-center">
+                <div className="flex items-center justify-center w-11 h-11 rounded-xl bg-sky-500 text-white shrink-0">
+                  <FileText size={22} />
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-sky-700 leading-tight">LAPOR IZIN</p>
+                  <p className="text-[11px] text-sky-500 mt-0.5">Lapor izin tidak masuk</p>
+                </div>
+              </button>
+              <button onClick={() => router.push("/izin-sakit")}
+                className="flex flex-col items-center justify-center gap-2 p-4 rounded-2xl border-2 border-teal-200 bg-teal-50 hover:border-teal-400 hover:bg-teal-100 transition-all text-center">
+                <div className="flex items-center justify-center w-11 h-11 rounded-xl bg-teal-500 text-white shrink-0">
+                  <Stethoscope size={22} />
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-teal-700 leading-tight">LAPOR IZIN SAKIT</p>
+                  <p className="text-[11px] text-teal-500 mt-0.5">Sakit + surat dokter</p>
                 </div>
               </button>
             </div>
