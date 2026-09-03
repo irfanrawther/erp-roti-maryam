@@ -229,7 +229,7 @@ export default function DashboardSayaPage() {
                         ); })()}
                         <button onClick={() => mintaKlarifikasi(l.id)} disabled={busyKlarifikasi === l.id}
                           className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-40">
-                          {busyKlarifikasi === l.id ? "Memproses…" : "Saya akan klarifikasi"}
+                          {busyKlarifikasi === l.id ? "Memproses…" : "Saya ingin klarifikasi"}
                         </button>
                       </>
                     ) : (

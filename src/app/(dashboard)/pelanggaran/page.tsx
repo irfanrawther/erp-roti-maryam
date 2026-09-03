@@ -10,13 +10,14 @@ import {
   hitungKlarifikasiDeadline, prosesOtomatisTanpaKlarifikasi,
   type MasterPelanggaranRow, type StatusLaporan,
 } from "@/lib/pelanggaranAlur";
-import { ShieldAlert, AlertTriangle, X, Trash2, Clock, MessageSquareWarning, Plus } from "lucide-react";
+import { ShieldAlert, AlertTriangle, X, Trash2, Clock, MessageSquareWarning, Plus, ChevronDown } from "lucide-react";
 
 interface Karyawan { id: string; nama: string; kategori_dokumen: string | null }
 interface Laporan {
   id: string; karyawan_id: string; pelanggaran_id: string; tanggal_kejadian: string; jam_kejadian: string | null;
   keterangan: string | null; foto_bukti_urls: string[] | null; status: StatusLaporan; dilaporkan_oleh: string;
   catatan_review: string | null; created_at: string; respon_deadline: string | null;
+  direview_oleh: string | null; direview_at: string | null;
   klarifikasi_diminta_at: string | null; klarifikasi_deadline: string | null; klarifikasi_catatan: string | null;
   saksi_manual: string | null; saksi_karyawan_id: string | null; poin_override: number | null; audit_hasil_id: string | null;
   karyawan: { nama: string } | null; master_pelanggaran: { nama_pelanggaran: string; poin: number; tier: string } | null;
@@ -67,6 +68,8 @@ export default function PelanggaranPage() {
   const [fotoModal, setFotoModal] = useState<string[] | null>(null);
   const [detailK, setDetailK] = useState<Karyawan | null>(null);
   const [klarifikasiModal, setKlarifikasiModal] = useState<Laporan | null>(null);
+  const [konfirmasi, setKonfirmasi] = useState<{ l: Laporan; aksi: "terima" | "tolak" } | null>(null);
+  const [expandRiwayat, setExpandRiwayat] = useState<string | null>(null);
   const [klarifikasiCatatan, setKlarifikasiCatatan] = useState("");
   const [khususModal, setKhususModal] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -87,7 +90,7 @@ export default function PelanggaranPage() {
   const fetchAll = useCallback(async () => {
     const [lRes, kRes, iRes] = await Promise.all([
       supabase.from("laporan_pelanggaran")
-        .select("id, karyawan_id, pelanggaran_id, tanggal_kejadian, jam_kejadian, keterangan, foto_bukti_urls, status, dilaporkan_oleh, catatan_review, created_at, respon_deadline, klarifikasi_diminta_at, klarifikasi_deadline, klarifikasi_catatan, saksi_manual, saksi_karyawan_id, poin_override, audit_hasil_id, karyawan:karyawan_id(nama), master_pelanggaran:pelanggaran_id(nama_pelanggaran, poin, tier), saksi:saksi_karyawan_id(nama)")
+        .select("id, karyawan_id, pelanggaran_id, tanggal_kejadian, jam_kejadian, keterangan, foto_bukti_urls, status, dilaporkan_oleh, catatan_review, created_at, respon_deadline, direview_oleh, direview_at, klarifikasi_diminta_at, klarifikasi_deadline, klarifikasi_catatan, saksi_manual, saksi_karyawan_id, poin_override, audit_hasil_id, karyawan:karyawan_id(nama), master_pelanggaran:pelanggaran_id(nama_pelanggaran, poin, tier), saksi:saksi_karyawan_id(nama)")
         .order("created_at", { ascending: false }).limit(300),
       supabase.from("karyawan").select("id, nama, kategori_dokumen").eq("status", "aktif").order("nama"),
       supabase.from("laporan_insiden_berat").select("id, jenis_insiden, tanggal_kejadian, keterangan, foto_bukti_urls, status, dilaporkan_oleh, karyawan:karyawan_id(nama)").order("created_at", { ascending: false }).limit(100),
@@ -112,13 +115,13 @@ export default function PelanggaranPage() {
     setBusyId(l.id);
     await supabase.from("laporan_pelanggaran").update({ status: "diterima", direview_oleh: user.nama, direview_at: new Date().toISOString() }).eq("id", l.id);
     await tambahPoin({ karyawan_id: l.karyawan_id, pelanggaran_id: l.pelanggaran_id, poin: poinLaporan(l), sumber: "manual", tanggal: l.tanggal_kejadian, laporan_id: l.id });
-    setBusyId(null); fetchAll();
+    setBusyId(null); setKonfirmasi(null); fetchAll();
   }
   async function tolakLangsung(l: Laporan) {
     if (!user) return;
     setBusyId(l.id);
     await supabase.from("laporan_pelanggaran").update({ status: "ditolak", direview_oleh: user.nama, direview_at: new Date().toISOString() }).eq("id", l.id);
-    setBusyId(null); fetchAll();
+    setBusyId(null); setKonfirmasi(null); fetchAll();
   }
 
   // ── Klarifikasi ──
@@ -250,8 +253,8 @@ export default function PelanggaranPage() {
                       )}
                     </div>
                     <div className="flex gap-2">
-                      <button onClick={() => terimaLangsung(l)} disabled={busyId === l.id} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-green-500 text-white hover:bg-green-600 disabled:opacity-40">Terima Sekarang (+{poinLaporan(l)} poin)</button>
-                      <button onClick={() => tolakLangsung(l)} disabled={busyId === l.id} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-red-100 text-red-600 hover:bg-red-200 disabled:opacity-40">Tolak</button>
+                      <button onClick={() => setKonfirmasi({ l, aksi: "terima" })} disabled={busyId === l.id} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-green-500 text-white hover:bg-green-600 disabled:opacity-40">Terima Sekarang (+{poinLaporan(l)} poin)</button>
+                      <button onClick={() => setKonfirmasi({ l, aksi: "tolak" })} disabled={busyId === l.id} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-red-100 text-red-600 hover:bg-red-200 disabled:opacity-40">Tolak</button>
                     </div>
                   </div>
                 );
@@ -288,12 +291,40 @@ export default function PelanggaranPage() {
           {reviewed.length > 0 && (
             <div className="card space-y-1.5">
               <h2 className="font-semibold text-gray-700 text-sm">Riwayat Direview ({reviewed.length})</h2>
-              {reviewed.slice(0, 30).map((l) => (
-                <div key={l.id} className="flex items-center justify-between gap-2 py-1.5 border-b border-gray-50 last:border-0 text-sm">
-                  <span className="text-gray-700 truncate">{l.karyawan?.nama} · {l.master_pelanggaran?.nama_pelanggaran}</span>
-                  <span className={`shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-full ${badgeStatus(l.status)}`}>{labelStatus(l.status)}</span>
-                </div>
-              ))}
+              {reviewed.slice(0, 30).map((l) => {
+                const buka = expandRiwayat === l.id;
+                return (
+                  <div key={l.id} className="border-b border-gray-50 last:border-0">
+                    <button onClick={() => setExpandRiwayat(buka ? null : l.id)} className="w-full flex items-center justify-between gap-2 py-1.5 text-sm text-left hover:bg-gray-50/60 rounded-lg px-1 -mx-1">
+                      <span className="text-gray-700 truncate flex items-center gap-1">
+                        <ChevronDown size={13} className={`text-gray-400 shrink-0 transition-transform ${buka ? "rotate-180" : ""}`} />
+                        {l.karyawan?.nama} · {l.master_pelanggaran?.nama_pelanggaran}
+                      </span>
+                      <span className={`shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-full ${badgeStatus(l.status)}`}>{labelStatus(l.status)}</span>
+                    </button>
+                    {buka && (
+                      <div className="pb-2.5 px-1 space-y-1.5 text-xs">
+                        <p className="text-gray-500">{tglJamKejadian(l.tanggal_kejadian, l.jam_kejadian)} · dilaporkan oleh {l.dilaporkan_oleh} · {poinLaporan(l)} poin</p>
+                        {l.keterangan && <p className="text-gray-600 italic">&ldquo;{l.keterangan}&rdquo;</p>}
+                        {(l.saksi?.nama || l.saksi_manual) && <p className="text-gray-500">Saksi: {l.saksi?.nama ?? l.saksi_manual}</p>}
+                        {!!l.foto_bukti_urls?.length && (
+                          <div className="flex flex-wrap gap-1.5">
+                            {l.foto_bukti_urls.map((url, i) => (
+                              <button key={i} onClick={() => setFotoModal(l.foto_bukti_urls)} className="w-12 h-12 rounded-lg overflow-hidden border border-gray-200">
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                <img src={url} alt="bukti" className="w-full h-full object-cover" />
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                        {l.klarifikasi_catatan && <p className="text-blue-700 bg-blue-50 rounded-lg px-2 py-1.5">Klarifikasi: {l.klarifikasi_catatan}</p>}
+                        {l.catatan_review && !l.klarifikasi_catatan && <p className="text-gray-500">Catatan review: {l.catatan_review}</p>}
+                        <p className="text-gray-400">Direview oleh {l.direview_oleh ?? "-"}{l.direview_at ? ` · ${tglWaktu(l.direview_at)}` : ""}</p>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
@@ -405,6 +436,33 @@ export default function PelanggaranPage() {
                 className="flex-1 text-sm font-semibold px-3 py-2 rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200 disabled:opacity-40">Batalkan Poin</button>
               <button onClick={() => simpanKlarifikasi("diterima")} disabled={!klarifikasiCatatan.trim() || busyId === klarifikasiModal.id}
                 className="flex-1 text-sm font-semibold px-3 py-2 rounded-lg bg-red-500 text-white hover:bg-red-600 disabled:opacity-40">Tetapkan Poin</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal konfirmasi terima/tolak — mencegah salah klik */}
+      {konfirmasi && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setKonfirmasi(null)}>
+          <div className="bg-white rounded-2xl w-full max-w-sm p-5 space-y-4" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start gap-2">
+              <AlertTriangle size={20} className={konfirmasi.aksi === "terima" ? "text-green-500 shrink-0" : "text-red-500 shrink-0"} />
+              <div>
+                <p className="font-bold text-gray-800">Apakah kamu yakin?</p>
+                <p className="text-sm text-gray-600 mt-1">
+                  {konfirmasi.aksi === "terima"
+                    ? <>Menerima laporan <b>{konfirmasi.l.master_pelanggaran?.nama_pelanggaran}</b> untuk <b>{konfirmasi.l.karyawan?.nama}</b> — poin <b>+{poinLaporan(konfirmasi.l)}</b> langsung ditetapkan.</>
+                    : <>Menolak laporan <b>{konfirmasi.l.master_pelanggaran?.nama_pelanggaran}</b> untuk <b>{konfirmasi.l.karyawan?.nama}</b> — tidak ada poin yang ditetapkan.</>}
+                </p>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => setKonfirmasi(null)} className="flex-1 text-sm font-semibold px-3 py-2 rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200">Batal</button>
+              <button onClick={() => konfirmasi.aksi === "terima" ? terimaLangsung(konfirmasi.l) : tolakLangsung(konfirmasi.l)}
+                disabled={busyId === konfirmasi.l.id}
+                className={`flex-1 text-sm font-semibold px-3 py-2 rounded-lg text-white disabled:opacity-40 ${konfirmasi.aksi === "terima" ? "bg-green-500 hover:bg-green-600" : "bg-red-500 hover:bg-red-600"}`}>
+                {busyId === konfirmasi.l.id ? "Memproses…" : konfirmasi.aksi === "terima" ? "Ya, Terima" : "Ya, Tolak"}
+              </button>
             </div>
           </div>
         </div>
