@@ -27,6 +27,14 @@ function hariTgl(iso: string) { return new Date(`${iso}T00:00:00+07:00`).toLocal
 function hariTglPendek(iso: string) { return new Date(`${iso}T00:00:00+07:00`).toLocaleDateString("id-ID", { timeZone: "Asia/Jakarta", weekday: "short", day: "numeric", month: "short" }); }
 function jam(iso: string | null) { return iso ? new Date(iso).toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta", hour: "2-digit", minute: "2-digit" }) : "—"; }
 function tglWaktu(iso: string) { return new Date(iso).toLocaleString("id-ID", { timeZone: "Asia/Jakarta", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }); }
+function sisaWaktu(deadlineIso: string | null): { teks: string; lewat: boolean } | null {
+  if (!deadlineIso) return null;
+  const ms = new Date(deadlineIso).getTime() - Date.now();
+  if (ms <= 0) return { teks: "Lewat batas waktu", lewat: true };
+  const jam = Math.floor(ms / 3600_000);
+  const menit = Math.floor((ms % 3600_000) / 60_000);
+  return { teks: jam > 0 ? `${jam} jam ${menit} menit lagi` : `${menit} menit lagi`, lewat: false };
+}
 
 // Status kehadiran FAKTA (tanpa denda/kategori)
 function statusKehadiran(a: AbsRow): { text: string; cls: string } {
@@ -51,7 +59,7 @@ export default function DashboardSayaPage() {
   const [docs, setDocs] = useState<DokItem[]>([]);
   const [poinRows, setPoinRows] = useState<{ tanggal: string; poin: number; sumber: string; master_pelanggaran: { nama_pelanggaran: string } | null; catatan: string | null }[]>([]);
   const [perluKlarifikasi, setPerluKlarifikasi] = useState<{
-    id: string; tanggal_kejadian: string; status: StatusLaporan; respon_deadline: string | null; poin_override: number | null;
+    id: string; tanggal_kejadian: string; status: StatusLaporan; respon_deadline: string | null; klarifikasi_deadline: string | null; poin_override: number | null;
     master_pelanggaran: { nama_pelanggaran: string; poin: number } | null;
   }[]>([]);
   const [busyKlarifikasi, setBusyKlarifikasi] = useState<string | null>(null);
@@ -90,7 +98,7 @@ export default function DashboardSayaPage() {
         supabase.from("dokumen_persetujuan").select("dokumen_id, dokumen_versi, disetujui_at, tipe, tanda_tangan_url, data_isian").eq("karyawan_id", kar.id),
         supabase.from("poin_karyawan").select("tanggal, poin, sumber, catatan, master_pelanggaran:pelanggaran_id(nama_pelanggaran)").eq("karyawan_id", kar.id).eq("kuartal", kuartalSekarang()).order("tanggal", { ascending: false }),
         supabase.from("status_sp_karyawan").select("level_sp, kuartal_kena").eq("karyawan_id", kar.id).eq("is_aktif", true),
-        supabase.from("laporan_pelanggaran").select("id, tanggal_kejadian, status, respon_deadline, poin_override, master_pelanggaran:pelanggaran_id(nama_pelanggaran, poin)")
+        supabase.from("laporan_pelanggaran").select("id, tanggal_kejadian, status, respon_deadline, klarifikasi_deadline, poin_override, master_pelanggaran:pelanggaran_id(nama_pelanggaran, poin)")
           .eq("karyawan_id", kar.id).in("status", ["pending", "menunggu_klarifikasi"]).order("created_at", { ascending: false }),
       ]);
       setPerluKlarifikasi((kl.data as unknown as typeof perluKlarifikasi) ?? []);
@@ -138,7 +146,7 @@ export default function DashboardSayaPage() {
       klarifikasi_deadline: hitungKlarifikasiDeadline(nowIso),
     }).eq("id", laporanId);
     const { data } = await supabase.from("laporan_pelanggaran")
-      .select("id, tanggal_kejadian, status, respon_deadline, poin_override, master_pelanggaran:pelanggaran_id(nama_pelanggaran, poin)")
+      .select("id, tanggal_kejadian, status, respon_deadline, klarifikasi_deadline, poin_override, master_pelanggaran:pelanggaran_id(nama_pelanggaran, poin)")
       .eq("karyawan_id", karyawan.id).in("status", ["pending", "menunggu_klarifikasi"]).order("created_at", { ascending: false });
     setPerluKlarifikasi((data as unknown as typeof perluKlarifikasi) ?? []);
     setBusyKlarifikasi(null);
@@ -216,15 +224,23 @@ export default function DashboardSayaPage() {
                           Kalau tidak keberatan, tidak perlu lakukan apa-apa — poin akan ditetapkan otomatis
                           {l.respon_deadline ? ` setelah ${tglWaktu(l.respon_deadline)}` : ""}.
                         </p>
+                        {(() => { const s = sisaWaktu(l.respon_deadline); return s && (
+                          <p className={`text-[11px] flex items-center gap-1 ${s.lewat ? "text-red-600 font-semibold" : "text-blue-600"}`}><Clock size={11} /> {s.teks}</p>
+                        ); })()}
                         <button onClick={() => mintaKlarifikasi(l.id)} disabled={busyKlarifikasi === l.id}
                           className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-40">
                           {busyKlarifikasi === l.id ? "Memproses…" : "Saya akan klarifikasi"}
                         </button>
                       </>
                     ) : (
-                      <p className="text-[11px] text-blue-700 font-medium">
-                        Ditunggu — datangi Manajer Operasional langsung untuk menyampaikan klarifikasi.
-                      </p>
+                      <>
+                        <p className="text-[11px] text-blue-700 font-medium">
+                          Ditunggu — datangi Manajer Operasional langsung untuk menyampaikan klarifikasi.
+                        </p>
+                        {(() => { const s = sisaWaktu(l.klarifikasi_deadline); return s && (
+                          <p className={`text-[11px] flex items-center gap-1 ${s.lewat ? "text-red-600 font-semibold" : "text-blue-600"}`}><Clock size={11} /> {s.teks}</p>
+                        ); })()}
+                      </>
                     )}
                   </div>
                 ))}
@@ -246,12 +262,15 @@ export default function DashboardSayaPage() {
                     <span className="text-xs text-gray-400">{labelKuartal(kuartalSekarang())}</span>
                   </div>
                   <div className="flex items-end justify-between">
-                    <p className="text-3xl font-bold text-gray-800">{totalTampil} <span className="text-sm font-normal text-gray-400">poin</span></p>
+                    <p className="text-3xl font-bold text-gray-800 flex items-end gap-1.5">
+                      {totalPoin} <span className="text-sm font-normal text-gray-400 mb-0.5">poin</span>
+                      {poinGantung > 0 && <span className="text-base font-bold text-amber-500 mb-0.5">+{poinGantung}</span>}
+                    </p>
                     {spLevel > 0 && <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${spLevel >= 3 ? "bg-red-100 text-red-600" : "bg-orange-100 text-orange-600"}`}>Status: SP{spLevel}</span>}
                   </div>
                   {poinGantung > 0 && (
                     <p className="text-[11px] text-amber-700 bg-amber-50 rounded-lg px-2.5 py-1.5">
-                      {totalPoin} poin sudah tetap + <b>{poinGantung} poin</b> dari laporan yang masih menunggu keputusan Manajer Operasional (lihat "Perlu Klarifikasi" di atas).
+                      <b>+{poinGantung} poin</b> ini akan ditetapkan kalau tidak diklarifikasi. Segera klarifikasi kalau merasa keliru.
                     </p>
                   )}
                   {curSP < 3 ? (
