@@ -23,8 +23,18 @@ interface Laporan {
   karyawan: { nama: string } | null; master_pelanggaran: { nama_pelanggaran: string; poin: number; tier: string } | null;
   saksi: { nama: string } | null;
 }
+// Poin untuk TAMPILAN (badge, tombol) — boleh dari cache React, cuma dilihat.
 function poinLaporan(l: Laporan): number {
   return l.poin_override ?? Number(l.master_pelanggaran?.poin ?? 0);
+}
+// Poin untuk AKSI (benar-benar menetapkan poin) — SELALU ambil fresh dari
+// database, jangan pernah percaya cache React di sini. Kalau state basi/
+// belum ke-load master_pelanggaran, poinLaporan() di atas bisa diam-diam
+// balik 0 dan poin gagal masuk tanpa error — itu bug yang pernah kejadian.
+async function poinLaporanFresh(l: Laporan): Promise<number> {
+  if (l.poin_override != null) return l.poin_override;
+  const { data } = await supabase.from("master_pelanggaran").select("poin").eq("id", l.pelanggaran_id).maybeSingle();
+  return Number((data as { poin: number } | null)?.poin ?? 0);
 }
 interface PoinRow { id: string; karyawan_id: string; poin: number; sumber: string; tanggal: string; kuartal: string; catatan: string | null; master_pelanggaran: { nama_pelanggaran: string } | null }
 interface SPRow { karyawan_id: string; level_sp: number; kuartal_kena: string; tanggal_sp: string }
@@ -111,10 +121,10 @@ export default function PelanggaranPage() {
   }, []);
 
   async function terimaLangsung(l: Laporan) {
-    if (!user || !l.master_pelanggaran) return;
+    if (!user) return;
     setBusyId(l.id);
     await supabase.from("laporan_pelanggaran").update({ status: "diterima", direview_oleh: user.nama, direview_at: new Date().toISOString() }).eq("id", l.id);
-    await tambahPoin({ karyawan_id: l.karyawan_id, pelanggaran_id: l.pelanggaran_id, poin: poinLaporan(l), sumber: "manual", tanggal: l.tanggal_kejadian, laporan_id: l.id });
+    await tambahPoin({ karyawan_id: l.karyawan_id, pelanggaran_id: l.pelanggaran_id, poin: await poinLaporanFresh(l), sumber: "manual", tanggal: l.tanggal_kejadian, laporan_id: l.id });
     setBusyId(null); setKonfirmasi(null); fetchAll();
   }
   async function tolakLangsung(l: Laporan) {
@@ -135,14 +145,14 @@ export default function PelanggaranPage() {
     setBusyId(null); fetchAll();
   }
   async function anggapTidakHadir(l: Laporan) {
-    if (!user || !l.master_pelanggaran) return;
+    if (!user) return;
     if (!confirm(`Tetapkan poin untuk ${l.karyawan?.nama} karena tidak hadir klarifikasi?`)) return;
     setBusyId(l.id);
     const catatan = "Karyawan meminta klarifikasi namun tidak hadir dalam batas waktu yang diberikan.";
     await supabase.from("laporan_pelanggaran").update({
       status: "diterima", direview_oleh: user.nama, direview_at: new Date().toISOString(), catatan_review: catatan,
     }).eq("id", l.id);
-    await tambahPoin({ karyawan_id: l.karyawan_id, pelanggaran_id: l.pelanggaran_id, poin: poinLaporan(l), sumber: "manual", tanggal: l.tanggal_kejadian, laporan_id: l.id, catatan });
+    await tambahPoin({ karyawan_id: l.karyawan_id, pelanggaran_id: l.pelanggaran_id, poin: await poinLaporanFresh(l), sumber: "manual", tanggal: l.tanggal_kejadian, laporan_id: l.id, catatan });
     setBusyId(null); fetchAll();
   }
   async function simpanKlarifikasi(keputusan: "diterima" | "ditolak") {
@@ -153,8 +163,8 @@ export default function PelanggaranPage() {
       status: keputusan, direview_oleh: user.nama, direview_at: new Date().toISOString(),
       klarifikasi_catatan: klarifikasiCatatan.trim(), catatan_review: klarifikasiCatatan.trim(),
     }).eq("id", l.id);
-    if (keputusan === "diterima" && l.master_pelanggaran) {
-      await tambahPoin({ karyawan_id: l.karyawan_id, pelanggaran_id: l.pelanggaran_id, poin: poinLaporan(l), sumber: "manual", tanggal: l.tanggal_kejadian, laporan_id: l.id, catatan: klarifikasiCatatan.trim() });
+    if (keputusan === "diterima") {
+      await tambahPoin({ karyawan_id: l.karyawan_id, pelanggaran_id: l.pelanggaran_id, poin: await poinLaporanFresh(l), sumber: "manual", tanggal: l.tanggal_kejadian, laporan_id: l.id, catatan: klarifikasiCatatan.trim() });
     }
     setBusyId(null); setKlarifikasiModal(null); setKlarifikasiCatatan(""); fetchAll();
   }
