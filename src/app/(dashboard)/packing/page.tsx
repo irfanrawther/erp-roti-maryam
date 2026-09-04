@@ -28,6 +28,7 @@ interface Batch {
   catatan_reject: string | null;
   status_updated_at: string;
   created_at: string;
+  rendam_at: string | null;
   produk_sku: { nama_brand: string; varian: string; isi_per_pack: number };
   users: { nama: string };
 }
@@ -232,7 +233,7 @@ export default function PackingPage() {
       supabase.from("produk_sku").select("id, brand, varian, isi_per_pack").eq("aktif", true),
       supabase.from("bahan_baku").select("id, nama").eq("aktif", true),
       supabase.from("batch_produksi")
-        .select("id, produk_sku_id, tanggal_produksi, status, jumlah_pack_rencana, jumlah_pack_adonan, jumlah_pack_packing, jumlah_pack_freezer, catatan_reject, status_updated_at, created_at, produk_sku:produk_sku_id(nama_brand, varian, isi_per_pack), users:created_by(nama)")
+        .select("id, produk_sku_id, tanggal_produksi, status, jumlah_pack_rencana, jumlah_pack_adonan, jumlah_pack_packing, jumlah_pack_freezer, catatan_reject, status_updated_at, created_at, rendam_at, produk_sku:produk_sku_id(nama_brand, varian, isi_per_pack), users:created_by(nama)")
         .order("created_at", { ascending: false }).limit(300),
       supabase.from("packing_input")
         .select("id, batch_produksi_id, produk_sku_id, brand, varian, tanggal, total_direndam, carry_in, total_available, pack5, pack10, reject, reject_lain, alasan_reject_lain, lebihan, catatan, created_at, users:created_by(nama)")
@@ -487,7 +488,7 @@ export default function PackingPage() {
           id: batchId, produk_sku_id: skuId, tanggal_produksi: adonanForm.tanggal,
           status: "adonan", jumlah_pack_rencana: kg, jumlah_pack_adonan: null,
           jumlah_pack_packing: null, jumlah_pack_freezer: null, catatan_reject: null,
-          status_updated_at: new Date().toISOString(), created_at: new Date().toISOString(),
+          status_updated_at: new Date().toISOString(), created_at: new Date().toISOString(), rendam_at: null,
           produk_sku: { nama_brand: cfg.label, varian: v.varianDB, isi_per_pack: 0 },
           users: { nama: user.nama },
         });
@@ -516,7 +517,7 @@ export default function PackingPage() {
     setBusy(true);
     for (const b of batches) {
       await supabase.from("batch_produksi").update({
-        status: "bikin", updated_by: user.id, status_updated_at: new Date().toISOString(),
+        status: "bikin", updated_by: user.id, status_updated_at: new Date().toISOString(), rendam_at: new Date().toISOString(),
       }).eq("id", b.id);
     }
     setAdonanForm((f) => ({ ...f, [bk]: {} }));
@@ -1182,7 +1183,10 @@ export default function PackingPage() {
                         )}
                       </div>
                       <div className="mt-1.5 space-y-0.5">
-                        <p className="text-xs text-gray-400">Adonan &amp; Rendam · <span className="font-medium text-gray-500">{(b.users as { nama: string })?.nama ?? "—"}</span> · {formatTanggalWaktu(b.created_at)}</p>
+                        <p className="text-xs text-gray-400">Adonan · <span className="font-medium text-gray-500">{(b.users as { nama: string })?.nama ?? "—"}</span> · {formatTanggalWaktu(b.created_at)}</p>
+                        {b.rendam_at && (
+                          <p className="text-xs text-gray-400">Rendam · <span className="font-medium text-gray-500">{(b.users as { nama: string })?.nama ?? "—"}</span> · {formatTanggalWaktu(b.rendam_at)}</p>
+                        )}
                         {hasPackingData && row && (
                           <p className="text-xs text-gray-400">Packing · <span className="font-medium text-gray-500">{row.users?.nama ?? "—"}</span> · {formatTanggalWaktu(row.created_at)}</p>
                         )}
