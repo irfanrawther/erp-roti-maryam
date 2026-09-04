@@ -294,23 +294,33 @@ export default function PackingPage() {
     const { data } = await supabase.from("master_resep").select("bahan_baku_id, jumlah_per_pack, satuan").eq("produk_sku_id", skuId);
     return (data as MasterResep[] | null) ?? [];
   }
+  // Kalau SATU SAJA insert gagal (network/apapun), jangan diam-diam lanjut —
+  // kumpulkan error-nya lalu lempar, supaya pemanggil bisa kasih tahu user
+  // persis bahan mana yang GAGAL terpotong (bukan ketahuan sebulan kemudian
+  // pas stock opname).
   async function applyIngredients(batchId: string, skuId: string, kg: number, tanggal: string) {
     if (!user) return;
     const resep = await fetchResep(skuId);
+    const gagal: string[] = [];
     for (const r of resep) {
       const { jumlah, satuan } = toBaseUnit(r.jumlah_per_pack * kg, r.satuan);
-      await supabase.from("penggunaan_bahan").insert({ batch_produksi_id: batchId, bahan_baku_id: r.bahan_baku_id, jumlah_digunakan: jumlah, satuan, created_by: user.id });
-      await supabase.from("penerimaan_bahan_baku").insert({ bahan_baku_id: r.bahan_baku_id, jumlah, satuan, tipe: "keluar", tanggal, keterangan: `Produksi batch #${batchId.slice(0, 8)}`, created_by: user.id });
+      const e1 = await supabase.from("penggunaan_bahan").insert({ batch_produksi_id: batchId, bahan_baku_id: r.bahan_baku_id, jumlah_digunakan: jumlah, satuan, created_by: user.id });
+      const e2 = await supabase.from("penerimaan_bahan_baku").insert({ bahan_baku_id: r.bahan_baku_id, jumlah, satuan, tipe: "keluar", tanggal, keterangan: `Produksi batch #${batchId.slice(0, 8)}`, created_by: user.id });
+      if (e1.error || e2.error) gagal.push(r.bahan_baku_id);
     }
+    if (gagal.length) throw new Error(`Gagal memotong stok untuk ${gagal.length} bahan (id: ${gagal.join(", ")}). Cek Bahan Baku & tambahkan manual kalau perlu.`);
   }
   async function restoreIngredients(batchId: string, tanggal: string) {
     if (!user) return;
     const { data } = await supabase.from("penggunaan_bahan").select("id, bahan_baku_id, jumlah_digunakan, satuan").eq("batch_produksi_id", batchId);
     const list = (data as PenggunaanBahan[] | null) ?? [];
+    const gagal: string[] = [];
     for (const p of list) {
-      await supabase.from("penerimaan_bahan_baku").insert({ bahan_baku_id: p.bahan_baku_id, jumlah: p.jumlah_digunakan, satuan: p.satuan, tipe: "masuk", tanggal, keterangan: `Restore adonan batch #${batchId.slice(0, 8)}`, created_by: user.id });
+      const { error } = await supabase.from("penerimaan_bahan_baku").insert({ bahan_baku_id: p.bahan_baku_id, jumlah: p.jumlah_digunakan, satuan: p.satuan, tipe: "masuk", tanggal, keterangan: `Restore adonan batch #${batchId.slice(0, 8)}`, created_by: user.id });
+      if (error) gagal.push(p.bahan_baku_id);
     }
     if (list.length) await supabase.from("penggunaan_bahan").delete().eq("batch_produksi_id", batchId);
+    if (gagal.length) throw new Error(`Gagal mengembalikan stok untuk ${gagal.length} bahan. Cek Bahan Baku manual.`);
   }
   async function validateStock(brandKey: BrandKey, kgMap: Record<string, string>): Promise<string[]> {
     const variants = BRANDS[brandKey].variants.filter((v) => parseFloat(kgMap[v.key] || "0") > 0);
@@ -354,15 +364,18 @@ export default function PackingPage() {
     const resep = (data as { bahan_baku_id: string; jumlah_per_kg: number }[] | null) ?? [];
     if (!resep.length) return;
     const meta = JSON.stringify({ batchId: batch.id, brandKey: cfg.brandKey, brandLabel: cfg.brandLabel, varianKey: cfg.key, varianLabel: cfg.label, tanggal: batch.tanggal_produksi });
+    const gagal: string[] = [];
     for (const r of resep) {
       // gr/kg ÷ standar pcs/kg × actual pcs → convert ke Kg
       const grPerPcs = r.jumlah_per_kg / cfg.pcs_per_kg;
       const jumlahKg = (grPerPcs * actualPcs) / 1000;
-      await supabase.from("penerimaan_bahan_baku").insert({
+      const { error } = await supabase.from("penerimaan_bahan_baku").insert({
         bahan_baku_id: r.bahan_baku_id, jumlah: jumlahKg, satuan: "Kg",
         tipe: "keluar", tanggal: batch.tanggal_produksi, keterangan: "proses_bikin::" + meta, created_by: user.id,
       });
+      if (error) gagal.push(r.bahan_baku_id);
     }
+    if (gagal.length) throw new Error(`Gagal memotong stok rendam untuk ${gagal.length} bahan. Cek Bahan Baku & tambahkan manual kalau perlu.`);
   }
   async function restoreRendam(batch: Batch) {
     if (!user) return;
@@ -372,12 +385,15 @@ export default function PackingPage() {
       .select("id, bahan_baku_id, jumlah, satuan, tipe")
       .like("keterangan", `proses_bikin::{"batchId":"${batch.id}"%`);
     const rows = (data as { id: string; bahan_baku_id: string; jumlah: number; satuan: string; tipe: string }[] | null) ?? [];
+    const gagal: string[] = [];
     for (const r of rows) {
       const lawan = r.tipe === "keluar" ? "masuk" : "keluar";
-      await supabase.from("penerimaan_bahan_baku").insert({ bahan_baku_id: r.bahan_baku_id, jumlah: r.jumlah, satuan: r.satuan, tipe: lawan, tanggal: batch.tanggal_produksi, keterangan: `Restore rendam batch #${batch.id.slice(0, 8)}`, created_by: user.id });
+      const { error } = await supabase.from("penerimaan_bahan_baku").insert({ bahan_baku_id: r.bahan_baku_id, jumlah: r.jumlah, satuan: r.satuan, tipe: lawan, tanggal: batch.tanggal_produksi, keterangan: `Restore rendam batch #${batch.id.slice(0, 8)}`, created_by: user.id });
+      if (error) gagal.push(r.bahan_baku_id);
     }
     const ids = rows.map((r) => r.id);
     if (ids.length) await supabase.from("penerimaan_bahan_baku").delete().in("id", ids);
+    if (gagal.length) throw new Error(`Gagal mengembalikan stok rendam untuk ${gagal.length} bahan. Cek Bahan Baku manual.`);
   }
 
   // ── Koreksi bahan baku berdasarkan selisih pcs (aktual vs rendam) ──
@@ -400,15 +416,18 @@ export default function PackingPage() {
       varianKey: cfg.key, varianLabel: cfg.label, tanggal: batch.tanggal_produksi,
       koreksi: true, selisih: selisihPcs, userName: user.nama ?? "",
     });
+    const gagal: string[] = [];
     for (const r of resep) {
       const grPerPcs = r.jumlah_per_kg / cfg.pcs_per_kg;
       const jumlahKg = (grPerPcs * absPcs) / 1000;
       if (jumlahKg <= 0) continue;
-      await supabase.from("penerimaan_bahan_baku").insert({
+      const { error } = await supabase.from("penerimaan_bahan_baku").insert({
         bahan_baku_id: r.bahan_baku_id, jumlah: jumlahKg, satuan: "Kg",
         tipe, tanggal: batch.tanggal_produksi, keterangan: "proses_bikin::" + meta, created_by: user.id,
       });
+      if (error) gagal.push(r.bahan_baku_id);
     }
+    if (gagal.length) throw new Error(`Gagal koreksi stok untuk ${gagal.length} bahan. Cek Bahan Baku & tambahkan manual kalau perlu.`);
   }
 
   // ── Poin otomatis reject basi: semua karyawan shift di tanggal produksi +0.5 ──
@@ -499,7 +518,11 @@ export default function PackingPage() {
 
   async function submitAdonan(brandKey: BrandKey) {
     setSubmitting(brandKey);
-    await doCreateAdonan(brandKey);
+    try {
+      await doCreateAdonan(brandKey);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Gagal memotong stok bahan baku — cek Bahan Baku manual.");
+    }
     setSubmitting(null);
     fetchData();
   }
@@ -588,7 +611,11 @@ export default function PackingPage() {
     const actualPcs = standar + lebihan;
     if (actualPcs <= 0) return;
     setBusy(true);
-    await applyRendam(batch, actualPcs);                    // kurangi bahan rendam (margarine dll) sesuai actual pcs
+    try {
+      await applyRendam(batch, actualPcs);                  // kurangi bahan rendam (margarine dll) sesuai actual pcs
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Gagal memotong stok bahan rendam — cek Bahan Baku manual.");
+    }
     await supabase.from("batch_produksi").update({
       status: "packing", jumlah_pack_adonan: actualPcs,
       catatan_reject: packingForm.catatan || null, updated_by: user.id, status_updated_at: new Date().toISOString(),

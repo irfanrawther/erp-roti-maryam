@@ -237,9 +237,15 @@ export default function BahanBakuView() {
 
   async function submitTransaksi(bahanId: string, tipe: "masuk" | "keluar", jumlah: number, satuan: string, alasan?: string): Promise<boolean> {
     if (!user) return false;
+    // Konversi ke satuan dasar (kg/liter/pcs) SEBELUM disimpan — stok_saat_ini
+    // selalu dalam kg/liter, terlepas dari satuan yang dipilih di form. Tanpa
+    // ini, input "gr"/"ml" dianggap kg/liter mentah-mentah oleh trigger DB
+    // (bug: 45 gram tercatat sebagai 45 kg / 45000 gram).
+    const { value: jumlahBase, base } = toBase(jumlah, satuan);
+    const satuanSimpan = base === "unknown" ? satuan : base;
     const defaultKet = tipe === "masuk" ? "Tambah stok manual" : "Kurang stok manual";
     const { error } = await supabase.from("penerimaan_bahan_baku").insert({
-      bahan_baku_id: bahanId, jumlah, satuan, tipe,
+      bahan_baku_id: bahanId, jumlah: jumlahBase, satuan: satuanSimpan, tipe,
       tanggal: new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" }), created_by: user.id,
       keterangan: alasan?.trim() ? alasan.trim() : defaultKet,
     });
