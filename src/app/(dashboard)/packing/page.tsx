@@ -1887,7 +1887,7 @@ function StageList({ title, batches, renderActions, emphasizeDate }: {
                 <div className="flex items-start justify-between mb-2">
                   <div>
                     <p className="font-semibold text-gray-800">{sku?.nama_brand} — {sku?.varian}</p>
-                    <p className="text-xs text-gray-400">{formatTanggal(b.tanggal_produksi)} · oleh {(b.users as { nama: string })?.nama}</p>
+                    <p className="text-xs text-gray-400">Disubmit {formatTanggalWaktu(b.created_at)} · oleh {(b.users as { nama: string })?.nama ?? "—"}</p>
                   </div>
                   <span className={statusClass[b.status]}>{statusLabel[b.status]}</span>
                 </div>
