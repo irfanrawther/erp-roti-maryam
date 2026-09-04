@@ -9,6 +9,7 @@ import IndonesianDatePicker from "@/components/IndonesianDatePicker";
 import { hitungDenda, bulanRange, wibMinutesOfDay, DENDA, DENDA_IZIN_MANUAL, JAM_ALPHA, STATUS_LABEL } from "@/lib/absensi";
 import { dendaIzinBiasa, katLapor, type KatLapor } from "@/lib/izin";
 import { muatAturan, cfgTelat, cfgIzin, jalurDariKategori } from "@/lib/aturan";
+import { sinkronPoinTelat } from "@/lib/poin";
 import { CalendarClock, Plus, X, Pencil, Trash2, ChevronLeft, ChevronRight, Layers, MapPin, Crosshair, Flag, AlertTriangle, Check, CheckCircle2, LogOut, FileText, ClipboardList, Clock } from "lucide-react";
 
 // Aturan yang berlaku pada TANGGAL KEJADIAN untuk karyawan tertentu.
@@ -1020,6 +1021,7 @@ function ReviewFlag({ karyawanList, shifts, userName }: {
       denda: res.denda, denda_dihapus_ampun: res.denda_dihapus_ampun,
       is_flagged: res.is_flagged, flag_reason: res.flag_reason,
     }).eq("id", row.id);
+    await sinkronPoinTelat({ absensi_id: row.id, karyawan_id: row.karyawan_id, tanggal: row.tanggal, kategoriBaru: res.kategori_telat, ampunBaru: res.denda_dihapus_ampun });
     setKoreksiShiftMap((m) => { const n = { ...m }; delete n[row.id]; return n; });
     refresh();
   }
@@ -1047,12 +1049,19 @@ function ReviewFlag({ karyawanList, shifts, userName }: {
       patch.is_flagged = res.is_flagged; patch.flag_reason = res.flag_reason;
     }
     await supabase.from("absensi").update(patch).eq("id", editRow2.id);
+    if ("kategori_telat" in patch) {
+      await sinkronPoinTelat({
+        absensi_id: editRow2.id, karyawan_id: editRow2.karyawan_id, tanggal: editRow2.tanggal,
+        kategoriBaru: patch.kategori_telat as string | null, ampunBaru: !!patch.denda_dihapus_ampun,
+      });
+    }
     setEditBusy2(false); setEditRow2(null);
     refresh();
   }
 
   async function hapusDenda(row: AbsRow) {
     await supabase.from("absensi").update({ denda: 0, is_flagged: false }).eq("id", row.id);
+    await sinkronPoinTelat({ absensi_id: row.id, karyawan_id: row.karyawan_id, tanggal: row.tanggal, kategoriBaru: null, ampunBaru: true });
     refresh();
   }
   async function selesaiReview(row: AbsRow) {
@@ -1466,8 +1475,12 @@ function OverrideManual({ karyawanList, shifts, userName, onDone, countK1Ampun }
         payload.kategori_telat = null; payload.menit_telat = 0;
       }
 
-      const { error } = await supabase.from("absensi").upsert(payload, { onConflict: "karyawan_id,tanggal" });
+      const { data: absRow, error } = await supabase.from("absensi").upsert(payload, { onConflict: "karyawan_id,tanggal" }).select("id").single();
       if (error) throw new Error(error.message);
+      await sinkronPoinTelat({
+        absensi_id: (absRow as { id: string }).id, karyawan_id: karyawanId, tanggal,
+        kategoriBaru: (payload.kategori_telat as string | null) ?? null, ampunBaru: !!payload.denda_dihapus_ampun,
+      });
       setMsg("✓ Tersimpan"); setJam(""); setMenit(""); setCatatan("");
       onDone();
     } catch (e) {
@@ -1571,8 +1584,11 @@ function AbsenDetailModal({ abs, shift, nama, tanggal, userName, assign, onClose
     };
     // Izin / Sakit → denda 0. Alpha → denda alpha. Hadir → biarkan denda apa adanya.
     if (status === "izin" || status === "izin_sakit") { patch.denda = 0; patch.is_flagged = false; }
-    else if (status === "alpha") { patch.denda = (await aturanUntuk(row.karyawan_id, row.tanggal)).izin.alpha.denda; }
+    else if (status === "alpha") { patch.denda = (await aturanUntuk(abs.karyawan_id, tanggal)).izin.alpha.denda; }
     const { error } = await supabase.from("absensi").update(patch).eq("id", abs.id);
+    if (!error && status !== "hadir") {
+      await sinkronPoinTelat({ absensi_id: abs.id, karyawan_id: abs.karyawan_id, tanggal, kategoriBaru: null, ampunBaru: true });
+    }
     setBusy(false);
     if (error) { setErr(error.message); return; }
     onSaved();

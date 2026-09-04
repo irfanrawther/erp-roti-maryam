@@ -333,11 +333,12 @@ function CheckInView({ karyawan, shiftName, setting, onCancel, onDone }: {
         telatAmpun = res.denda_dihapus_ampun;
       }
 
-      const { error } = await supabase.from("absensi").upsert(payload, { onConflict: "karyawan_id,tanggal" });
+      const { data: absRow, error } = await supabase.from("absensi").upsert(payload, { onConflict: "karyawan_id,tanggal" }).select("id").single();
       if (error) throw new Error(error.message);
 
-      // Poin otomatis telat (K1 non-ampun 0.5, K2 1, K3 3)
-      await poinTelat(karyawan.id, telatKategori, telatAmpun, today);
+      // Poin otomatis telat (K1 non-ampun 0.5, K2 1, K3 3) — ditautkan ke baris absensi
+      // ini supaya kalau nanti di-override Super Admin, poinnya bisa disinkronkan ulang.
+      await poinTelat(karyawan.id, telatKategori, telatAmpun, today, (absRow as { id: string } | null)?.id ?? null);
 
       streamRef.current?.getTracks().forEach((t) => t.stop());
       onDone();
