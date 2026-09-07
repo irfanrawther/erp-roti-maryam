@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { getUserSession, clearUserSession } from "@/lib/auth";
 import Sidebar from "@/components/layout/Sidebar";
 import { Menu, LogOut } from "lucide-react";
+import ChatWidget from "@/components/ChatWidget";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -45,10 +46,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             <LogOut size={14} /> Keluar
           </button>
         </div>
-        <main className="flex-1 overflow-y-auto">
+                <main className="flex-1 overflow-y-auto">
           {children}
         </main>
       </div>
+      <ChatWidget />
     </div>
   );
 }
