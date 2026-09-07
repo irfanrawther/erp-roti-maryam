@@ -32,6 +32,10 @@ const ROOM_ACCESS: Record<string, string[]> = {
 export default function ChatWidget() {
   const user = getUserSession();
   const [open, setOpen] = useState(true);
+
+  useEffect(() => {
+    if (user) subscribeToPush(user.id);
+  }, [user?.id]);
   const [activeRoom, setActiveRoom] = useState<string>("general");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -163,4 +167,43 @@ export default function ChatWidget() {
       )}
     </div>
   );
+}
+
+function urlBase64ToUint8Array(base64String: string) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = window.atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) {
+    outputArray[i] = rawData.charCodeAt(i);
+  }
+  return outputArray;
+}
+
+async function subscribeToPush(userId: string) {
+  try {
+    if (!("serviceWorker" in navigator) || !("PushManager" in window)) return;
+
+    const permission = await Notification.requestPermission();
+    if (permission !== "granted") return;
+
+    const registration = await navigator.serviceWorker.ready;
+    let subscription = await registration.pushManager.getSubscription();
+
+    if (!subscription) {
+      const vapidKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY!;
+      subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(vapidKey),
+      });
+    }
+
+    await fetch("/api/push-subscribe", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId, subscription: subscription.toJSON() }),
+    });
+  } catch (err) {
+    console.error("Push subscribe error:", err);
+  }
 }
