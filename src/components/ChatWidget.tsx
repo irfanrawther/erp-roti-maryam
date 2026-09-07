@@ -13,22 +13,41 @@ interface ChatMessage {
   users?: { nama: string };
 }
 
-const ROOMS = [
-  { id: "test_a", label: "Test A" },
-  { id: "test_b", label: "Test B" },
-  { id: "test_c", label: "Test C" },
+const ALL_ROOMS = [
+  { id: "general", label: "General" },
+  { id: "produksi", label: "Produksi" },
+  { id: "packing", label: "Packing" },
+  { id: "bahan_baku", label: "Bahan Baku" },
 ];
+
+// Role → room yang boleh diakses
+const ROOM_ACCESS: Record<string, string[]> = {
+  super_admin:              ["general", "produksi", "packing", "bahan_baku"],
+  spv:                      ["general", "produksi", "packing", "bahan_baku"],
+  staff_produksi:           ["general", "produksi"],
+  staff_packing_pengiriman: ["general", "packing"],
+  pic:                      ["general", "bahan_baku"],
+};
 
 export default function ChatWidget() {
   const user = getUserSession();
   const [open, setOpen] = useState(true);
-  const [activeRoom, setActiveRoom] = useState<string>("test_a");
+  const [activeRoom, setActiveRoom] = useState<string>("general");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   if (!user) return null;
+
+  const allowedRoomIds = ROOM_ACCESS[user.role] ?? ["general"];
+  const availableRooms = ALL_ROOMS.filter((r) => allowedRoomIds.includes(r.id));
+
+  useEffect(() => {
+    if (!allowedRoomIds.includes(activeRoom)) {
+      setActiveRoom(availableRooms[0]?.id ?? "general");
+    }
+  }, [user.role]);
 
   useEffect(() => {
     fetchMessages(activeRoom);
@@ -56,6 +75,7 @@ export default function ChatWidget() {
 
   async function sendMessage() {
     if (!input.trim() || !user) return;
+    if (!allowedRoomIds.includes(activeRoom)) return; // safety check
     setSending(true);
     await supabase.from("chat_messages").insert({
       room_id: activeRoom,
@@ -97,7 +117,7 @@ export default function ChatWidget() {
               onChange={(e) => setActiveRoom(e.target.value)}
               className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-gray-50"
             >
-              {ROOMS.map((r) => (
+              {availableRooms.map((r) => (
                 <option key={r.id} value={r.id}>{r.label}</option>
               ))}
             </select>
