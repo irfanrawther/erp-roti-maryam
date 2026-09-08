@@ -31,7 +31,7 @@ const ROOM_ACCESS: Record<string, string[]> = {
 
 export default function ChatWidget() {
   const user = getUserSession();
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
 
   useEffect(() => {
     if (user) subscribeToPush(user.id);
@@ -55,12 +55,10 @@ export default function ChatWidget() {
 
   useEffect(() => {
     fetchMessages(activeRoom);
-    const ch = supabase.channel(`chat-msg-${activeRoom}`)
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "chat_messages", filter: `room_id=eq.${activeRoom}` }, (payload) => {
-        setMessages((prev) => [...prev, payload.new as ChatMessage]);
-      })
-      .subscribe();
-    return () => { supabase.removeChannel(ch); };
+        const interval = setInterval(() => {
+      fetchMessages(activeRoom);
+    }, 3000);
+    return () => clearInterval(interval);
   }, [activeRoom]);
 
   useEffect(() => {
