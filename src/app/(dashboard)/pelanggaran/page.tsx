@@ -6,8 +6,8 @@ import { getUserSession, canAccessAdmin, type UserSession } from "@/lib/auth";
 import { homeRoute } from "@/lib/permissions";
 import { tambahPoin, kuartalSekarang, labelKuartal, POIN_PER_SP } from "@/lib/poin";
 import {
-  ambilSpvKhusus, TIER_LABEL, TIER_BADGE, labelStatus, badgeStatus,
-  hitungKlarifikasiDeadline, prosesOtomatisTanpaKlarifikasi,
+  ambilSpvKhusus, ambilPelanggaranUmum, TIER_LABEL, TIER_ORDER, TIER_BADGE, labelStatus, badgeStatus,
+  hitungKlarifikasiDeadline, hitungResponDeadline, prosesOtomatisTanpaKlarifikasi,
   type MasterPelanggaranRow, type StatusLaporan,
 } from "@/lib/pelanggaranAlur";
 import { ShieldAlert, AlertTriangle, X, Trash2, Clock, MessageSquareWarning, Plus, ChevronDown } from "lucide-react";
@@ -82,6 +82,7 @@ export default function PelanggaranPage() {
   const [expandRiwayat, setExpandRiwayat] = useState<string | null>(null);
   const [klarifikasiCatatan, setKlarifikasiCatatan] = useState("");
   const [khususModal, setKhususModal] = useState(false);
+  const [umumSpvModal, setUmumSpvModal] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -381,6 +382,9 @@ export default function PelanggaranPage() {
           <div className="flex items-center justify-between gap-2 flex-wrap">
             <h2 className="font-semibold text-gray-700 text-sm">Poin per Karyawan</h2>
             <div className="flex items-center gap-2">
+              <button onClick={() => setUmumSpvModal(true)} className="flex items-center gap-1 text-xs font-semibold px-2.5 py-1.5 rounded-lg bg-gray-800 text-white hover:bg-gray-700">
+                <Plus size={12} /> Lapor Poin SPV
+              </button>
               <button onClick={() => setKhususModal(true)} className="flex items-center gap-1 text-xs font-semibold px-2.5 py-1.5 rounded-lg bg-gray-800 text-white hover:bg-gray-700">
                 <Plus size={12} /> Poin SPV Khusus
               </button>
@@ -476,6 +480,16 @@ export default function PelanggaranPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Modal poin umum SPV — lewat antrian review + klarifikasi, sama seperti lapor ke staff */}
+      {umumSpvModal && (
+        <ModalPoinUmumSpv
+          karyawanSpv={karyawan.filter((k) => jalurDariKategori(k.kategori_dokumen) === "spv")}
+          adminNama={user?.nama ?? ""}
+          onClose={() => setUmumSpvModal(false)}
+          onSaved={() => { setUmumSpvModal(false); fetchAll(); }}
+        />
       )}
 
       {/* Modal poin SPV khusus */}
@@ -596,6 +610,87 @@ function ModalPoinSpvKhusus({ karyawanSpv, adminNama, onClose, onSaved }: {
         </div>
         {err && <p className="text-sm text-red-500">{err}</p>}
         <button onClick={simpan} disabled={busy} className="btn-primary w-full">{busy ? "Menyimpan…" : "Tetapkan Poin"}</button>
+      </div>
+    </div>
+  );
+}
+
+// Poin Umum ke SPV — Manajer Operasional bisa langsung lapor pelanggaran
+// UMUM (tier1-3, katalog yang sama dipakai SPV lapor Staff/Training) ke
+// SPV lain. BEDA dari "Poin SPV Khusus": ini TETAP masuk antrian review
+// (status pending, respon_deadline 48 jam) supaya SPV yang dilaporkan
+// tetap punya hak klarifikasi sebelum poin resmi ditetapkan — sama
+// persis alur yang berlaku untuk Staff/Training.
+function ModalPoinUmumSpv({ karyawanSpv, adminNama, onClose, onSaved }: {
+  karyawanSpv: Karyawan[]; adminNama: string; onClose: () => void; onSaved: () => void;
+}) {
+  const [items, setItems] = useState<MasterPelanggaranRow[]>([]);
+  const [kId, setKId] = useState("");
+  const [pelId, setPelId] = useState("");
+  const [tgl, setTgl] = useState(new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" }));
+  const [catatan, setCatatan] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => { ambilPelanggaranUmum("spv").then(setItems); }, []);
+  const pel = useMemo(() => items.find((i) => i.id === pelId) ?? null, [items, pelId]);
+
+  async function simpan() {
+    if (!kId || !pel) { setErr("Pilih karyawan SPV & jenis pelanggaran."); return; }
+    setErr(""); setBusy(true);
+    try {
+      const nowIso = new Date().toISOString();
+      const { error } = await supabase.from("laporan_pelanggaran").insert({
+        karyawan_id: kId, pelanggaran_id: pel.id, tanggal_kejadian: tgl, jalur: "spv",
+        dilaporkan_oleh: adminNama, keterangan: catatan.trim() || null,
+        status: "pending", respon_deadline: hitungResponDeadline(nowIso),
+      });
+      if (error) throw new Error(error.message);
+      onSaved();
+    } catch (e) { setErr(e instanceof Error ? e.message : "Gagal menyimpan"); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl w-full max-w-sm p-5 space-y-3" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <p className="font-bold text-gray-800">Lapor Poin SPV (Umum)</p>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
+        </div>
+        <p className="text-[11px] text-gray-400">Masuk antrian review — SPV yang dilaporkan tetap punya hak klarifikasi 2x24 jam, sama seperti Staff/Training.</p>
+        <div>
+          <label className="label">Karyawan SPV</label>
+          <select className="input" value={kId} onChange={(e) => setKId(e.target.value)}>
+            <option value="">Pilih…</option>
+            {karyawanSpv.map((k) => <option key={k.id} value={k.id}>{k.nama}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="label">Jenis Pelanggaran</label>
+          <select className="input" value={pelId} onChange={(e) => setPelId(e.target.value)}>
+            <option value="">Pilih…</option>
+            {TIER_ORDER.map((t) => {
+              const grup = items.filter((i) => i.tier === t);
+              if (!grup.length) return null;
+              return (
+                <optgroup key={t} label={TIER_LABEL[t]}>
+                  {grup.map((i) => <option key={i.id} value={i.id}>{i.nama_pelanggaran} ({i.poin} poin)</option>)}
+                </optgroup>
+              );
+            })}
+          </select>
+        </div>
+        <div>
+          <label className="label">Tanggal Kejadian</label>
+          <input type="date" className="input" value={tgl} onChange={(e) => setTgl(e.target.value)} />
+        </div>
+        <div>
+          <label className="label">Catatan (opsional)</label>
+          <textarea className="input" rows={2} value={catatan} onChange={(e) => setCatatan(e.target.value)} />
+        </div>
+        {err && <p className="text-sm text-red-500">{err}</p>}
+        <button onClick={simpan} disabled={busy} className="btn-primary w-full">{busy ? "Mengirim…" : "Kirim Laporan"}</button>
       </div>
     </div>
   );

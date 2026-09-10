@@ -6,13 +6,13 @@ import { getUserSession, type UserSession } from "@/lib/auth";
 import { getCapabilities, homeRoute } from "@/lib/permissions";
 import { kompresGambar } from "@/lib/gambar";
 import {
-  ambilPelanggaranUmum, ambilTier4, TIER_LABEL, TIER_ORDER, TIER_BADGE,
+  ambilPelanggaranUmum, ambilSpvKhusus, ambilTier4, TIER_LABEL, TIER_ORDER, TIER_BADGE,
   labelStatus, badgeStatus, hitungResponDeadline,
   type MasterPelanggaranRow, type StatusLaporan,
 } from "@/lib/pelanggaranAlur";
 import {
   ShieldAlert, AlertTriangle, Search, ChevronLeft, Camera, X,
-  Check, User, Users,
+  Check, User, Users, UserCog,
 } from "lucide-react";
 
 interface Karyawan { id: string; nama: string; jabatan: string | null; kategori_dokumen: string | null }
@@ -26,10 +26,11 @@ interface LaporanInsiden {
 }
 
 function todayWIB() { return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" }); }
-function jalurDariKategori(k: string | null): "training" | "staff" | null {
+function jalurDariKategori(k: string | null): "training" | "staff" | "spv" | null {
   if (!k) return null;
   if (k.startsWith("training")) return "training";
   if (k.startsWith("staff")) return "staff";
+  if (k === "spv") return "spv";
   return null;
 }
 
@@ -43,7 +44,7 @@ export default function LaporPelanggaranPage() {
 
   // ── Alur "Lapor Pelanggaran" ──
   const [langkah, setLangkah] = useState<"jalur" | "pilih" | "form">("jalur");
-  const [jalur, setJalur] = useState<"training" | "staff" | null>(null);
+  const [jalur, setJalur] = useState<"training" | "staff" | "spv" | null>(null);
   const [master, setMaster] = useState<MasterPelanggaranRow[]>([]);
   const [cari, setCari] = useState("");
   const [pel, setPel] = useState<MasterPelanggaranRow | null>(null);
@@ -99,9 +100,15 @@ export default function LaporPelanggaranPage() {
     setRiwayatInsiden((iRes.data as unknown as LaporanInsiden[]) ?? []);
   }
 
-  async function pilihJalur(j: "training" | "staff") {
+  async function pilihJalur(j: "training" | "staff" | "spv") {
     setJalur(j); setLangkah("pilih"); setCari(""); setPel(null);
-    setMaster(await ambilPelanggaranUmum(j));
+    if (j === "spv") {
+      // SPV lapor SPV lain: gabungkan katalog umum (tier1-3) + khusus (Pasal 12)
+      const [umum, khusus] = await Promise.all([ambilPelanggaranUmum("spv"), ambilSpvKhusus()]);
+      setMaster([...umum, ...khusus]);
+    } else {
+      setMaster(await ambilPelanggaranUmum(j));
+    }
   }
 
   function pilihPelanggaran(m: MasterPelanggaranRow) {
@@ -112,8 +119,8 @@ export default function LaporPelanggaranPage() {
   }
 
   const karyawanJalur = useMemo(
-    () => karyawan.filter((k) => jalurDariKategori(k.kategori_dokumen) === jalur),
-    [karyawan, jalur]
+    () => karyawan.filter((k) => jalurDariKategori(k.kategori_dokumen) === jalur && k.nama !== user?.nama),
+    [karyawan, jalur, user]
   );
   const karyawanHasil = useMemo(
     () => karyawanJalur.filter((k) => k.nama.toLowerCase().includes(cariKaryawan.toLowerCase())),
@@ -198,7 +205,7 @@ export default function LaporPelanggaranPage() {
             {langkah === "jalur" && (
               <>
                 <p className="text-sm font-semibold text-gray-600">Karyawan yang dilaporkan jalur apa?</p>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-3 gap-3">
                   <button onClick={() => pilihJalur("training")}
                     className="flex flex-col items-center gap-2 py-6 rounded-xl border-2 border-gray-100 hover:border-red-300 hover:bg-red-50/40 transition-colors">
                     <User size={26} className="text-gray-400" />
@@ -208,6 +215,11 @@ export default function LaporPelanggaranPage() {
                     className="flex flex-col items-center gap-2 py-6 rounded-xl border-2 border-gray-100 hover:border-red-300 hover:bg-red-50/40 transition-colors">
                     <Users size={26} className="text-gray-400" />
                     <span className="font-semibold text-gray-700">Staff</span>
+                  </button>
+                  <button onClick={() => pilihJalur("spv")}
+                    className="flex flex-col items-center gap-2 py-6 rounded-xl border-2 border-gray-100 hover:border-red-300 hover:bg-red-50/40 transition-colors">
+                    <UserCog size={26} className="text-gray-400" />
+                    <span className="font-semibold text-gray-700">SPV</span>
                   </button>
                 </div>
                 <p className="text-[11px] text-gray-400 text-center">
@@ -221,7 +233,7 @@ export default function LaporPelanggaranPage() {
               <>
                 <div className="flex items-center gap-2">
                   <button onClick={() => setLangkah("jalur")} className="text-gray-400 hover:text-gray-600"><ChevronLeft size={20} /></button>
-                  <p className="text-sm font-semibold text-gray-600">Pilih jenis pelanggaran — {jalur === "training" ? "Training" : "Staff"}</p>
+                  <p className="text-sm font-semibold text-gray-600">Pilih jenis pelanggaran — {jalur === "training" ? "Training" : jalur === "staff" ? "Staff" : "SPV"}</p>
                 </div>
                 <div className="relative">
                   <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -246,6 +258,20 @@ export default function LaporPelanggaranPage() {
                       </div>
                     );
                   })}
+                  {jalur === "spv" && masterHasil.some((m) => m.tier === "khusus") && (
+                    <div>
+                      <p className="text-[11px] font-bold text-gray-400 uppercase mb-1.5">Khusus SPV — Pasal 12</p>
+                      <div className="space-y-1.5">
+                        {masterHasil.filter((m) => m.tier === "khusus").map((m) => (
+                          <button key={m.id} onClick={() => pilihPelanggaran(m)}
+                            className="w-full text-left rounded-xl border border-gray-100 p-2.5 hover:border-red-200 hover:bg-red-50/30 transition-colors flex items-center justify-between gap-2">
+                            <span className="text-sm text-gray-700 leading-snug">{m.nama_pelanggaran}</span>
+                            <span className="shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-600">{m.poin} poin</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   {masterHasil.length === 0 && <p className="text-gray-400 text-sm text-center py-4">Tidak ditemukan</p>}
                 </div>
               </>
@@ -269,7 +295,7 @@ export default function LaporPelanggaranPage() {
                 </div>
 
                 <div>
-                  <label className="label">Karyawan ({jalur === "training" ? "Training" : "Staff"})</label>
+                  <label className="label">Karyawan ({jalur === "training" ? "Training" : jalur === "staff" ? "Staff" : "SPV"})</label>
                   <input value={cariKaryawan} onChange={(e) => setCariKaryawan(e.target.value)} placeholder="Cari nama…" className="input mb-1.5" />
                   <div className="max-h-36 overflow-y-auto rounded-xl border border-gray-100 divide-y divide-gray-50">
                     {karyawanHasil.length === 0 && <p className="text-xs text-gray-400 text-center py-3">Tidak ditemukan</p>}

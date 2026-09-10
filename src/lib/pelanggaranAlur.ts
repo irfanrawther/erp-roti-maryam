@@ -25,7 +25,7 @@ export const TIER_BADGE: Record<string, string> = {
 
 const KOLOM = "id, jalur, nomor, nama_pelanggaran, poin, tier, is_kebersihan, is_kolektif, eskalasi_poin, catatan";
 
-export async function ambilPelanggaranUmum(jalur: "training" | "staff"): Promise<MasterPelanggaranRow[]> {
+export async function ambilPelanggaranUmum(jalur: "training" | "staff" | "spv"): Promise<MasterPelanggaranRow[]> {
   const { data } = await supabase.from("master_pelanggaran").select(KOLOM)
     .eq("jalur", jalur).eq("is_aktif", true).order("nomor");
   return (data as MasterPelanggaranRow[]) ?? [];
