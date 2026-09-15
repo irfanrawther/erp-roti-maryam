@@ -279,11 +279,23 @@ export default function PelanggaranPage() {
                 const sisa = sisaWaktu(l.klarifikasi_deadline);
                 return (
                   <div key={l.id} className={`rounded-xl border p-3 space-y-2 ${sisa?.lewat ? "border-blue-300 bg-blue-50/60" : "border-blue-100 bg-blue-50/30"}`}>
-                    <div>
-                      <p className="font-semibold text-sm text-gray-800">{l.karyawan?.nama}</p>
-                      <p className="text-xs text-gray-600">{l.master_pelanggaran?.nama_pelanggaran} <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600">{poinLaporan(l)} poin</span>{l.audit_hasil_id && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-teal-100 text-teal-700 ml-1">Audit Kebersihan</span>}</p>
-                      <p className="text-xs text-gray-500 mt-0.5">Minta klarifikasi sejak {l.klarifikasi_diminta_at ? tglWaktu(l.klarifikasi_diminta_at) : "-"}</p>
-                      {sisa && <p className={`text-[11px] mt-1 flex items-center gap-1 ${sisa.lewat ? "text-blue-700 font-semibold" : "text-gray-400"}`}><Clock size={11} /> {sisa.teks}</p>}
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="font-semibold text-sm text-gray-800">{l.karyawan?.nama}</p>
+                        <p className="text-xs text-gray-600">{l.master_pelanggaran?.nama_pelanggaran} <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600">{poinLaporan(l)} poin</span>{l.audit_hasil_id && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-teal-100 text-teal-700 ml-1">Audit Kebersihan</span>}</p>
+                        <p className="text-xs text-gray-500 mt-0.5">{tglJamKejadian(l.tanggal_kejadian, l.jam_kejadian)} · oleh {l.dilaporkan_oleh}</p>
+                        {l.keterangan && <p className="text-xs text-gray-600 italic mt-0.5">&ldquo;{l.keterangan}&rdquo;</p>}
+                        {(l.saksi?.nama || l.saksi_manual) && <p className="text-[11px] text-gray-400 mt-0.5">Saksi: {l.saksi?.nama ?? l.saksi_manual}</p>}
+                        <p className="text-xs text-gray-500 mt-0.5">Minta klarifikasi sejak {l.klarifikasi_diminta_at ? tglWaktu(l.klarifikasi_diminta_at) : "-"}</p>
+                        {sisa && <p className={`text-[11px] mt-1 flex items-center gap-1 ${sisa.lewat ? "text-blue-700 font-semibold" : "text-gray-400"}`}><Clock size={11} /> {sisa.teks}</p>}
+                      </div>
+                      {!!l.foto_bukti_urls?.length && (
+                        <button onClick={() => setFotoModal(l.foto_bukti_urls)} className="w-14 h-14 rounded-lg overflow-hidden border border-gray-200 shrink-0 relative">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={l.foto_bukti_urls[0]} alt="bukti" className="w-full h-full object-cover" />
+                          {l.foto_bukti_urls.length > 1 && <span className="absolute bottom-0 right-0 bg-black/60 text-white text-[9px] px-1 rounded-tl">+{l.foto_bukti_urls.length - 1}</span>}
+                        </button>
+                      )}
                     </div>
                     <div className="flex flex-wrap gap-2">
                       <button onClick={() => { setKlarifikasiModal(l); setKlarifikasiCatatan(""); }} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-blue-500 text-white hover:bg-blue-600">Catat Klarifikasi Sekarang</button>
@@ -441,6 +453,23 @@ export default function PelanggaranPage() {
               </div>
               <button onClick={() => setKlarifikasiModal(null)} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
             </div>
+            {(klarifikasiModal.keterangan || klarifikasiModal.saksi?.nama || klarifikasiModal.saksi_manual || !!klarifikasiModal.foto_bukti_urls?.length) && (
+              <div className="rounded-xl bg-gray-50 border border-gray-100 p-3 space-y-1.5">
+                <p className="text-[11px] text-gray-400 font-semibold uppercase">Laporan asli dari {klarifikasiModal.dilaporkan_oleh}</p>
+                {klarifikasiModal.keterangan && <p className="text-xs text-gray-600 italic">&ldquo;{klarifikasiModal.keterangan}&rdquo;</p>}
+                {(klarifikasiModal.saksi?.nama || klarifikasiModal.saksi_manual) && <p className="text-[11px] text-gray-500">Saksi: {klarifikasiModal.saksi?.nama ?? klarifikasiModal.saksi_manual}</p>}
+                {!!klarifikasiModal.foto_bukti_urls?.length && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {klarifikasiModal.foto_bukti_urls.map((url, i) => (
+                      <button key={i} onClick={() => setFotoModal(klarifikasiModal.foto_bukti_urls)} className="w-14 h-14 rounded-lg overflow-hidden border border-gray-200">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={url} alt="bukti" className="w-full h-full object-cover" />
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             <div>
               <label className="label">Catatan klarifikasi (wajib) — ringkasan alasan karyawan & keputusan Anda</label>
               <textarea className="input" rows={4} value={klarifikasiCatatan} onChange={(e) => setKlarifikasiCatatan(e.target.value)} placeholder="Contoh: Karyawan menjelaskan bahwa keterlambatan disebabkan oleh... Keputusan: poin tetap ditetapkan karena..." />
@@ -470,6 +499,22 @@ export default function PelanggaranPage() {
                 </p>
               </div>
             </div>
+            {(konfirmasi.l.keterangan || konfirmasi.l.saksi?.nama || konfirmasi.l.saksi_manual || !!konfirmasi.l.foto_bukti_urls?.length) && (
+              <div className="rounded-xl bg-gray-50 border border-gray-100 p-3 space-y-1.5">
+                {konfirmasi.l.keterangan && <p className="text-xs text-gray-600 italic">&ldquo;{konfirmasi.l.keterangan}&rdquo;</p>}
+                {(konfirmasi.l.saksi?.nama || konfirmasi.l.saksi_manual) && <p className="text-[11px] text-gray-500">Saksi: {konfirmasi.l.saksi?.nama ?? konfirmasi.l.saksi_manual}</p>}
+                {!!konfirmasi.l.foto_bukti_urls?.length && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {konfirmasi.l.foto_bukti_urls.map((url, i) => (
+                      <button key={i} onClick={() => setFotoModal(konfirmasi.l.foto_bukti_urls)} className="w-14 h-14 rounded-lg overflow-hidden border border-gray-200">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={url} alt="bukti" className="w-full h-full object-cover" />
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             <div className="flex gap-2">
               <button onClick={() => setKonfirmasi(null)} className="flex-1 text-sm font-semibold px-3 py-2 rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200">Batal</button>
               <button onClick={() => konfirmasi.aksi === "terima" ? terimaLangsung(konfirmasi.l) : tolakLangsung(konfirmasi.l)}
