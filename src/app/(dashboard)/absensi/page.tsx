@@ -26,12 +26,23 @@ interface Karyawan {
   id: string;
   nama: string;
   jabatan: string | null;
+  kategori_dokumen: string | null;
   no_hp: string | null;
   tanggal_masuk_kerja: string | null;
   user_id: string | null;
   status: "aktif" | "nonaktif";
   created_at: string;
 }
+
+// Jabatan & kategori_dokumen selalu sinkron — dipakai juga untuk memilih
+// jalur pelanggaran & dokumen PP (lihat halaman Lapor Pelanggaran & TTD Karyawan).
+export const JABATAN_OPTIONS: { value: string; label: string }[] = [
+  { value: "training_produksi", label: "Training Produksi" },
+  { value: "training_packing", label: "Training Packing" },
+  { value: "staff_produksi", label: "Staff Produksi" },
+  { value: "staff_packing", label: "Staff Packing" },
+  { value: "spv", label: "SPV" },
+];
 interface ErpUser { id: string; nama: string }
 interface Shift   { id: string; nama_shift: string; jam_masuk: string; jam_pulang: string }
 interface Assignment {
@@ -89,7 +100,7 @@ export default function AbsensiPage() {
 
   async function fetchAll() {
     const [kRes, uRes, sRes] = await Promise.all([
-      supabase.from("karyawan").select("id, nama, jabatan, no_hp, tanggal_masuk_kerja, user_id, status, created_at").order("nama"),
+      supabase.from("karyawan").select("id, nama, jabatan, kategori_dokumen, no_hp, tanggal_masuk_kerja, user_id, status, created_at").order("nama"),
       supabase.from("users").select("id, nama").order("nama"),
       supabase.from("shift_master").select("id, nama_shift, jam_masuk, jam_pulang").order("nama_shift"),
     ]);
@@ -317,31 +328,32 @@ function DataKaryawan({ karyawanList, erpUsers, onChange }: {
   const [busy,     setBusy]     = useState(false);
   const [err,      setErr]      = useState("");
 
-  const [form, setForm] = useState({ nama: "", jabatan: "", no_hp: "", tanggal_masuk: "", pin: "", user_id: "", status: "aktif" as "aktif" | "nonaktif" });
+  const [form, setForm] = useState({ nama: "", kategori_dokumen: "", no_hp: "", tanggal_masuk: "", pin: "", user_id: "", status: "aktif" as "aktif" | "nonaktif" });
 
   function openCreate() {
     setEditRow(null);
-    setForm({ nama: "", jabatan: "", no_hp: "", tanggal_masuk: "", pin: "", user_id: "", status: "aktif" });
+    setForm({ nama: "", kategori_dokumen: "", no_hp: "", tanggal_masuk: "", pin: "", user_id: "", status: "aktif" });
     setErr(""); setShowForm(true);
   }
   function openEdit(k: Karyawan) {
     setEditRow(k);
-    setForm({ nama: k.nama, jabatan: k.jabatan ?? "", no_hp: k.no_hp ?? "", tanggal_masuk: k.tanggal_masuk_kerja ?? "", pin: "", user_id: k.user_id ?? "", status: k.status });
+    setForm({ nama: k.nama, kategori_dokumen: k.kategori_dokumen ?? "", no_hp: k.no_hp ?? "", tanggal_masuk: k.tanggal_masuk_kerja ?? "", pin: "", user_id: k.user_id ?? "", status: k.status });
     setErr(""); setShowForm(true);
   }
 
   async function save() {
     setErr("");
     if (!form.nama.trim())    { setErr("Nama wajib diisi"); return; }
-    if (!form.jabatan.trim()) { setErr("Jabatan wajib diisi"); return; }
+    if (!form.kategori_dokumen) { setErr("Jabatan wajib dipilih"); return; }
     // PIN wajib saat tambah; saat edit boleh kosong (tidak diubah)
     if (!editRow && !/^\d{6}$/.test(form.pin)) { setErr("PIN absensi harus 6 digit angka"); return; }
     if (editRow && form.pin && !/^\d{6}$/.test(form.pin)) { setErr("PIN absensi harus 6 digit angka"); return; }
 
     setBusy(true);
     try {
+      const jabatanLabel = JABATAN_OPTIONS.find((o) => o.value === form.kategori_dokumen)?.label ?? "";
       const payload: Record<string, unknown> = {
-        nama: form.nama.trim(), jabatan: form.jabatan.trim(),
+        nama: form.nama.trim(), jabatan: jabatanLabel, kategori_dokumen: form.kategori_dokumen,
         no_hp: form.no_hp.trim() || null,
         tanggal_masuk_kerja: form.tanggal_masuk || null,
         user_id: form.user_id || null,
@@ -442,7 +454,12 @@ function DataKaryawan({ karyawanList, erpUsers, onChange }: {
               </div>
               <div>
                 <label className="label">Jabatan *</label>
-                <input className="input" value={form.jabatan} onChange={(e) => setForm((f) => ({ ...f, jabatan: e.target.value }))} placeholder="SPV / Staff Produksi / Kurir..." />
+                <select className="input" value={form.kategori_dokumen} onChange={(e) => setForm((f) => ({ ...f, kategori_dokumen: e.target.value }))}>
+                  <option value="">— Pilih jabatan —</option>
+                  {JABATAN_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                  ))}
+                </select>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>

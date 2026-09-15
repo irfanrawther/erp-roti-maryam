@@ -33,6 +33,10 @@ function jalurDariKategori(k: string | null): "training" | "staff" | "spv" | nul
   if (k === "spv") return "spv";
   return null;
 }
+const KATEGORI_LABEL: Record<string, string> = {
+  training_produksi: "Training Produksi", training_packing: "Training Packing",
+  staff_produksi: "Staff Produksi", staff_packing: "Staff Packing", spv: "SPV",
+};
 
 export default function LaporPelanggaranPage() {
   const router = useRouter();
@@ -45,6 +49,9 @@ export default function LaporPelanggaranPage() {
   // ── Alur "Lapor Pelanggaran" ──
   const [langkah, setLangkah] = useState<"jalur" | "pilih" | "form">("jalur");
   const [jalur, setJalur] = useState<"training" | "staff" | "spv" | null>(null);
+  // kategori_dokumen spesifik dipilih (training_produksi/training_packing/staff_produksi/staff_packing) —
+  // hanya menyaring daftar karyawan yang tampil, katalog pelanggaran tetap per-jalur (training/staff/spv).
+  const [kategoriPilih, setKategoriPilih] = useState<string | null>(null);
   const [master, setMaster] = useState<MasterPelanggaranRow[]>([]);
   const [cari, setCari] = useState("");
   const [pel, setPel] = useState<MasterPelanggaranRow | null>(null);
@@ -100,8 +107,8 @@ export default function LaporPelanggaranPage() {
     setRiwayatInsiden((iRes.data as unknown as LaporanInsiden[]) ?? []);
   }
 
-  async function pilihJalur(j: "training" | "staff" | "spv") {
-    setJalur(j); setLangkah("pilih"); setCari(""); setPel(null);
+  async function pilihJalur(j: "training" | "staff" | "spv", kategori: string | null = null) {
+    setJalur(j); setKategoriPilih(kategori); setLangkah("pilih"); setCari(""); setPel(null);
     if (j === "spv") {
       // SPV lapor SPV lain: gabungkan katalog umum (tier1-3) + khusus (Pasal 12)
       const [umum, khusus] = await Promise.all([ambilPelanggaranUmum("spv"), ambilSpvKhusus()]);
@@ -119,8 +126,12 @@ export default function LaporPelanggaranPage() {
   }
 
   const karyawanJalur = useMemo(
-    () => karyawan.filter((k) => jalurDariKategori(k.kategori_dokumen) === jalur && k.nama !== user?.nama),
-    [karyawan, jalur, user]
+    () => karyawan.filter((k) =>
+      jalurDariKategori(k.kategori_dokumen) === jalur &&
+      (!kategoriPilih || k.kategori_dokumen === kategoriPilih) &&
+      k.nama !== user?.nama
+    ),
+    [karyawan, jalur, kategoriPilih, user]
   );
   const karyawanHasil = useMemo(
     () => karyawanJalur.filter((k) => k.nama.toLowerCase().includes(cariKaryawan.toLowerCase())),
@@ -159,7 +170,7 @@ export default function LaporPelanggaranPage() {
       });
       if (error) throw new Error(error.message);
       setMsg("Laporan terkirim — menunggu keputusan Manajer Operasional.");
-      setLangkah("jalur"); setJalur(null); setPel(null);
+      setLangkah("jalur"); setJalur(null); setKategoriPilih(null); setPel(null);
       fetchRiwayat(user);
     } catch (e) { setErr(e instanceof Error ? e.message : "Gagal mengirim"); }
     finally { setBusy(false); }
@@ -205,19 +216,29 @@ export default function LaporPelanggaranPage() {
             {langkah === "jalur" && (
               <>
                 <p className="text-sm font-semibold text-gray-600">Karyawan yang dilaporkan jalur apa?</p>
-                <div className="grid grid-cols-3 gap-3">
-                  <button onClick={() => pilihJalur("training")}
+                <div className="grid grid-cols-2 gap-3">
+                  <button onClick={() => pilihJalur("training", "training_produksi")}
                     className="flex flex-col items-center gap-2 py-6 rounded-xl border-2 border-gray-100 hover:border-red-300 hover:bg-red-50/40 transition-colors">
                     <User size={26} className="text-gray-400" />
-                    <span className="font-semibold text-gray-700">Training</span>
+                    <span className="font-semibold text-gray-700">Training Produksi</span>
                   </button>
-                  <button onClick={() => pilihJalur("staff")}
+                  <button onClick={() => pilihJalur("training", "training_packing")}
+                    className="flex flex-col items-center gap-2 py-6 rounded-xl border-2 border-gray-100 hover:border-red-300 hover:bg-red-50/40 transition-colors">
+                    <User size={26} className="text-gray-400" />
+                    <span className="font-semibold text-gray-700">Training Packing</span>
+                  </button>
+                  <button onClick={() => pilihJalur("staff", "staff_produksi")}
                     className="flex flex-col items-center gap-2 py-6 rounded-xl border-2 border-gray-100 hover:border-red-300 hover:bg-red-50/40 transition-colors">
                     <Users size={26} className="text-gray-400" />
-                    <span className="font-semibold text-gray-700">Staff</span>
+                    <span className="font-semibold text-gray-700">Staff Produksi</span>
+                  </button>
+                  <button onClick={() => pilihJalur("staff", "staff_packing")}
+                    className="flex flex-col items-center gap-2 py-6 rounded-xl border-2 border-gray-100 hover:border-red-300 hover:bg-red-50/40 transition-colors">
+                    <Users size={26} className="text-gray-400" />
+                    <span className="font-semibold text-gray-700">Staff Packing</span>
                   </button>
                   <button onClick={() => pilihJalur("spv")}
-                    className="flex flex-col items-center gap-2 py-6 rounded-xl border-2 border-gray-100 hover:border-red-300 hover:bg-red-50/40 transition-colors">
+                    className="col-span-2 flex flex-col items-center gap-2 py-6 rounded-xl border-2 border-gray-100 hover:border-red-300 hover:bg-red-50/40 transition-colors">
                     <UserCog size={26} className="text-gray-400" />
                     <span className="font-semibold text-gray-700">SPV</span>
                   </button>
@@ -233,7 +254,7 @@ export default function LaporPelanggaranPage() {
               <>
                 <div className="flex items-center gap-2">
                   <button onClick={() => setLangkah("jalur")} className="text-gray-400 hover:text-gray-600"><ChevronLeft size={20} /></button>
-                  <p className="text-sm font-semibold text-gray-600">Pilih jenis pelanggaran — {jalur === "training" ? "Training" : jalur === "staff" ? "Staff" : "SPV"}</p>
+                  <p className="text-sm font-semibold text-gray-600">Pilih jenis pelanggaran — {kategoriPilih ? KATEGORI_LABEL[kategoriPilih] : "SPV"}</p>
                 </div>
                 <div className="relative">
                   <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -295,7 +316,7 @@ export default function LaporPelanggaranPage() {
                 </div>
 
                 <div>
-                  <label className="label">Karyawan ({jalur === "training" ? "Training" : jalur === "staff" ? "Staff" : "SPV"})</label>
+                  <label className="label">Karyawan ({kategoriPilih ? KATEGORI_LABEL[kategoriPilih] : "SPV"})</label>
                   <input value={cariKaryawan} onChange={(e) => setCariKaryawan(e.target.value)} placeholder="Cari nama…" className="input mb-1.5" />
                   <div className="max-h-36 overflow-y-auto rounded-xl border border-gray-100 divide-y divide-gray-50">
                     {karyawanHasil.length === 0 && <p className="text-xs text-gray-400 text-center py-3">Tidak ditemukan</p>}
