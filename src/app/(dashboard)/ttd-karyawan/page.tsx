@@ -6,7 +6,6 @@ import { supabase } from "@/lib/supabase";
 import { getUserSession, canAccessAdmin, type UserSession } from "@/lib/auth";
 import { homeRoute } from "@/lib/permissions";
 import { FileSignature, Search, CheckCircle2, AlertCircle, ChevronRight, ChevronLeft, Printer } from "lucide-react";
-import { jalurDariKategori } from "@/lib/aturan";
 
 const DokumenViewerPerusahaan = dynamic(() => import("./DokumenViewerPerusahaan"), { ssr: false });
 
@@ -70,11 +69,10 @@ export default function TtdKaryawanPage() {
     setCatBusy(null);
   }
 
-  // Tiap jalur punya 2 dokumen terpisah (PK + PP) — keduanya perlu TTD perusahaan.
+  // Tiap kategori jabatan punya 2 dokumen terpisah (PK + PP) — keduanya perlu TTD perusahaan.
   function dokumenUntuk(k: Karyawan): Dokumen[] {
-    const j = jalurDariKategori(k.kategori_dokumen);
-    if (!j) return [];
-    return docs.filter((d) => d.jalur === j);
+    if (!k.kategori_dokumen) return [];
+    return docs.filter((d) => d.jalur === k.kategori_dokumen);
   }
   function statusKaryawan(k: Karyawan, d: Dokumen) {
     return approvalsKaryawan.find((a) => a.dokumen_id === d.id && a.dokumen_versi === d.versi && a.karyawan_id === k.id) ?? null;

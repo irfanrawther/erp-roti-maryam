@@ -4,8 +4,7 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { getUserSession, canAccessAdmin, type UserSession } from "@/lib/auth";
 import { homeRoute } from "@/lib/permissions";
-import { jalurDariKategori } from "@/lib/aturan";
-import { SLOT_DOKUMEN, JALUR_LABEL_DOK, type SlotDokumen } from "@/lib/dokumen";
+import { SLOT_DOKUMEN, JALUR_LABEL_DOK, KATEGORI_DOKUMEN_LIST, type SlotDokumen } from "@/lib/dokumen";
 import { FileText, Upload, X, CheckCircle2, AlertCircle, Archive, RefreshCw, Printer, Pencil, Save } from "lucide-react";
 import { fieldDikenalMilik } from "@/lib/dokumenParse";
 
@@ -63,9 +62,9 @@ export default function KelolaDokumenPage() {
 
   const arsip = docs.filter((d) => !d.is_aktif);
 
-  // Karyawan yang wajib menandatangani slot ini = yang jalurnya cocok
+  // Karyawan yang wajib menandatangani slot ini = yang kategori jabatannya cocok
   const karyawanSlot = (s: SlotDokumen) =>
-    karyawan.filter((k) => jalurDariKategori(k.kategori_dokumen) === s.jalur);
+    karyawan.filter((k) => k.kategori_dokumen === s.jalur);
 
   const approvalOf = (dok: Dokumen, karId: string) =>
     approvals.find((p) => p.dokumen_id === dok.id && p.dokumen_versi === dok.versi && p.karyawan_id === karId) ?? null;
@@ -181,16 +180,16 @@ export default function KelolaDokumenPage() {
         <h1 className="text-xl font-bold text-gray-800">Dokumen & Tanda Tangan</h1>
       </div>
       <p className="text-sm text-gray-500">
-        Enam slot dokumen, masing-masing ditandatangani terpisah. Upload file baru pada satu slot
-        otomatis menaikkan versinya; tanda tangan yang sudah ada tetap menunjuk ke versi yang
-        ditandatangani saat itu.
+        Sepuluh slot dokumen (5 kategori jabatan × Perjanjian Kerja + Peraturan Perusahaan), masing-masing
+        ditandatangani terpisah. Upload file baru pada satu slot otomatis menaikkan versinya; tanda tangan
+        yang sudah ada tetap menunjuk ke versi yang ditandatangani saat itu.
       </p>
 
       {err && <div className="flex items-center gap-2 text-sm bg-red-50 text-red-600 rounded-xl px-3 py-2"><AlertCircle size={15} /> {err}</div>}
 
       {loading ? <p className="text-sm text-gray-400 text-center py-8">Memuat…</p> : (
         <>
-          {(["training", "staff", "spv"] as const).map((jalur) => (
+          {KATEGORI_DOKUMEN_LIST.map((jalur) => (
             <div key={jalur} className="card space-y-2">
               <h2 className="font-semibold text-gray-700 text-sm">{JALUR_LABEL_DOK[jalur]}</h2>
               {SLOT_DOKUMEN.filter((s) => s.jalur === jalur).map((s) => {

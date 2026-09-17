@@ -5,7 +5,6 @@ import { supabase } from "@/lib/supabase";
 import { hashPin } from "@/lib/auth";
 import { UserCircle, Clock, ClipboardList, CalendarDays, FileText, CheckCircle2, AlertCircle, X, ExternalLink, ShieldAlert, PenLine, Eye } from "lucide-react";
 import { kuartalSekarang, labelKuartal, POIN_PER_SP } from "@/lib/poin";
-import { jalurDariKategori } from "@/lib/aturan";
 import { hitungKlarifikasiDeadline, type StatusLaporan } from "@/lib/pelanggaranAlur";
 
 const TandaTanganDokumen = dynamic(() => import("./TandaTanganDokumen"), { ssr: false });
@@ -27,6 +26,35 @@ function hariTgl(iso: string) { return new Date(`${iso}T00:00:00+07:00`).toLocal
 function hariTglPendek(iso: string) { return new Date(`${iso}T00:00:00+07:00`).toLocaleDateString("id-ID", { timeZone: "Asia/Jakarta", weekday: "short", day: "numeric", month: "short" }); }
 function jam(iso: string | null) { return iso ? new Date(iso).toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta", hour: "2-digit", minute: "2-digit" }) : "—"; }
 function tglWaktu(iso: string) { return new Date(iso).toLocaleString("id-ID", { timeZone: "Asia/Jakarta", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }); }
+interface DokRow { id: string; nama: string; versi: number; wajib_ttd: boolean; file_pdf_url: string | null; konten_html: string | null }
+interface PersetujuanRow { dokumen_id: string; dokumen_versi: number; disetujui_at: string; tipe: string; tanda_tangan_url: string | null; data_isian: Record<string, string> | null }
+
+// Dokumen karyawan = gabungan dari 2 sumber:
+// 1. Slot AKTIF untuk kategori_dokumen SAAT INI (mis. sudah naik ke Staff → PK/PP Staff)
+// 2. Dokumen APAPUN yang pernah ditandatangani (dari riwayat dokumen_persetujuan), meski
+//    kategorinya sudah berubah — supaya dokumen Training lama TETAP tampil di dashboard
+//    walau yang wajib ditandatangani sekarang sudah pindah ke Staff.
+async function fetchDokumenKaryawan(karyawanId: string, kategoriDokumen: string | null): Promise<DokItem[]> {
+  const [dk, pj] = await Promise.all([
+    kategoriDokumen
+      ? supabase.from("dokumen").select("id, nama, versi, wajib_ttd, file_pdf_url, konten_html").eq("is_aktif", true).eq("jalur", kategoriDokumen).order("jenis")
+      : Promise.resolve({ data: [] as DokRow[] }),
+    supabase.from("dokumen_persetujuan").select("dokumen_id, dokumen_versi, disetujui_at, tipe, tanda_tangan_url, data_isian").eq("karyawan_id", karyawanId),
+  ]);
+  const persetujuan = (pj.data as PersetujuanRow[] | null) ?? [];
+  const current = (dk.data as DokRow[] | null) ?? [];
+  const currentIds = new Set(current.map((d) => d.id));
+  const historyIds = Array.from(new Set(persetujuan.map((p) => p.dokumen_id))).filter((id) => !currentIds.has(id));
+  let history: DokRow[] = [];
+  if (historyIds.length > 0) {
+    const { data } = await supabase.from("dokumen").select("id, nama, versi, wajib_ttd, file_pdf_url, konten_html").in("id", historyIds);
+    history = (data as DokRow[] | null) ?? [];
+  }
+  return [...current, ...history].map((d) => ({
+    ...d, approved: persetujuan.find((p) => p.dokumen_id === d.id && p.dokumen_versi === d.versi) ?? null,
+  }));
+}
+
 function sisaWaktu(deadlineIso: string | null): { teks: string; lewat: boolean } | null {
   if (!deadlineIso) return null;
   const ms = new Date(deadlineIso).getTime() - Date.now();
@@ -82,20 +110,14 @@ export default function DashboardSayaPage() {
       const kar = k as Karyawan; setKaryawan(kar);
 
       const upTo = addDaysStr(today, 7);
-      // Tiap jalur punya 2 dokumen terpisah (PK + PP) — keduanya wajib ditandatangani.
-      const jalurKar = jalurDariKategori(kar.kategori_dokumen);
-      const dokQuery = jalurKar
-        ? supabase.from("dokumen").select("id, nama, versi, wajib_ttd, file_pdf_url, konten_html").eq("is_aktif", true).eq("jalur", jalurKar).order("jenis")
-        : Promise.resolve({ data: [] as { id: string; nama: string; versi: number; wajib_ttd: boolean; file_pdf_url: string | null; konten_html: string | null }[] });
-      const [asg, abs, jd, dk, pj, pn, spr, kl] = await Promise.all([
+      const [asg, abs, jd, dokItems, pn, spr, kl] = await Promise.all([
         supabase.from("shift_assignment").select("tanggal, is_libur, shift_id, shift_master:shift_id(nama_shift, jam_masuk, jam_pulang)")
           .eq("karyawan_id", kar.id).gte("tanggal", monthStart).lte("tanggal", upTo).order("tanggal"),
         supabase.from("absensi").select("tanggal, jam_checkin, jam_checkout, menit_telat, status_kehadiran, is_flagged, is_override, shift_master:shift_id(nama_shift)")
           .eq("karyawan_id", kar.id).gte("tanggal", monthStart).lte("tanggal", today).order("tanggal", { ascending: false }),
         supabase.from("audit_kebersihan_roster_harian").select("tanggal, nama_tugas_datang, nama_tugas")
           .eq("karyawan_id", kar.id).eq("is_aktif", true).gte("tanggal", today).lte("tanggal", upTo).order("tanggal"),
-        dokQuery,
-        supabase.from("dokumen_persetujuan").select("dokumen_id, dokumen_versi, disetujui_at, tipe, tanda_tangan_url, data_isian").eq("karyawan_id", kar.id),
+        fetchDokumenKaryawan(kar.id, kar.kategori_dokumen),
         supabase.from("poin_karyawan").select("tanggal, poin, sumber, catatan, master_pelanggaran:pelanggaran_id(nama_pelanggaran)").eq("karyawan_id", kar.id).eq("kuartal", kuartalSekarang()).order("tanggal", { ascending: false }),
         supabase.from("status_sp_karyawan").select("level_sp, kuartal_kena").eq("karyawan_id", kar.id).eq("is_aktif", true),
         supabase.from("laporan_pelanggaran").select("id, tanggal_kejadian, status, respon_deadline, klarifikasi_deadline, poin_override, master_pelanggaran:pelanggaran_id(nama_pelanggaran, poin)")
@@ -105,10 +127,7 @@ export default function DashboardSayaPage() {
       setAssigns((asg.data as unknown as AssignRow[]) ?? []);
       setAbsensi((abs.data as unknown as AbsRow[]) ?? []);
       setRosterMinggu((jd.data as RosterJobdesk[]) ?? []);
-      const persetujuan = (pj.data as { dokumen_id: string; dokumen_versi: number; disetujui_at: string; tipe: string; tanda_tangan_url: string | null; data_isian: Record<string,string> | null }[] | null) ?? [];
-      setDocs(((dk.data as { id: string; nama: string; versi: number; wajib_ttd: boolean; file_pdf_url: string | null; konten_html: string | null }[] | null) ?? []).map((d) => ({
-        ...d, approved: persetujuan.find((p) => p.dokumen_id === d.id && p.dokumen_versi === d.versi) ?? null,
-      })));
+      setDocs(dokItems);
       setPoinRows((pn.data as unknown as { tanggal: string; poin: number; sumber: string; master_pelanggaran: { nama_pelanggaran: string } | null; catatan: string | null }[]) ?? []);
       const sps = (spr.data as { level_sp: number; kuartal_kena: string }[] | null) ?? [];
       setSpLevel(sps.reduce((mx, s) => Math.max(mx, s.level_sp), 0));
@@ -120,17 +139,7 @@ export default function DashboardSayaPage() {
 
   async function refreshDocs() {
     if (!karyawan) return;
-    const jalurKar = jalurDariKategori(karyawan.kategori_dokumen);
-    const [dk, pj] = await Promise.all([
-      jalurKar
-        ? supabase.from("dokumen").select("id, nama, versi, wajib_ttd, file_pdf_url, konten_html").eq("is_aktif", true).eq("jalur", jalurKar).order("jenis")
-        : Promise.resolve({ data: [] as { id: string; nama: string; versi: number; wajib_ttd: boolean; file_pdf_url: string | null; konten_html: string | null }[] }),
-      supabase.from("dokumen_persetujuan").select("dokumen_id, dokumen_versi, disetujui_at, tipe, tanda_tangan_url, data_isian").eq("karyawan_id", karyawan.id),
-    ]);
-    const persetujuan = (pj.data as { dokumen_id: string; dokumen_versi: number; disetujui_at: string; tipe: string; tanda_tangan_url: string | null; data_isian: Record<string,string> | null }[] | null) ?? [];
-    setDocs(((dk.data as { id: string; nama: string; versi: number; wajib_ttd: boolean; file_pdf_url: string | null; konten_html: string | null }[] | null) ?? []).map((d) => ({
-      ...d, approved: persetujuan.find((p) => p.dokumen_id === d.id && p.dokumen_versi === d.versi) ?? null,
-    })));
+    setDocs(await fetchDokumenKaryawan(karyawan.id, karyawan.kategori_dokumen));
   }
 
   // Pasal 6: karyawan boleh minta klarifikasi tatap muka ke Manajer
