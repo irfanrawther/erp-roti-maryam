@@ -18,7 +18,7 @@ interface AbsRow {
   shift_master: { nama_shift: string } | null;
 }
 interface RosterJobdesk { tanggal: string; nama_tugas_datang: string | null; nama_tugas: string }
-interface DokItem { id: string; nama: string; versi: number; wajib_ttd: boolean; file_pdf_url: string | null; konten_html: string | null; approved: { disetujui_at: string; tipe: string; tanda_tangan_url: string | null; data_isian: Record<string,string> | null } | null }
+interface DokItem { id: string; nama: string; versi: number; wajib_ttd: boolean; file_pdf_url: string | null; konten_html: string | null; approved: { disetujui_at: string; tipe: string; tanda_tangan_url: string | null; data_isian: Record<string,string> | null } | null; perusahaanApproved: boolean }
 
 function todayWIB() { return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" }); }
 function addDaysStr(iso: string, n: number) { const d = new Date(`${iso}T00:00:00+07:00`); d.setDate(d.getDate() + n); return d.toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" }); }
@@ -28,30 +28,37 @@ function jam(iso: string | null) { return iso ? new Date(iso).toLocaleTimeString
 function tglWaktu(iso: string) { return new Date(iso).toLocaleString("id-ID", { timeZone: "Asia/Jakarta", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }); }
 interface DokRow { id: string; nama: string; versi: number; wajib_ttd: boolean; file_pdf_url: string | null; konten_html: string | null }
 interface PersetujuanRow { dokumen_id: string; dokumen_versi: number; disetujui_at: string; tipe: string; tanda_tangan_url: string | null; data_isian: Record<string, string> | null }
+interface TtdPerusahaanRow { dokumen_id: string; dokumen_versi: number }
 
-// Dokumen karyawan = gabungan dari 2 sumber:
+// Dokumen karyawan = gabungan dari 2 sumber, keduanya HANYA yang masih AKTIF
+// (dokumen yang sudah diarsipkan/diganti versi baru sengaja tidak tampil lagi
+// di sini — riwayat lengkapnya tetap ada, tapi hanya di panel Super Admin):
 // 1. Slot AKTIF untuk kategori_dokumen SAAT INI (mis. sudah naik ke Staff → PK/PP Staff)
-// 2. Dokumen APAPUN yang pernah ditandatangani (dari riwayat dokumen_persetujuan), meski
-//    kategorinya sudah berubah — supaya dokumen Training lama TETAP tampil di dashboard
+// 2. Dokumen aktif LAIN yang pernah ditandatangani (dari riwayat dokumen_persetujuan),
+//    meski kategorinya sudah berubah — supaya dokumen Training lama TETAP tampil
 //    walau yang wajib ditandatangani sekarang sudah pindah ke Staff.
 async function fetchDokumenKaryawan(karyawanId: string, kategoriDokumen: string | null): Promise<DokItem[]> {
-  const [dk, pj] = await Promise.all([
+  const [dk, pj, tp] = await Promise.all([
     kategoriDokumen
       ? supabase.from("dokumen").select("id, nama, versi, wajib_ttd, file_pdf_url, konten_html").eq("is_aktif", true).eq("jalur", kategoriDokumen).order("jenis")
       : Promise.resolve({ data: [] as DokRow[] }),
     supabase.from("dokumen_persetujuan").select("dokumen_id, dokumen_versi, disetujui_at, tipe, tanda_tangan_url, data_isian").eq("karyawan_id", karyawanId),
+    supabase.from("dokumen_ttd_perusahaan").select("dokumen_id, dokumen_versi").eq("karyawan_id", karyawanId),
   ]);
   const persetujuan = (pj.data as PersetujuanRow[] | null) ?? [];
+  const ttdPerusahaan = (tp.data as TtdPerusahaanRow[] | null) ?? [];
   const current = (dk.data as DokRow[] | null) ?? [];
   const currentIds = new Set(current.map((d) => d.id));
   const historyIds = Array.from(new Set(persetujuan.map((p) => p.dokumen_id))).filter((id) => !currentIds.has(id));
   let history: DokRow[] = [];
   if (historyIds.length > 0) {
-    const { data } = await supabase.from("dokumen").select("id, nama, versi, wajib_ttd, file_pdf_url, konten_html").in("id", historyIds);
+    const { data } = await supabase.from("dokumen").select("id, nama, versi, wajib_ttd, file_pdf_url, konten_html").eq("is_aktif", true).in("id", historyIds);
     history = (data as DokRow[] | null) ?? [];
   }
   return [...current, ...history].map((d) => ({
-    ...d, approved: persetujuan.find((p) => p.dokumen_id === d.id && p.dokumen_versi === d.versi) ?? null,
+    ...d,
+    approved: persetujuan.find((p) => p.dokumen_id === d.id && p.dokumen_versi === d.versi) ?? null,
+    perusahaanApproved: ttdPerusahaan.some((p) => p.dokumen_id === d.id && p.dokumen_versi === d.versi),
   }));
 }
 
@@ -430,6 +437,7 @@ export default function DashboardSayaPage() {
                         {d.approved ? (
                           <p className="text-[11px] text-green-600 mt-0.5">
                             Ditandatangani {tglWaktu(d.approved.disetujui_at)}
+                            {!d.perusahaanApproved && <span className="text-amber-600"> · menunggu TTD perusahaan</span>}
                           </p>
                         ) : (
                           <p className="text-[11px] text-red-500 mt-0.5 font-medium">Belum ditandatangani</p>
@@ -446,16 +454,18 @@ export default function DashboardSayaPage() {
                               <PenLine size={12} /> Isi & tanda tangani
                             </button>
                           )}
-                          {d.approved && d.konten_html ? (
-                            <a href={`/cetak-dokumen?d=${d.id}&k=${karyawan?.id}`} target="_blank" rel="noopener noreferrer"
-                              className="text-[11px] text-gray-400 hover:text-gray-600 px-1.5 py-1.5 flex items-center gap-1">
-                              <ExternalLink size={12} /> Buka & unduh PDF
-                            </a>
-                          ) : d.file_pdf_url && (
-                            <a href={d.file_pdf_url} target="_blank" rel="noopener noreferrer"
-                              className="text-[11px] text-gray-400 hover:text-gray-600 px-1.5 py-1.5 flex items-center gap-1">
-                              <ExternalLink size={12} /> File asli
-                            </a>
+                          {d.approved && d.perusahaanApproved && (
+                            d.konten_html ? (
+                              <a href={`/cetak-dokumen?d=${d.id}&k=${karyawan?.id}`} target="_blank" rel="noopener noreferrer"
+                                className="text-[11px] text-gray-400 hover:text-gray-600 px-1.5 py-1.5 flex items-center gap-1">
+                                <ExternalLink size={12} /> Buka & unduh PDF
+                              </a>
+                            ) : d.file_pdf_url && (
+                              <a href={d.file_pdf_url} target="_blank" rel="noopener noreferrer"
+                                className="text-[11px] text-gray-400 hover:text-gray-600 px-1.5 py-1.5 flex items-center gap-1">
+                                <ExternalLink size={12} /> File asli
+                              </a>
+                            )
                           )}
                         </div>
                       </div>
