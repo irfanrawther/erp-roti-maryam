@@ -68,7 +68,10 @@ export function siapkanDokumen(htmlAsli: string): HasilParse {
       if (!isTitikTitik(teks)) continue;
       const def = FIELD_BY_LABEL[label];
       if (!def) { if (label) tidakDikenali.push(cells[0].textContent?.trim() ?? ""); continue; }
-      cells[i].innerHTML = `<span data-field="${def.key}" data-pemilik="${def.pemilik}" data-tipe="${def.tipe}"></span>`;
+      // tanggal_mulai_kerja diisi otomatis dari data karyawan (tanggal_masuk_kerja),
+      // bukan diketik manual — supaya tidak bisa disalahisikan beda dari data resmi.
+      const readonlyAttr = def.key === "tanggal_mulai_kerja" ? ` data-readonly="1"` : "";
+      cells[i].innerHTML = `<span data-field="${def.key}" data-pemilik="${def.pemilik}" data-tipe="${def.tipe}"${readonlyAttr}></span>`;
       ditemukan.set(def.key, def);
     }
   });

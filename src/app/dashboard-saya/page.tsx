@@ -9,7 +9,7 @@ import { hitungKlarifikasiDeadline, type StatusLaporan } from "@/lib/pelanggaran
 
 const TandaTanganDokumen = dynamic(() => import("./TandaTanganDokumen"), { ssr: false });
 
-interface Karyawan { id: string; nama: string; jabatan: string | null; kategori_dokumen: string | null }
+interface Karyawan { id: string; nama: string; jabatan: string | null; kategori_dokumen: string | null; tanggal_masuk_kerja: string | null }
 interface ShiftInfo { nama_shift: string; jam_masuk: string; jam_pulang: string }
 interface AssignRow { tanggal: string; is_libur: boolean; shift_id: string | null; shift_master: ShiftInfo | null }
 interface AbsRow {
@@ -105,7 +105,7 @@ export default function DashboardSayaPage() {
     try {
       const hash = await hashPin(pin);
       const { data: k } = await supabase.from("karyawan")
-        .select("id, nama, jabatan, kategori_dokumen").eq("pin_absensi", hash).eq("status", "aktif").maybeSingle();
+        .select("id, nama, jabatan, kategori_dokumen, tanggal_masuk_kerja").eq("pin_absensi", hash).eq("status", "aktif").maybeSingle();
       if (!k) { setPinErr("PIN tidak ditemukan"); return; }
       const kar = k as Karyawan; setKaryawan(kar);
 
@@ -394,6 +394,7 @@ export default function DashboardSayaPage() {
                 modeAwal={bukaDok.mode}
                 karyawanId={karyawan.id}
                 karyawanNama={karyawan.nama}
+                tanggalMasukKerja={karyawan.tanggal_masuk_kerja}
                 onBack={() => { setBukaDok(null); refreshDocs(); }}
                 onDone={() => { setBukaDok(null); refreshDocs(); }}
               />

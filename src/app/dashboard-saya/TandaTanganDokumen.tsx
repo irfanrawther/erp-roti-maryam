@@ -23,9 +23,9 @@ function tglWaktu(iso: string) {
  * itu diisi Super Admin dari panelnya sendiri.
  */
 export default function TandaTanganDokumen({
-  dok, karyawanId, karyawanNama, modeAwal, onBack, onDone,
+  dok, karyawanId, karyawanNama, tanggalMasukKerja, modeAwal, onBack, onDone,
 }: {
-  dok: DokTtd; karyawanId: string; karyawanNama: string;
+  dok: DokTtd; karyawanId: string; karyawanNama: string; tanggalMasukKerja?: string | null;
   modeAwal: "baca" | "ttd";
   onBack: () => void; onDone: () => void;
 }) {
@@ -54,6 +54,7 @@ export default function TandaTanganDokumen({
       const p = data as { data_isian: NilaiField | null; diwakili_oleh: string | null; jabatan_perwakilan: string | null } | null;
       setNilai({
         nama_lengkap: karyawanNama,
+        ...(tanggalMasukKerja ? { tanggal_mulai_kerja: tanggalMasukKerja } : {}),
         ...(p?.data_isian ?? {}),
         ...(p?.diwakili_oleh ? { diwakili_oleh: p.diwakili_oleh } : {}),
         ...(p?.jabatan_perwakilan ? { jabatan_perwakilan: p.jabatan_perwakilan } : {}),
