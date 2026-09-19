@@ -26,13 +26,29 @@ export function labelKuartal(k: string): string {
   return `${range[q] ?? ""} ${y}`;
 }
 
-// Ambil id master pelanggaran otomatis berdasarkan nama (cache sederhana)
+// Ambil id master pelanggaran otomatis berdasarkan nama (cache sederhana).
+// master_pelanggaran punya SATU baris per (nama, jalur) — nama sendirian
+// BUKAN unik (training/staff/spv masing-masing punya baris sendiri untuk
+// kategori telat yang sama). Kalau `jalur` tidak dikirim dan lebih dari
+// satu baris cocok, .maybeSingle() gagal diam-diam (data null, bukan
+// error) dan poin masuk tanpa pelanggaran_id — pernah kejadian nyata,
+// makanya `jalur` WAJIB dikirim untuk nama yang jalur-spesifik (semua
+// kategori "Terlambat ...").
 const idCache: Record<string, string> = {};
-export async function pelanggaranOtomatisId(nama: string): Promise<string | null> {
-  if (idCache[nama]) return idCache[nama];
-  const { data } = await supabase.from("master_pelanggaran").select("id").eq("nama_pelanggaran", nama).eq("jenis", "otomatis").maybeSingle();
+export async function pelanggaranOtomatisId(nama: string, jalur?: string | null): Promise<string | null> {
+  const cacheKey = jalur ? `${nama}|${jalur}` : nama;
+  if (idCache[cacheKey]) return idCache[cacheKey];
+  let q = supabase.from("master_pelanggaran").select("id").eq("nama_pelanggaran", nama).eq("jenis", "otomatis");
+  if (jalur) q = q.eq("jalur", jalur);
+  const { data, error } = await q.maybeSingle();
+  if (error) {
+    // Lebih dari satu baris cocok (mis. jalur tidak dikirim padahal wajib) —
+    // JANGAN diam-diam kembalikan null, supaya gagal kelihatan, bukan
+    // nyelip jadi poin tanpa nama pelanggaran.
+    throw new Error(`pelanggaranOtomatisId("${nama}"${jalur ? `, jalur="${jalur}"` : ""}): ${error.message}`);
+  }
   const id = (data as { id: string } | null)?.id ?? null;
-  if (id) idCache[nama] = id;
+  if (id) idCache[cacheKey] = id;
   return id;
 }
 
@@ -107,7 +123,7 @@ export async function poinTelat(karyawan_id: string, kategori: string | null, am
     kategori === "K1" ? "Terlambat Kategori 1 (1-15 menit)" :
     kategori === "K2" ? "Terlambat Kategori 2 (16-45 menit)" :
     "Terlambat Kategori 3 (lebih dari 45 menit)";
-  const pid = await pelanggaranOtomatisId(nama);
+  const pid = await pelanggaranOtomatisId(nama, jalur);
   await tambahPoin({ karyawan_id, pelanggaran_id: pid, poin: kat.poin, sumber: "otomatis", tanggal, absensi_id: absensiId ?? null });
 }
 
@@ -128,7 +144,12 @@ export async function sinkronPoinTelat(p: {
   const namaLateness = [
     "Terlambat Kategori 1 (1-15 menit)", "Terlambat Kategori 2 (16-45 menit)", "Terlambat Kategori 3 (lebih dari 45 menit)",
   ];
-  const idLateness = (await Promise.all(namaLateness.map((n) => pelanggaranOtomatisId(n)))).filter((x): x is string => !!x);
+  // Ambil id DI SEMUA jalur sekaligus (bukan lewat pelanggaranOtomatisId,
+  // yang sengaja butuh satu jalur pasti) — di sini kita justru mau
+  // menangkap poin lama apa pun jalurnya untuk dihapus/disinkronkan ulang.
+  const { data: latenessRows } = await supabase.from("master_pelanggaran")
+    .select("id").in("nama_pelanggaran", namaLateness).eq("jenis", "otomatis");
+  const idLateness = ((latenessRows as { id: string }[] | null) ?? []).map((r) => r.id);
 
   const { data: lama } = await supabase.from("poin_karyawan")
     .select("id, absensi_id")
