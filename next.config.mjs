@@ -11,4 +11,5 @@ const nextConfig = {
 
 export default withPWA({
   dest: 'public',
+  importScripts: ['push-sw.js'],
 })(nextConfig);

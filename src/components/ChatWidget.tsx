@@ -79,13 +79,19 @@ export default function ChatWidget() {
     if (!input.trim() || !user) return;
     if (!allowedRoomIds.includes(activeRoom)) return; // safety check
     setSending(true);
+    const pesan = input.trim();
     await supabase.from("chat_messages").insert({
       room_id: activeRoom,
       user_id: user.id,
-      message: input.trim(),
+      message: pesan,
     });
     setInput("");
     setSending(false);
+    fetch("/api/send-push", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ roomId: activeRoom, message: pesan, senderId: user.id, senderName: user.nama }),
+    }).catch(() => {}); // notifikasi gagal kirim tidak boleh menggagalkan chat itu sendiri
   }
 
   function formatTime(iso: string) {
