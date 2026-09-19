@@ -183,7 +183,7 @@ export default function TandaTanganDokumen({
           )}
 
           <div ref={scrollRef} onScroll={onScroll}
-            className="max-h-[58vh] overflow-y-auto px-4 py-3 bg-gray-50/40">
+            className={`${mode === "ttd" ? "max-h-[58vh] overflow-y-auto" : ""} px-4 py-3 bg-gray-50/40`}>
             <div className="bg-white rounded-xl border border-gray-200 px-3.5 py-4 shadow-sm">
               <DokumenTerstruktur
                 html={dok.konten_html}
