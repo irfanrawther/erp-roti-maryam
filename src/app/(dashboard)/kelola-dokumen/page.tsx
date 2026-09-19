@@ -12,7 +12,7 @@ interface Dokumen {
   id: string; nama: string; file_pdf_url: string | null; versi: number;
   wajib_ttd: boolean; is_aktif: boolean; created_at: string;
   jalur: string | null; jenis: string | null; uploaded_by: string | null;
-  konten_html: string | null;
+  konten_html: string | null; file_baca_url: string | null;
 }
 interface Karyawan { id: string; nama: string; kategori_dokumen: string | null }
 interface Persetujuan {
@@ -47,7 +47,7 @@ export default function KelolaDokumenPage() {
   const fetchAll = useCallback(async () => {
     setLoading(true);
     const [dRes, kRes, pRes] = await Promise.all([
-      supabase.from("dokumen").select("id, nama, file_pdf_url, versi, wajib_ttd, is_aktif, jalur, jenis, uploaded_by, konten_html, created_at").order("created_at"),
+      supabase.from("dokumen").select("id, nama, file_pdf_url, versi, wajib_ttd, is_aktif, jalur, jenis, uploaded_by, konten_html, file_baca_url, created_at").order("created_at"),
       supabase.from("karyawan").select("id, nama, kategori_dokumen").eq("status", "aktif").order("nama"),
       supabase.from("dokumen_persetujuan").select("dokumen_id, dokumen_versi, karyawan_id, tipe, tanda_tangan_url, disetujui_at, data_isian"),
     ]);
@@ -173,6 +173,28 @@ export default function KelolaDokumenPage() {
     finally { setBusy(null); }
   }
 
+  // PDF "asli" untuk mode Baca karyawan — hanya menempel ke baris dokumen
+  // AKTIF saat ini (bukan bikin versi baru). Kalau slot ini nanti diganti
+  // "Versi Baru", baris baru itu belum punya file_baca_url — perlu diupload
+  // ulang supaya tetap sinkron dengan Word versi terbarunya.
+  async function uploadFileBaca(d: Dokumen, f: File) {
+    const key = `baca-${d.id}`;
+    setBusy(key); setErr("");
+    try {
+      if (f.type !== "application/pdf" && !f.name.toLowerCase().endsWith(".pdf")) {
+        throw new Error("File untuk mode Baca harus PDF (convert dari Word dulu via \"Save as PDF\").");
+      }
+      const path = `baca_${d.jalur}_${d.jenis}_${Date.now()}.pdf`;
+      const up = await supabase.storage.from("dokumen").upload(path, f, { contentType: "application/pdf", upsert: true });
+      if (up.error) throw new Error("Gagal upload: " + up.error.message);
+      const url = supabase.storage.from("dokumen").getPublicUrl(path).data.publicUrl;
+      const { error } = await supabase.from("dokumen").update({ file_baca_url: url }).eq("id", d.id);
+      if (error) throw new Error(error.message);
+      await fetchAll();
+    } catch (e) { setErr(e instanceof Error ? e.message : "Gagal menyimpan"); }
+    finally { setBusy(null); }
+  }
+
   return (
     <div className="p-4 space-y-4 max-w-4xl mx-auto pb-24">
       <div className="flex items-center gap-2">
@@ -181,8 +203,13 @@ export default function KelolaDokumenPage() {
       </div>
       <p className="text-sm text-gray-500">
         Sepuluh slot dokumen (5 kategori jabatan × Perjanjian Kerja + Peraturan Perusahaan), masing-masing
-        ditandatangani terpisah. Upload file baru pada satu slot otomatis menaikkan versinya; tanda tangan
-        yang sudah ada tetap menunjuk ke versi yang ditandatangani saat itu.
+        ditandatangani terpisah. Upload file baru (docx) pada satu slot otomatis menaikkan versinya; tanda
+        tangan yang sudah ada tetap menunjuk ke versi yang ditandatangani saat itu.
+      </p>
+      <p className="text-sm text-gray-500">
+        Setiap slot juga bisa dilengkapi <b>PDF Baca</b> (convert dari Word yang sama via &quot;Save as PDF&quot;) —
+        supaya tombol &quot;Baca&quot; di dashboard karyawan menampilkan file itu apa adanya (warna, format,
+        tata letak persis aslinya). Tanpa PDF Baca, mode Baca fallback ke tampilan terstruktur biasa.
       </p>
 
       {err && <div className="flex items-center gap-2 text-sm bg-red-50 text-red-600 rounded-xl px-3 py-2"><AlertCircle size={15} /> {err}</div>}
@@ -215,6 +242,11 @@ export default function KelolaDokumenPage() {
                             {d.konten_html ? "Isi siap ditandatangani" : "Isi belum diproses — klik \"Proses isi\""}
                           </span>
                         )}
+                        {d && (
+                          <span className={`inline-block mt-1 ml-1 text-[10px] px-1.5 py-0.5 rounded-full font-semibold ${d.file_baca_url ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"}`}>
+                            {d.file_baca_url ? "PDF Baca terpasang" : "Belum ada PDF Baca"}
+                          </span>
+                        )}
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
                         {d && !d.konten_html && (
@@ -226,6 +258,13 @@ export default function KelolaDokumenPage() {
                         {d?.file_pdf_url && (
                           <a href={d.file_pdf_url} target="_blank" rel="noopener noreferrer"
                             className="text-xs text-indigo-600 hover:underline">Lihat file</a>
+                        )}
+                        {d && (
+                          <label className="text-xs font-semibold px-2.5 py-1.5 rounded-lg cursor-pointer flex items-center gap-1 bg-teal-100 text-teal-700 hover:bg-teal-200">
+                            <Upload size={12} /> {busy === `baca-${d.id}` ? "Mengunggah…" : d.file_baca_url ? "Ganti PDF Baca" : "Upload PDF Baca"}
+                            <input type="file" accept="application/pdf" className="hidden" disabled={busy !== null}
+                              onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadFileBaca(d, f); e.target.value = ""; }} />
+                          </label>
                         )}
                         <label className={`text-xs font-semibold px-2.5 py-1.5 rounded-lg cursor-pointer flex items-center gap-1 ${d ? "bg-amber-100 text-amber-700 hover:bg-amber-200" : "bg-indigo-500 text-white hover:bg-indigo-600"}`}>
                           <Upload size={12} /> {busy === key ? "Mengunggah…" : d ? "Versi Baru" : "Upload"}

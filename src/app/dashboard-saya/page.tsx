@@ -18,7 +18,7 @@ interface AbsRow {
   shift_master: { nama_shift: string } | null;
 }
 interface RosterJobdesk { tanggal: string; nama_tugas_datang: string | null; nama_tugas: string }
-interface DokItem { id: string; nama: string; versi: number; wajib_ttd: boolean; file_pdf_url: string | null; konten_html: string | null; approved: { disetujui_at: string; tipe: string; tanda_tangan_url: string | null; data_isian: Record<string,string> | null } | null; perusahaanApproved: boolean }
+interface DokItem { id: string; nama: string; versi: number; wajib_ttd: boolean; file_pdf_url: string | null; konten_html: string | null; file_baca_url: string | null; approved: { disetujui_at: string; tipe: string; tanda_tangan_url: string | null; data_isian: Record<string,string> | null } | null; perusahaanApproved: boolean }
 
 function todayWIB() { return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" }); }
 function addDaysStr(iso: string, n: number) { const d = new Date(`${iso}T00:00:00+07:00`); d.setDate(d.getDate() + n); return d.toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" }); }
@@ -26,7 +26,7 @@ function hariTgl(iso: string) { return new Date(`${iso}T00:00:00+07:00`).toLocal
 function hariTglPendek(iso: string) { return new Date(`${iso}T00:00:00+07:00`).toLocaleDateString("id-ID", { timeZone: "Asia/Jakarta", weekday: "short", day: "numeric", month: "short" }); }
 function jam(iso: string | null) { return iso ? new Date(iso).toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta", hour: "2-digit", minute: "2-digit" }) : "—"; }
 function tglWaktu(iso: string) { return new Date(iso).toLocaleString("id-ID", { timeZone: "Asia/Jakarta", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }); }
-interface DokRow { id: string; nama: string; versi: number; wajib_ttd: boolean; file_pdf_url: string | null; konten_html: string | null }
+interface DokRow { id: string; nama: string; versi: number; wajib_ttd: boolean; file_pdf_url: string | null; konten_html: string | null; file_baca_url: string | null }
 interface PersetujuanRow { dokumen_id: string; dokumen_versi: number; disetujui_at: string; tipe: string; tanda_tangan_url: string | null; data_isian: Record<string, string> | null }
 interface TtdPerusahaanRow { dokumen_id: string; dokumen_versi: number }
 
@@ -40,7 +40,7 @@ interface TtdPerusahaanRow { dokumen_id: string; dokumen_versi: number }
 async function fetchDokumenKaryawan(karyawanId: string, kategoriDokumen: string | null): Promise<DokItem[]> {
   const [dk, pj, tp] = await Promise.all([
     kategoriDokumen
-      ? supabase.from("dokumen").select("id, nama, versi, wajib_ttd, file_pdf_url, konten_html").eq("is_aktif", true).eq("jalur", kategoriDokumen).order("jenis")
+      ? supabase.from("dokumen").select("id, nama, versi, wajib_ttd, file_pdf_url, konten_html, file_baca_url").eq("is_aktif", true).eq("jalur", kategoriDokumen).order("jenis")
       : Promise.resolve({ data: [] as DokRow[] }),
     supabase.from("dokumen_persetujuan").select("dokumen_id, dokumen_versi, disetujui_at, tipe, tanda_tangan_url, data_isian").eq("karyawan_id", karyawanId),
     supabase.from("dokumen_ttd_perusahaan").select("dokumen_id, dokumen_versi").eq("karyawan_id", karyawanId),
@@ -52,7 +52,7 @@ async function fetchDokumenKaryawan(karyawanId: string, kategoriDokumen: string 
   const historyIds = Array.from(new Set(persetujuan.map((p) => p.dokumen_id))).filter((id) => !currentIds.has(id));
   let history: DokRow[] = [];
   if (historyIds.length > 0) {
-    const { data } = await supabase.from("dokumen").select("id, nama, versi, wajib_ttd, file_pdf_url, konten_html").eq("is_aktif", true).in("id", historyIds);
+    const { data } = await supabase.from("dokumen").select("id, nama, versi, wajib_ttd, file_pdf_url, konten_html, file_baca_url").eq("is_aktif", true).in("id", historyIds);
     history = (data as DokRow[] | null) ?? [];
   }
   return [...current, ...history].map((d) => ({

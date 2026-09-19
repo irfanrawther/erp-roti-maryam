@@ -7,7 +7,7 @@ import { ChevronLeft, Check, RotateCcw, PenLine, AlertCircle, CheckCircle2, Eye,
 
 export interface DokTtd {
   id: string; nama: string; versi: number; wajib_ttd: boolean;
-  file_pdf_url: string | null; konten_html: string | null;
+  file_pdf_url: string | null; konten_html: string | null; file_baca_url: string | null;
   approved: { disetujui_at: string; tipe: string; tanda_tangan_url: string | null; data_isian: NilaiField | null } | null;
 }
 
@@ -162,6 +162,22 @@ export default function TandaTanganDokumen({
       {/* Isi dokumen */}
       {loading ? (
         <p className="text-sm text-gray-400 py-10 text-center">Memuat dokumen…</p>
+      ) : mode === "baca" && dok.file_baca_url ? (
+        // Mode Baca dengan PDF asli terpasang admin — tampil apa adanya
+        // (warna, format, tata letak persis file Word aslinya), bukan versi
+        // terstruktur yang dipakai untuk isi & tanda tangan.
+        <div className="px-4 py-3 bg-gray-50/40">
+          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
+            <iframe src={dok.file_baca_url} title={dok.nama} className="w-full" style={{ height: "72vh" }} />
+          </div>
+          {sudah && dok.approved?.tanda_tangan_url && (
+            <div className="mt-3 bg-white rounded-xl border border-gray-200 p-3">
+              <p className="text-xs font-semibold text-gray-600 mb-1.5">Tanda tangan kamu</p>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={dok.approved.tanda_tangan_url} alt="tanda tangan" className="w-full max-w-xs rounded-lg border border-gray-100" />
+            </div>
+          )}
+        </div>
       ) : !dok.konten_html ? (
         <div className="m-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-center">
           <AlertCircle size={22} className="mx-auto text-amber-500 mb-1.5" />
