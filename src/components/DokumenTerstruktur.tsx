@@ -108,7 +108,13 @@ export default function DokumenTerstruktur({
 
     const children = Array.from(el.childNodes).map((c, i) => render(c, `${key}.${i}`));
     const Tag = tag as keyof JSX.IntrinsicElements;
-    return <Tag key={key} {...attrReact(el)}>{children.length ? children : undefined}</Tag>;
+    const rendered = <Tag key={key} {...attrReact(el)}>{children.length ? children : undefined}</Tag>;
+    // Tabel lebar (mis. jadwal shift) dibungkus div sendiri yang boleh
+    // discroll horizontal — supaya OVERFLOW-nya tidak "bocor" melebarkan
+    // seluruh halaman/paragraf di sekitarnya (masalah mobile Safari kalau
+    // overflow-x diletakkan langsung di elemen <table>).
+    if (tag === "table") return <div key={`${key}-wrap`} className="dok-table-wrap">{rendered}</div>;
+    return rendered;
   }
 
   return (
@@ -116,15 +122,18 @@ export default function DokumenTerstruktur({
       {body ? Array.from(body.childNodes).map((n, i) => render(n, `n${i}`)) : null}
 
       <style jsx global>{`
-        .dok-body { font-size: 13px; line-height: 1.7; color: #374151; }
+        .dok-body {
+          font-size: 13px; line-height: 1.7; color: #374151;
+          max-width: 100%; overflow-x: hidden; overflow-wrap: break-word; word-break: break-word;
+        }
         .dok-body h1 { font-size: 13.5px; font-weight: 700; color: #b91c1c; text-align: center; margin: 20px 0 8px; letter-spacing: .01em; }
         .dok-body h2 { font-size: 13px; font-weight: 700; color: #111827; margin: 16px 0 4px; }
         .dok-body h3, .dok-body h4 { font-size: 12.5px; font-weight: 700; color: #1f2937; margin: 12px 0 4px; }
         .dok-body p { margin: 7px 0; }
         .dok-body strong { color: #111827; font-weight: 700; }
+        .dok-table-wrap { max-width: 100%; overflow-x: auto; margin: 10px 0; }
         .dok-body table {
-          width: 100%; border-collapse: collapse; margin: 10px 0;
-          display: block; overflow-x: auto;
+          width: 100%; border-collapse: collapse; margin: 0;
         }
         .dok-body td, .dok-body th {
           border: 1px solid #e5e7eb; padding: 6px 8px;
