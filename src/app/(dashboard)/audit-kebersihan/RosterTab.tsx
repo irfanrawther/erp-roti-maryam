@@ -3,14 +3,14 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { getUserSession, type UserSession } from "@/lib/auth";
 import { getCapabilities, homeRoute } from "@/lib/permissions";
-import { ChevronLeft, ChevronRight, ChevronDown, Copy, Check } from "lucide-react";
+import { ChevronLeft, ChevronRight, ChevronDown, Copy, Check, Trash2 } from "lucide-react";
 
-interface ShiftAssignRow { karyawan_id: string; shift_id: string | null; karyawan: { nama: string } | null; shift_master: { nama_shift: string } | null }
+interface Karyawan { id: string; nama: string; status: string }
+interface ShiftMaster { id: string; nama_shift: string; jam_masuk: string }
 interface RosterRow { id: string; tanggal: string; karyawan_id: string; shift_id: string | null; nama_tugas: string; nama_tugas_datang: string | null }
 
 interface BarisHari {
-  karyawan_id: string; nama: string; shift_id: string | null; shift_nama: string | null;
-  roster_id: string | null; tugas_datang: string; tugas_pulang: string;
+  roster_id: string; karyawan_id: string; shift_id: string; tugas_datang: string; tugas_pulang: string;
 }
 
 const HARI = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
@@ -23,6 +23,7 @@ const TUGAS_AWAL: string[] = [
   "Lap Vacuum + Ngepel + Sampah",
 ];
 const OPSI_BARU = "__baru__";
+const BARIS_BARU = "__baris_baru__"; // penanda baris tambahan lokal, belum tersimpan
 
 function todayWIB() { return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" }); }
 function addDaysStr(iso: string, n: number) {
@@ -54,6 +55,8 @@ export default function RosterTab() {
 
   const [dataHari, setDataHari] = useState<Record<string, BarisHari[]>>({});
   const [daftarTugas, setDaftarTugas] = useState<string[]>(TUGAS_AWAL);
+  const [karyawanList, setKaryawanList] = useState<Karyawan[]>([]);
+  const [shiftList, setShiftList] = useState<ShiftMaster[]>([]);
 
   useEffect(() => {
     const u = getUserSession(); setUser(u);
@@ -62,18 +65,18 @@ export default function RosterTab() {
 
   const muatMinggu = useCallback(async () => {
     setLoading(true);
-    const [saRes, rhRes, histRes] = await Promise.all([
-      supabase.from("shift_assignment")
-        .select("tanggal, karyawan_id, shift_id, karyawan:karyawan_id(nama), shift_master:shift_id(nama_shift)")
-        .gte("tanggal", hariList[0]).lte("tanggal", hariList[6]).eq("is_libur", false).not("shift_id", "is", null),
+    const [rhRes, histRes, kRes, sRes] = await Promise.all([
       supabase.from("audit_kebersihan_roster_harian")
         .select("id, tanggal, karyawan_id, shift_id, nama_tugas, nama_tugas_datang")
         .gte("tanggal", hariList[0]).lte("tanggal", hariList[6]).eq("is_aktif", true),
       supabase.from("audit_kebersihan_roster_harian").select("nama_tugas, nama_tugas_datang").limit(2000),
+      supabase.from("karyawan").select("id, nama, status").eq("status", "aktif").order("nama"),
+      supabase.from("shift_master").select("id, nama_shift, jam_masuk").order("jam_masuk"),
     ]);
-    const saRows = (saRes.data as unknown as (ShiftAssignRow & { tanggal: string })[] | null) ?? [];
     const rhRows = (rhRes.data as RosterRow[] | null) ?? [];
     const histRows = (histRes.data as { nama_tugas: string; nama_tugas_datang: string | null }[] | null) ?? [];
+    setKaryawanList((kRes.data as Karyawan[] | null) ?? []);
+    setShiftList((sRes.data as ShiftMaster[] | null) ?? []);
 
     const histSet = new Set<string>(TUGAS_AWAL);
     histRows.forEach((r) => { if (r.nama_tugas) histSet.add(r.nama_tugas); if (r.nama_tugas_datang) histSet.add(r.nama_tugas_datang); });
@@ -81,18 +84,10 @@ export default function RosterTab() {
 
     const byHari: Record<string, BarisHari[]> = {};
     hariList.forEach((tgl) => {
-      const shiftHariItu = saRows.filter((r) => r.tanggal === tgl).sort((a, b) => {
-        const shiftCmp = (a.shift_master?.nama_shift ?? "").localeCompare(b.shift_master?.nama_shift ?? "", undefined, { numeric: true });
-        if (shiftCmp !== 0) return shiftCmp;
-        return (a.karyawan?.nama ?? "").localeCompare(b.karyawan?.nama ?? "");
-      });
-      byHari[tgl] = shiftHariItu.map((r) => {
-        const roster = rhRows.find((x) => x.tanggal === tgl && x.karyawan_id === r.karyawan_id);
-        return {
-          karyawan_id: r.karyawan_id, nama: r.karyawan?.nama ?? "-", shift_id: r.shift_id, shift_nama: r.shift_master?.nama_shift ?? null,
-          roster_id: roster?.id ?? null, tugas_datang: roster?.nama_tugas_datang ?? "", tugas_pulang: roster?.nama_tugas ?? "",
-        };
-      });
+      byHari[tgl] = rhRows.filter((r) => r.tanggal === tgl).map((r) => ({
+        roster_id: r.id, karyawan_id: r.karyawan_id, shift_id: r.shift_id ?? "",
+        tugas_datang: r.nama_tugas_datang ?? "", tugas_pulang: r.nama_tugas,
+      }));
     });
     setDataHari(byHari);
     setLoading(false);
@@ -100,25 +95,28 @@ export default function RosterTab() {
 
   useEffect(() => { muatMinggu(); }, [muatMinggu]);
 
-  async function simpanSel(tgl: string, baris: BarisHari, field: "tugas_datang" | "tugas_pulang", nilai: string) {
+  const namaKaryawan = useCallback((id: string) => karyawanList.find((k) => k.id === id)?.nama ?? "-", [karyawanList]);
+  const labelShift = useCallback((id: string) => {
+    const s = shiftList.find((x) => x.id === id);
+    return s ? s.jam_masuk.slice(0, 5) : "";
+  }, [shiftList]);
+
+  async function simpanBaris(tgl: string, baris: BarisHari, patch: Partial<BarisHari>) {
     const key = `${tgl}|${baris.karyawan_id}`;
     setSavingKey(key); setErr("");
-    const updated: BarisHari = { ...baris, [field]: nilai };
-    setDataHari((d) => ({ ...d, [tgl]: d[tgl].map((b) => b.karyawan_id === baris.karyawan_id ? updated : b) }));
+    const updated: BarisHari = { ...baris, ...patch };
+    setDataHari((d) => ({ ...d, [tgl]: d[tgl].map((b) => b.roster_id === baris.roster_id ? updated : b) }));
 
-    const { data, error } = await supabase.from("audit_kebersihan_roster_harian").upsert({
-      id: baris.roster_id ?? undefined,
-      tanggal: tgl, karyawan_id: baris.karyawan_id, shift_id: baris.shift_id,
+    const { error } = await supabase.from("audit_kebersihan_roster_harian").update({
+      shift_id: updated.shift_id || null,
       nama_tugas_datang: updated.tugas_datang.trim() || null, nama_tugas: updated.tugas_pulang.trim(),
-      created_by: user?.nama ?? null, is_aktif: true,
-    }, { onConflict: "tanggal,karyawan_id" }).select("id").single();
+    }).eq("id", baris.roster_id);
 
     setSavingKey(null);
     if (error) { setErr(error.message); return; }
-    const newId = (data as { id: string } | null)?.id ?? baris.roster_id;
-    setDataHari((d) => ({ ...d, [tgl]: d[tgl].map((b) => b.karyawan_id === baris.karyawan_id ? { ...updated, roster_id: newId } : b) }));
-    if (nilai.trim() && !daftarTugas.includes(nilai.trim())) {
-      setDaftarTugas((prev) => Array.from(new Set([...prev, nilai.trim()])).sort((a, b) => a.localeCompare(b)));
+    const nilaiTugas = patch.tugas_datang ?? patch.tugas_pulang;
+    if (nilaiTugas && nilaiTugas.trim() && !daftarTugas.includes(nilaiTugas.trim())) {
+      setDaftarTugas((prev) => Array.from(new Set([...prev, nilaiTugas.trim()])).sort((a, b) => a.localeCompare(b)));
     }
     setSavedKey(key);
     setTimeout(() => setSavedKey((k) => (k === key ? null : k)), 1500);
@@ -127,15 +125,41 @@ export default function RosterTab() {
   function pilihAtauBaru(tgl: string, baris: BarisHari, field: "tugas_datang" | "tugas_pulang", value: string) {
     if (value === OPSI_BARU) {
       const teks = prompt("Tulis tugas baru:");
-      if (teks && teks.trim()) simpanSel(tgl, baris, field, teks.trim());
+      if (teks && teks.trim()) simpanBaris(tgl, baris, { [field]: teks.trim() });
       return;
     }
-    simpanSel(tgl, baris, field, value);
+    simpanBaris(tgl, baris, { [field]: value });
+  }
+
+  // Baris baru: dipilih namanya dulu → langsung insert ke DB (shift default
+  // shift pertama, tugas kosong dulu, tinggal diisi lewat dropdown lain).
+  async function tambahKaryawan(tgl: string, karyawanId: string) {
+    if (!karyawanId) return;
+    const key = `${tgl}|${karyawanId}`;
+    setSavingKey(key); setErr("");
+    const { data, error } = await supabase.from("audit_kebersihan_roster_harian").upsert({
+      tanggal: tgl, karyawan_id: karyawanId, shift_id: shiftList[0]?.id ?? null,
+      nama_tugas_datang: null, nama_tugas: "",
+      created_by: user?.nama ?? null, is_aktif: true,
+    }, { onConflict: "tanggal,karyawan_id" }).select("id").single();
+    setSavingKey(null);
+    if (error) { setErr(error.message); return; }
+    const newId = (data as { id: string }).id;
+    setDataHari((d) => ({
+      ...d,
+      [tgl]: [...(d[tgl] ?? []), { roster_id: newId, karyawan_id: karyawanId, shift_id: shiftList[0]?.id ?? "", tugas_datang: "", tugas_pulang: "" }],
+    }));
+  }
+
+  async function hapusBaris(tgl: string, baris: BarisHari) {
+    if (!confirm(`Hapus ${namaKaryawan(baris.karyawan_id)} dari roster ${labelTglPendek(tgl)}?`)) return;
+    await supabase.from("audit_kebersihan_roster_harian").delete().eq("id", baris.roster_id);
+    setDataHari((d) => ({ ...d, [tgl]: d[tgl].filter((b) => b.roster_id !== baris.roster_id) }));
   }
 
   async function salinDariMingguLalu() {
-    const totalIsi = Object.values(dataHari).reduce((n, rows) => n + rows.filter((r) => r.tugas_pulang).length, 0);
-    if (totalIsi > 0 && !confirm("Minggu ini sudah ada isian. Tetap salin dari minggu lalu? (baris yang sudah diisi tidak akan ditimpa)")) return;
+    const totalIsi = Object.values(dataHari).reduce((n, rows) => n + rows.length, 0);
+    if (totalIsi > 0 && !confirm("Minggu ini sudah ada isian. Tetap salin dari minggu lalu? (baris yang sudah ada tidak akan ditimpa)")) return;
     setErr("");
     const seninLalu = addDaysStr(seninAwal, -7);
     const { data: lama } = await supabase.from("audit_kebersihan_roster_harian")
@@ -144,7 +168,7 @@ export default function RosterTab() {
     const lamaRows = (lama as { tanggal: string; karyawan_id: string; shift_id: string | null; nama_tugas: string; nama_tugas_datang: string | null }[] | null) ?? [];
     if (lamaRows.length === 0) { setErr("Minggu lalu tidak ada data untuk disalin."); return; }
     const existing = new Set<string>();
-    Object.entries(dataHari).forEach(([tgl, rows]) => rows.forEach((r) => { if (r.tugas_pulang) existing.add(`${tgl}|${r.karyawan_id}`); }));
+    Object.entries(dataHari).forEach(([tgl, rows]) => rows.forEach((r) => existing.add(`${tgl}|${r.karyawan_id}`)));
     const baru = lamaRows
       .map((r) => ({ ...r, tanggal: addDaysStr(r.tanggal, 7) }))
       .filter((r) => !existing.has(`${r.tanggal}|${r.karyawan_id}`))
@@ -156,7 +180,9 @@ export default function RosterTab() {
   return (
     <div className="space-y-4 pb-24">
       <p className="text-sm text-gray-500">
-        Nama karyawan otomatis dari jadwal shift. Job Desc Pulang wajib (ini yang diaudit SPV setiap hari); Job Desc Datang opsional, cuma tampil ke karyawan di Dashboard Saya. Klik dropdown langsung tersimpan.
+        Atur siapa kebagian tugas apa per hari — pilih Shift, Nama, Job Desc Datang & Pulang lewat dropdown. Job Desc Pulang wajib
+        (ini yang diaudit SPV setiap hari); Job Desc Datang opsional, cuma tampil ke karyawan di Dashboard Saya.
+        Kalau di hari-H ternyata karyawannya izin/sakit/alpha, baris itu <b>otomatis dilewati</b> saat SPV audit — tidak perlu dihapus manual.
       </p>
 
       <div className="card flex items-center justify-between gap-2">
@@ -177,7 +203,8 @@ export default function RosterTab() {
           {hariList.map((tgl) => {
             const dow = new Date(`${tgl}T00:00:00+07:00`).getDay();
             const rows = dataHari[tgl] ?? [];
-            const jumlahIsi = rows.filter((r) => r.tugas_pulang).length;
+            const namaTerpakai = new Set(rows.map((r) => r.karyawan_id));
+            const karyawanTersedia = karyawanList.filter((k) => !namaTerpakai.has(k.id));
             const buka = expanded === tgl;
             return (
               <div key={tgl} className="card overflow-hidden !p-0">
@@ -186,62 +213,72 @@ export default function RosterTab() {
                     <ChevronDown size={16} className={`text-gray-400 transition-transform ${buka ? "rotate-180" : ""}`} />
                     <span className="font-semibold text-sm text-gray-700">{HARI[dow]}, {labelTglPendek(tgl)}</span>
                   </div>
-                  <span className="text-xs text-gray-400">{rows.length === 0 ? "Tidak ada shift" : `${jumlahIsi}/${rows.length} diisi`}</span>
+                  <span className="text-xs text-gray-400">{rows.length === 0 ? "Belum ada" : `${rows.length} karyawan`}</span>
                 </button>
 
                 {buka && (
                   <div className="px-4 pb-4">
-                    {rows.length === 0 ? (
-                      <p className="text-xs text-gray-400 py-2">Belum ada jadwal shift untuk tanggal ini (isi dulu jadwal shift-nya).</p>
-                    ) : (
-                      <div className="overflow-x-auto -mx-1">
-                        <table className="w-full text-sm min-w-[560px]">
-                          <thead>
-                            <tr className="text-left text-[11px] text-gray-400 uppercase">
-                              <th className="font-semibold pb-1.5 pr-2">Nama</th>
-                              <th className="font-semibold pb-1.5 pr-2">Job Desc Datang</th>
-                              <th className="font-semibold pb-1.5 pr-2">Job Desc Pulang</th>
-                              <th className="w-5"></th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {rows.map((r) => {
-                              const key = `${tgl}|${r.karyawan_id}`;
-                              return (
-                                <tr key={r.karyawan_id} className="border-t border-gray-50">
-                                  <td className="py-1.5 pr-2 align-top">
-                                    <p className="font-medium text-gray-700">{r.nama}</p>
-                                    {r.shift_nama && <p className="text-[10px] text-gray-400">{r.shift_nama}</p>}
-                                  </td>
-                                  <td className="py-1.5 pr-2 align-top">
-                                    <select className="input text-xs py-1.5" value={r.tugas_datang}
-                                      onChange={(e) => pilihAtauBaru(tgl, r, "tugas_datang", e.target.value)}>
-                                      <option value="">—</option>
-                                      {r.tugas_datang && !daftarTugas.includes(r.tugas_datang) && <option value={r.tugas_datang}>{r.tugas_datang}</option>}
-                                      {daftarTugas.map((t) => <option key={t} value={t}>{t}</option>)}
-                                      <option value={OPSI_BARU}>+ Tugas baru…</option>
-                                    </select>
-                                  </td>
-                                  <td className="py-1.5 pr-2 align-top">
-                                    <select className="input text-xs py-1.5" value={r.tugas_pulang}
-                                      onChange={(e) => pilihAtauBaru(tgl, r, "tugas_pulang", e.target.value)}>
-                                      <option value="">Pilih…</option>
-                                      {r.tugas_pulang && !daftarTugas.includes(r.tugas_pulang) && <option value={r.tugas_pulang}>{r.tugas_pulang}</option>}
-                                      {daftarTugas.map((t) => <option key={t} value={t}>{t}</option>)}
-                                      <option value={OPSI_BARU}>+ Tugas baru…</option>
-                                    </select>
-                                  </td>
-                                  <td className="py-1.5 align-top text-center">
-                                    {savingKey === key && <span className="text-[10px] text-gray-400">…</span>}
-                                    {savedKey === key && <Check size={13} className="text-green-500" />}
-                                  </td>
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
+                    <div className="overflow-x-auto -mx-1">
+                      <table className="w-full text-sm min-w-[620px]">
+                        <thead>
+                          <tr className="text-left text-[11px] text-gray-400 uppercase">
+                            <th className="font-semibold pb-1.5 pr-2">Shift</th>
+                            <th className="font-semibold pb-1.5 pr-2">Nama</th>
+                            <th className="font-semibold pb-1.5 pr-2">Job Desc Datang</th>
+                            <th className="font-semibold pb-1.5 pr-2">Job Desc Pulang</th>
+                            <th className="w-10"></th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {rows.map((r) => {
+                            const key = `${tgl}|${r.karyawan_id}`;
+                            return (
+                              <tr key={r.karyawan_id} className="border-t border-gray-50">
+                                <td className="py-1.5 pr-2 align-top">
+                                  <select className="input text-xs py-1.5 w-24" value={r.shift_id}
+                                    onChange={(e) => simpanBaris(tgl, r, { shift_id: e.target.value })}>
+                                    {shiftList.map((s) => <option key={s.id} value={s.id}>{s.jam_masuk.slice(0, 5)}</option>)}
+                                  </select>
+                                </td>
+                                <td className="py-1.5 pr-2 align-top font-medium text-gray-700">{namaKaryawan(r.karyawan_id)}</td>
+                                <td className="py-1.5 pr-2 align-top">
+                                  <select className="input text-xs py-1.5" value={r.tugas_datang}
+                                    onChange={(e) => pilihAtauBaru(tgl, r, "tugas_datang", e.target.value)}>
+                                    <option value="">—</option>
+                                    {r.tugas_datang && !daftarTugas.includes(r.tugas_datang) && <option value={r.tugas_datang}>{r.tugas_datang}</option>}
+                                    {daftarTugas.map((t) => <option key={t} value={t}>{t}</option>)}
+                                    <option value={OPSI_BARU}>+ Tugas baru…</option>
+                                  </select>
+                                </td>
+                                <td className="py-1.5 pr-2 align-top">
+                                  <select className="input text-xs py-1.5" value={r.tugas_pulang}
+                                    onChange={(e) => pilihAtauBaru(tgl, r, "tugas_pulang", e.target.value)}>
+                                    <option value="">Pilih…</option>
+                                    {r.tugas_pulang && !daftarTugas.includes(r.tugas_pulang) && <option value={r.tugas_pulang}>{r.tugas_pulang}</option>}
+                                    {daftarTugas.map((t) => <option key={t} value={t}>{t}</option>)}
+                                    <option value={OPSI_BARU}>+ Tugas baru…</option>
+                                  </select>
+                                </td>
+                                <td className="py-1.5 align-top text-center">
+                                  {savingKey === key && <span className="text-[10px] text-gray-400">…</span>}
+                                  {savedKey === key && <Check size={13} className="text-green-500 inline" />}
+                                  <button onClick={() => hapusBaris(tgl, r)} className="ml-1 text-gray-300 hover:text-red-500"><Trash2 size={13} /></button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                          <tr className="border-t border-gray-50">
+                            <td colSpan={5} className="py-2">
+                              <select className="input text-xs py-1.5 w-full max-w-xs" value={BARIS_BARU}
+                                onChange={(e) => { if (e.target.value !== BARIS_BARU) tambahKaryawan(tgl, e.target.value); }}>
+                                <option value={BARIS_BARU}>+ Tambah karyawan…</option>
+                                {karyawanTersedia.map((k) => <option key={k.id} value={k.id}>{k.nama}</option>)}
+                              </select>
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
                 )}
               </div>

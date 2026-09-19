@@ -150,19 +150,31 @@ export default function AuditTab() {
 
     const hasil: ItemAudit[] = [];
 
-    // 1) Job Desc Pulang harian — selalu ada
-    const { data: roster } = await supabase.from("audit_kebersihan_roster_harian")
-      .select("id, karyawan_id, shift_id, nama_tugas, urutan, karyawan:karyawan_id(nama)")
-      .eq("tanggal", tglTugas).eq("is_aktif", true)
-      .in("shift_id", shiftGroup.length ? shiftGroup : ["-"])
-      .order("urutan");
-    ((roster as { id: string; karyawan_id: string; shift_id: string | null; nama_tugas: string; karyawan: { nama: string } | null }[] | null) ?? []).forEach((r) => {
-      hasil.push({
-        key: `roster_${r.id}`, jenis_audit: "harian_pulang", area_label: r.karyawan?.nama ?? null, nama_tugas: r.nama_tugas,
-        roster_id: r.id, template_id: null, shift_id: r.shift_id, karyawanDefault: r.karyawan_id,
-        status: "lulus", penanggungTipe: "individu", penanggungKaryawanId: r.karyawan_id, catatan: "", fotoFiles: [],
+    // 1) Job Desc Pulang harian — selalu ada, KECUALI karyawan yang hari itu
+    // ternyata izin/sakit/alpha (bukan hadir) — jangan diaudit karena
+    // memang tidak masuk, roster tidak perlu dihapus manual untuk ini.
+    const [{ data: roster }, { data: absHari }] = await Promise.all([
+      supabase.from("audit_kebersihan_roster_harian")
+        .select("id, karyawan_id, shift_id, nama_tugas, urutan, karyawan:karyawan_id(nama)")
+        .eq("tanggal", tglTugas).eq("is_aktif", true)
+        .in("shift_id", shiftGroup.length ? shiftGroup : ["-"])
+        .order("urutan"),
+      supabase.from("absensi").select("karyawan_id, status_kehadiran").eq("tanggal", tglTugas),
+    ]);
+    const tidakHadir = new Set(
+      ((absHari as { karyawan_id: string; status_kehadiran: string }[] | null) ?? [])
+        .filter((a) => a.status_kehadiran !== "hadir")
+        .map((a) => a.karyawan_id)
+    );
+    ((roster as { id: string; karyawan_id: string; shift_id: string | null; nama_tugas: string; karyawan: { nama: string } | null }[] | null) ?? [])
+      .filter((r) => !tidakHadir.has(r.karyawan_id))
+      .forEach((r) => {
+        hasil.push({
+          key: `roster_${r.id}`, jenis_audit: "harian_pulang", area_label: r.karyawan?.nama ?? null, nama_tugas: r.nama_tugas,
+          roster_id: r.id, template_id: null, shift_id: r.shift_id, karyawanDefault: r.karyawan_id,
+          status: "lulus", penanggungTipe: "individu", penanggungKaryawanId: r.karyawan_id, catatan: "", fotoFiles: [],
+        });
       });
-    });
 
     // 2) Piket — hanya Senin (dow===1)
     if (dow === 1) {
