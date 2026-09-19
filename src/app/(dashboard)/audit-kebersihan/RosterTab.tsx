@@ -1,10 +1,9 @@
-"use client";
 import { useEffect, useState, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { getUserSession, type UserSession } from "@/lib/auth";
 import { getCapabilities, homeRoute } from "@/lib/permissions";
-import { ClipboardList, ChevronLeft, ChevronRight, ChevronDown, Copy, Check } from "lucide-react";
+import { ChevronLeft, ChevronRight, ChevronDown, Copy, Check } from "lucide-react";
 
 interface ShiftAssignRow { karyawan_id: string; shift_id: string | null; karyawan: { nama: string } | null; shift_master: { nama_shift: string } | null }
 interface RosterRow { id: string; tanggal: string; karyawan_id: string; shift_id: string | null; nama_tugas: string; nama_tugas_datang: string | null }
@@ -41,7 +40,7 @@ function labelTglPendek(iso: string) {
   return d.toLocaleDateString("id-ID", { timeZone: "Asia/Jakarta", day: "numeric", month: "short" });
 }
 
-export default function AuditKebersihanRosterPage() {
+export default function RosterTab() {
   const router = useRouter();
   const [user, setUser] = useState<UserSession | null>(null);
   const [loading, setLoading] = useState(true);
@@ -155,11 +154,7 @@ export default function AuditKebersihanRosterPage() {
   }
 
   return (
-    <div className="p-4 space-y-4 max-w-3xl mx-auto pb-24">
-      <div className="flex items-center gap-2">
-        <ClipboardList size={20} className="text-teal-500" />
-        <h1 className="text-xl font-bold text-gray-800">Roster Job Desc</h1>
-      </div>
+    <div className="space-y-4 pb-24">
       <p className="text-sm text-gray-500">
         Nama karyawan otomatis dari jadwal shift. Job Desc Pulang wajib (ini yang diaudit SPV setiap hari); Job Desc Datang opsional, cuma tampil ke karyawan di Dashboard Saya. Klik dropdown langsung tersimpan.
       </p>
