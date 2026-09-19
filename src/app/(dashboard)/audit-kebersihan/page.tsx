@@ -1,16 +1,17 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { getUserSession, type UserSession } from "@/lib/auth";
+import { getUserSession, canAccessAdmin, type UserSession } from "@/lib/auth";
 import { getCapabilities, homeRoute } from "@/lib/permissions";
 import { ClipboardCheck } from "lucide-react";
 import AuditTab from "./AuditTab";
 import RosterTab from "./RosterTab";
+import RiwayatTab from "./RiwayatTab";
 
 export default function AuditKebersihanPage() {
   const router = useRouter();
   const [user, setUser] = useState<UserSession | null>(null);
-  const [tab, setTab] = useState<"audit" | "roster">("audit");
+  const [tab, setTab] = useState<"audit" | "roster" | "riwayat">("audit");
 
   useEffect(() => {
     const u = getUserSession(); setUser(u);
@@ -18,6 +19,13 @@ export default function AuditKebersihanPage() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!user) return null;
+  const bisaLihatRiwayat = canAccessAdmin(user.role);
+
+  const tabs: [typeof tab, string][] = [
+    ["audit", "Audit"],
+    ["roster", "Roster Job Desc"],
+    ...(bisaLihatRiwayat ? ([["riwayat", "Riwayat"]] as [typeof tab, string][]) : []),
+  ];
 
   return (
     <div className="p-4 space-y-4 max-w-2xl mx-auto">
@@ -26,8 +34,8 @@ export default function AuditKebersihanPage() {
         <h1 className="text-xl font-bold text-gray-800">Audit Kebersihan</h1>
       </div>
 
-      <div className="flex bg-white rounded-xl border border-gray-100 p-1 gap-1 max-w-sm">
-        {([["audit", "Audit"], ["roster", "Roster Job Desc"]] as const).map(([k, l]) => (
+      <div className="flex bg-white rounded-xl border border-gray-100 p-1 gap-1 max-w-md">
+        {tabs.map(([k, l]) => (
           <button key={k} onClick={() => setTab(k)}
             className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${tab === k ? "bg-teal-500 text-white" : "text-gray-600 hover:bg-gray-50"}`}>
             {l}
@@ -35,7 +43,7 @@ export default function AuditKebersihanPage() {
         ))}
       </div>
 
-      {tab === "audit" ? <AuditTab /> : <RosterTab />}
+      {tab === "audit" ? <AuditTab /> : tab === "roster" ? <RosterTab /> : bisaLihatRiwayat ? <RiwayatTab /> : null}
     </div>
   );
 }
