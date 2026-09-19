@@ -10,6 +10,14 @@ const TAG_AMAN = new Set([
   "table", "thead", "tbody", "tr", "td", "th", "ul", "ol", "li", "a", "sup", "sub",
 ]);
 
+// "2026-09-01" -> "1 September 2026" — dipakai untuk field tanggal yang
+// ditampilkan read-only, supaya tidak tampil mentah format ISO di dokumen.
+function formatTanggalIndo(iso: string): string {
+  const d = new Date(`${iso}T00:00:00`);
+  if (isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" });
+}
+
 function attrReact(el: Element): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   const colspan = el.getAttribute("colspan");
@@ -74,9 +82,10 @@ export default function DokumenTerstruktur({
       const bisaEdit = !readOnly && !ro && pemilikField === pemilik;
 
       if (!bisaEdit) {
+        const tampil = val && tipe === "date" ? formatTanggalIndo(val) : val;
         return (
           <span key={key} className={val ? "font-semibold text-gray-900" : "text-gray-300"}>
-            {val || "……………………"}
+            {tampil || "……………………"}
           </span>
         );
       }
