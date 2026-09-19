@@ -14,14 +14,30 @@ interface BarisHari {
 }
 
 const HARI = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
-const TUGAS_AWAL: string[] = [
-  "Cuci Meja Ngadon", "Lap Tampah", "Cuci Meja Bikin", "Parut Keju", "Timbang Bahan",
-  "Sapu + Pel Area Bikin + Sampah", "Lap Kaca", "Cuci Kompor + Cuci Meja", "Lap Alat Tekan + Lap Rak",
-  "Cuci Meja Packing", "Cuci Mesin", "Prepare Bahan Ngadon", "Sapu Area Ngadon + Cuci Meja Ngadon",
-  "Cuci Meja Bikin + Rak & Ember Minyak", "Cuci Lap + Cuci Ember Bekas Limbah", "Cuci Peralatan + Cuci Sink",
-  "Cuci Tampah", "Isi Box Mentega", "Lap Alat Tekan + Lap Kaca", "Cuci Meja + Nyapu + Lap Freezer",
-  "Lap Vacuum + Ngepel + Sampah",
+
+// 13 slot kerja tetap (shift + pasangan Job Desc Datang/Pulang) — urutan &
+// isinya sesuai roster spreadsheet yang sudah berjalan. Slot-nya TETAP
+// tiap hari/minggu, yang rolling cuma NAMA yang menempati tiap slot.
+// Dipakai buat auto-isi begitu baris baru ditambahkan, supaya admin cuma
+// perlu pilih nama — shift & job desc-nya sudah otomatis ada (tetap bisa
+// diubah manual lewat dropdown kalau memang ada perubahan).
+interface SlotTemplate { jam: string; datang: string; pulang: string }
+const TEMPLATE_SLOT: SlotTemplate[] = [
+  { jam: "06:00", datang: "Cuci + Lap Meja Ngadon", pulang: "Prepare Bahan Ngadon" },
+  { jam: "06:00", datang: "Lap Tampah", pulang: "Cuci Mesin + Cuci Meja Ngadon + Sapu Area Ngadon" },
+  { jam: "08:00", datang: "Cuci Meja Bikin", pulang: "Isi Box Mentega" },
+  { jam: "08:00", datang: "Lap Tampah", pulang: "Cuci Meja Bikin + Rapihkan Rak & Ember Minyak" },
+  { jam: "08:00", datang: "Parut Keju", pulang: "Cuci Peralatan + Cuci Sink + Isi Air Sabun" },
+  { jam: "08:00", datang: "Lap Tampah", pulang: "Cuci Tampah + Ganti Kardus Bawah Sink" },
+  { jam: "08:00", datang: "Timbang Bahan", pulang: "Isi Box Mentega" },
+  { jam: "08:00", datang: "Lap Tampah", pulang: "Cuci Lap + Cuci Ember Bekas Limbah" },
+  { jam: "08:00", datang: "Sapu + Pel Area Bikin + Sampah", pulang: "Isi Box Mentega" },
+  { jam: "10:00", datang: "Lap Alat Tekan", pulang: "Lap Alat Tekan + Lap Kaca" },
+  { jam: "10:00", datang: "Cuci Kompor + Cuci Meja", pulang: "Cuci Kompor + Cuci Meja + Lap Alat Tekan" },
+  { jam: "13:00", datang: "Lap Meja Packing", pulang: "Nyapu + Lap Rak + Lap Freezer" },
+  { jam: "13:00", datang: "Cuci + Lap Meja Packing", pulang: "Ngepel + Lap Vacuum + Cuci Meja + Sampah" },
 ];
+const TUGAS_AWAL: string[] = Array.from(new Set(TEMPLATE_SLOT.flatMap((s) => [s.datang, s.pulang])));
 const OPSI_BARU = "__baru__";
 const BARIS_BARU = "__baris_baru__"; // penanda baris tambahan lokal, belum tersimpan
 
@@ -96,10 +112,6 @@ export default function RosterTab() {
   useEffect(() => { muatMinggu(); }, [muatMinggu]);
 
   const namaKaryawan = useCallback((id: string) => karyawanList.find((k) => k.id === id)?.nama ?? "-", [karyawanList]);
-  const labelShift = useCallback((id: string) => {
-    const s = shiftList.find((x) => x.id === id);
-    return s ? s.jam_masuk.slice(0, 5) : "";
-  }, [shiftList]);
 
   async function simpanBaris(tgl: string, baris: BarisHari, patch: Partial<BarisHari>) {
     const key = `${tgl}|${baris.karyawan_id}`;
@@ -131,15 +143,20 @@ export default function RosterTab() {
     simpanBaris(tgl, baris, { [field]: value });
   }
 
-  // Baris baru: dipilih namanya dulu → langsung insert ke DB (shift default
-  // shift pertama, tugas kosong dulu, tinggal diisi lewat dropdown lain).
+  // Baris baru: dipilih namanya dulu → langsung insert ke DB, shift & job
+  // desc datang/pulang OTOMATIS diisi dari slot template berikutnya
+  // (berdasarkan urutan baris ke berapa hari itu) — tinggal diubah lewat
+  // dropdown kalau memang ada slot yang beda dari biasanya.
   async function tambahKaryawan(tgl: string, karyawanId: string) {
     if (!karyawanId) return;
     const key = `${tgl}|${karyawanId}`;
     setSavingKey(key); setErr("");
+    const slotIndex = (dataHari[tgl] ?? []).length % TEMPLATE_SLOT.length;
+    const slot = TEMPLATE_SLOT[slotIndex];
+    const shiftId = shiftList.find((s) => s.jam_masuk.slice(0, 5) === slot.jam)?.id ?? shiftList[0]?.id ?? null;
     const { data, error } = await supabase.from("audit_kebersihan_roster_harian").upsert({
-      tanggal: tgl, karyawan_id: karyawanId, shift_id: shiftList[0]?.id ?? null,
-      nama_tugas_datang: null, nama_tugas: "",
+      tanggal: tgl, karyawan_id: karyawanId, shift_id: shiftId,
+      nama_tugas_datang: slot.datang, nama_tugas: slot.pulang,
       created_by: user?.nama ?? null, is_aktif: true,
     }, { onConflict: "tanggal,karyawan_id" }).select("id").single();
     setSavingKey(null);
@@ -147,8 +164,26 @@ export default function RosterTab() {
     const newId = (data as { id: string }).id;
     setDataHari((d) => ({
       ...d,
-      [tgl]: [...(d[tgl] ?? []), { roster_id: newId, karyawan_id: karyawanId, shift_id: shiftList[0]?.id ?? "", tugas_datang: "", tugas_pulang: "" }],
+      [tgl]: [...(d[tgl] ?? []), { roster_id: newId, karyawan_id: karyawanId, shift_id: shiftId ?? "", tugas_datang: slot.datang, tugas_pulang: slot.pulang }],
     }));
+  }
+
+  // Tukar nama di baris yang sudah ada (shift & job desc slot itu tidak
+  // berubah) — dipakai buat rolling mingguan: tinggal ganti siapa yang
+  // menempati tiap slot, tanpa hapus-tambah baris.
+  async function gantiNama(tgl: string, baris: BarisHari, karyawanIdBaru: string) {
+    if (!karyawanIdBaru || karyawanIdBaru === baris.karyawan_id) return;
+    if ((dataHari[tgl] ?? []).some((b) => b.karyawan_id === karyawanIdBaru)) {
+      setErr(`${namaKaryawan(karyawanIdBaru)} sudah ada di roster ${labelTglPendek(tgl)} hari ini.`);
+      return;
+    }
+    const key = `${tgl}|${baris.karyawan_id}`;
+    setSavingKey(key); setErr("");
+    const { error } = await supabase.from("audit_kebersihan_roster_harian")
+      .update({ karyawan_id: karyawanIdBaru }).eq("id", baris.roster_id);
+    setSavingKey(null);
+    if (error) { setErr(error.message); return; }
+    setDataHari((d) => ({ ...d, [tgl]: d[tgl].map((b) => b.roster_id === baris.roster_id ? { ...b, karyawan_id: karyawanIdBaru } : b) }));
   }
 
   async function hapusBaris(tgl: string, baris: BarisHari) {
@@ -180,9 +215,10 @@ export default function RosterTab() {
   return (
     <div className="space-y-4 pb-24">
       <p className="text-sm text-gray-500">
-        Atur siapa kebagian tugas apa per hari — pilih Shift, Nama, Job Desc Datang & Pulang lewat dropdown. Job Desc Pulang wajib
-        (ini yang diaudit SPV setiap hari); Job Desc Datang opsional, cuma tampil ke karyawan di Dashboard Saya.
-        Kalau di hari-H ternyata karyawannya izin/sakit/alpha, baris itu <b>otomatis dilewati</b> saat SPV audit — tidak perlu dihapus manual.
+        13 slot kerja (Shift + pasangan Job Desc Datang/Pulang) sudah baku — begitu pilih nama di &quot;+ Tambah karyawan&quot;,
+        Shift &amp; Job Desc-nya <b>otomatis terisi</b> sesuai urutan slot, tinggal diubah lewat dropdown kalau memang beda.
+        Minggu depan tinggal &quot;Salin dari minggu lalu&quot; lalu <b>tukar-tukar dropdown Nama</b> saja sesuai rolling shift —
+        tidak perlu hapus/tambah baris dari nol. Kalau di hari-H ternyata karyawannya izin/sakit/alpha, baris itu <b>otomatis dilewati</b> saat SPV audit.
       </p>
 
       <div className="card flex items-center justify-between gap-2">
@@ -232,15 +268,21 @@ export default function RosterTab() {
                         <tbody>
                           {rows.map((r) => {
                             const key = `${tgl}|${r.karyawan_id}`;
+                            const opsiNama = karyawanTersedia.concat(karyawanList.filter((k) => k.id === r.karyawan_id));
                             return (
-                              <tr key={r.karyawan_id} className="border-t border-gray-50">
+                              <tr key={r.roster_id} className="border-t border-gray-50">
                                 <td className="py-1.5 pr-2 align-top">
                                   <select className="input text-xs py-1.5 w-24" value={r.shift_id}
                                     onChange={(e) => simpanBaris(tgl, r, { shift_id: e.target.value })}>
                                     {shiftList.map((s) => <option key={s.id} value={s.id}>{s.jam_masuk.slice(0, 5)}</option>)}
                                   </select>
                                 </td>
-                                <td className="py-1.5 pr-2 align-top font-medium text-gray-700">{namaKaryawan(r.karyawan_id)}</td>
+                                <td className="py-1.5 pr-2 align-top">
+                                  <select className="input text-xs py-1.5" value={r.karyawan_id}
+                                    onChange={(e) => gantiNama(tgl, r, e.target.value)}>
+                                    {opsiNama.map((k) => <option key={k.id} value={k.id}>{k.nama}</option>)}
+                                  </select>
+                                </td>
                                 <td className="py-1.5 pr-2 align-top">
                                   <select className="input text-xs py-1.5" value={r.tugas_datang}
                                     onChange={(e) => pilihAtauBaru(tgl, r, "tugas_datang", e.target.value)}>
