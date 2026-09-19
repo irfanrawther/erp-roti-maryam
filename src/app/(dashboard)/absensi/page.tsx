@@ -1989,7 +1989,7 @@ function RekapAbsensi({ karyawanList, shifts, userName }: { karyawanList: Karyaw
 // ── Tab: Pengajuan Izin (Super Admin review + veto) ──
 interface IzinRow {
   id: string; karyawan_id: string; tanggal_izin: string; jenis: string;
-  foto_bukti_url: string | null; foto_surat_url: string | null;
+  foto_bukti_url: string | null; foto_surat_url: string | null; alasan: string | null;
   status: string; status_surat: string | null; batas_upload_surat: string | null;
   override_by: string | null; denda?: number; kategori_lapor?: string | null; sakit_ke?: number | null;
   dibatalkan_oleh: string | null; catatan_pembatalan: string | null; created_at: string;
@@ -2052,7 +2052,7 @@ function PengajuanIzin({ userName }: { userName: string }) {
     }
     // 2) Fetch lengkap
     const { data } = await supabase.from("pengajuan_izin")
-      .select("id, karyawan_id, tanggal_izin, jenis, foto_bukti_url, foto_surat_url, status, status_surat, batas_upload_surat, override_by, denda, kategori_lapor, sakit_ke, dibatalkan_oleh, catatan_pembatalan, created_at, surat_uploaded_at, foto_verified, foto_verified_oleh, denda_dihapus, denda_dihapus_oleh, catatan_denda, karyawan:karyawan_id(nama)")
+      .select("id, karyawan_id, tanggal_izin, jenis, foto_bukti_url, foto_surat_url, alasan, status, status_surat, batas_upload_surat, override_by, denda, kategori_lapor, sakit_ke, dibatalkan_oleh, catatan_pembatalan, created_at, surat_uploaded_at, foto_verified, foto_verified_oleh, denda_dihapus, denda_dihapus_oleh, catatan_denda, karyawan:karyawan_id(nama)")
       .order("tanggal_izin", { ascending: false }).limit(200);
     const list = (data as unknown as IzinRow[]) ?? [];
     setRows(list);
@@ -2187,6 +2187,7 @@ function PengajuanIzin({ userName }: { userName: string }) {
                   </div>
                 );
               })()}
+              {r.alasan && <p className="text-xs text-gray-600 italic mt-1">&ldquo;{r.alasan}&rdquo;</p>}
               {badge && <span className={`inline-block mt-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${badge.cls}`}>{badge.text}</span>}
               {r.foto_verified && <span className="inline-flex items-center gap-1 mt-1 ml-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-green-100 text-green-700"><CheckCircle2 size={11} /> Foto terverifikasi{r.foto_verified_oleh ? ` · ${r.foto_verified_oleh}` : ""}</span>}
               {r.denda_dihapus && <p className="text-[11px] text-green-600 mt-0.5">Denda dihapus (toleransi){r.denda_dihapus_oleh ? ` oleh ${r.denda_dihapus_oleh}` : ""}{r.catatan_denda ? ` · "${r.catatan_denda}"` : ""}</p>}

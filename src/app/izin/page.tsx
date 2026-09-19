@@ -48,6 +48,7 @@ export default function IzinPage() {
 
   const [foto, setFoto] = useState<string | null>(null);
   const [fotoFile, setFotoFile] = useState<File | null>(null);
+  const [alasan, setAlasan] = useState("");
   const [err, setErr] = useState("");
   const [doneTgl, setDoneTgl] = useState("");
 
@@ -127,6 +128,7 @@ export default function IzinPage() {
   async function submit() {
     if (!karyawan || !tglIzin) return;
     if (lewatBatas) { setErr(`Sudah lewat ${batasJamSetelahShift} jam setelah shift mulai — tidak bisa lapor izin untuk hari ini (otomatis Alpha).`); return; }
+    if (!alasan.trim()) { setErr("Alasan izin wajib diisi."); return; }
     setErr(""); setBusy(true);
     try {
       const tgl = tglIzin;
@@ -162,7 +164,7 @@ export default function IzinPage() {
       // Insert pengajuan izin
       const { error: insErr } = await supabase.from("pengajuan_izin").insert({
         karyawan_id: karyawan.id, tanggal_izin: tgl, jenis: "izin_biasa",
-        foto_bukti_url: fotoUrl, status: "aktif",
+        foto_bukti_url: fotoUrl, status: "aktif", alasan: alasan.trim(),
         denda, kategori_lapor: kategori, kuota_penuh: !!kuotaOleh,
       });
       if (insErr) throw new Error(insErr.message);
@@ -187,7 +189,7 @@ export default function IzinPage() {
     } finally { setBusy(false); }
   }
 
-  function reset() { setStep("pin"); setPin(""); setPinErr(""); setKaryawan(null); setFoto(null); setFotoFile(null); setErr(""); setTglIzin(defaultDate); setShowCal(false); }
+  function reset() { setStep("pin"); setPin(""); setPinErr(""); setKaryawan(null); setFoto(null); setFotoFile(null); setAlasan(""); setErr(""); setTglIzin(defaultDate); setShowCal(false); }
 
   return (
     <div className="min-h-screen bg-sky-50 flex flex-col items-center justify-center p-4">
@@ -300,6 +302,13 @@ export default function IzinPage() {
                 )}
                 {!sudahIzin && !lewatBatas && (
                 <>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1.5">Alasan Izin *</label>
+                  <textarea value={alasan} onChange={(e) => setAlasan(e.target.value)} rows={3}
+                    placeholder="Jelaskan alasan izin kamu…"
+                    className="w-full rounded-xl border border-gray-200 p-3 text-sm focus:border-sky-400 outline-none" />
+                </div>
+
                 {/* Foto bukti — opsional */}
                 {foto ? (
                   <div className="space-y-2">
@@ -323,7 +332,7 @@ export default function IzinPage() {
 
                 {err && <p className="text-sm text-red-500">{err}</p>}
 
-                <button onClick={submit} disabled={busy}
+                <button onClick={submit} disabled={busy || !alasan.trim()}
                   className="w-full py-3 rounded-xl bg-sky-500 text-white font-semibold hover:bg-sky-600 disabled:opacity-40 flex items-center justify-center gap-2">
                   <FileText size={18} /> {busy ? "Mengirim..." : (kuotaOleh ? "Tetap Lapor Izin" : "Lapor Izin")}
                 </button>
