@@ -7,12 +7,6 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
-webpush.setVapidDetails(
-  process.env.VAPID_SUBJECT!,
-  process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY!,
-  process.env.VAPID_PRIVATE_KEY!
-);
-
 // Sama persis dengan ROOM_ACCESS di ChatWidget.tsx — siapa boleh lihat
 // room mana, dipakai buat tahu siapa yang perlu dikirimi notifikasi.
 const ROOM_ACCESS: Record<string, string[]> = {
@@ -35,6 +29,19 @@ export async function POST(req: NextRequest) {
     if (!roomId || !message || !senderId) {
       return NextResponse.json({ error: "Data tidak lengkap" }, { status: 400 });
     }
+
+    // Di-set di sini (bukan di top-level module) supaya kalau env var ini
+    // belum di-set di Vercel, itu cuma bikin request ini gagal — bukan
+    // menggagalkan seluruh build (Next.js meng-import route ini saat build
+    // untuk "collect page data", jadi kode top-level ikut jalan saat build).
+    if (!process.env.VAPID_SUBJECT || !process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) {
+      return NextResponse.json({ error: "VAPID env var belum di-set di server" }, { status: 500 });
+    }
+    webpush.setVapidDetails(
+      process.env.VAPID_SUBJECT,
+      process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY,
+      process.env.VAPID_PRIVATE_KEY
+    );
 
     const rolesAllowed = Object.entries(ROOM_ACCESS)
       .filter(([, rooms]) => rooms.includes(roomId))
