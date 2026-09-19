@@ -39,7 +39,7 @@ const TEMPLATE_SLOT: SlotTemplate[] = [
 ];
 const TUGAS_AWAL: string[] = Array.from(new Set(TEMPLATE_SLOT.flatMap((s) => [s.datang, s.pulang])));
 const OPSI_BARU = "__baru__";
-const BARIS_BARU = "__baris_baru__"; // penanda baris tambahan lokal, belum tersimpan
+const BELUM_PILIH = "__belum_pilih__";
 
 function todayWIB() { return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" }); }
 function addDaysStr(iso: string, n: number) {
@@ -143,17 +143,22 @@ export default function RosterTab() {
     simpanBaris(tgl, baris, { [field]: value });
   }
 
-  // Baris baru: dipilih namanya dulu → langsung insert ke DB, shift & job
-  // desc datang/pulang OTOMATIS diisi dari slot template berikutnya
-  // (berdasarkan urutan baris ke berapa hari itu) — tinggal diubah lewat
-  // dropdown kalau memang ada slot yang beda dari biasanya.
-  async function tambahKaryawan(tgl: string, karyawanId: string) {
+// Slot kosong (blm ada nama) dari TEMPLATE_SLOT — dipakai buat pad baris
+// bawaan tiap hari sampai 13 baris, biar Shift & Job Desc SELALU kelihatan
+// dari awal tanpa perlu pilih nama dulu (SPV/admin tinggal pilih nama
+// lewat dropdown kapan saja siap).
+  function shiftIdUntukJam(jam: string): string {
+    return shiftList.find((s) => s.jam_masuk.slice(0, 5) === jam)?.id ?? "";
+  }
+
+  // Isi nama di slot kosong (index = urutan slot template ke berapa) →
+  // insert baris baru ke DB dengan shift & job desc dari slot itu.
+  async function pilihNamaSlot(tgl: string, slotIndex: number, karyawanId: string) {
     if (!karyawanId) return;
-    const key = `${tgl}|${karyawanId}`;
+    const key = `${tgl}|slot${slotIndex}`;
     setSavingKey(key); setErr("");
-    const slotIndex = (dataHari[tgl] ?? []).length % TEMPLATE_SLOT.length;
-    const slot = TEMPLATE_SLOT[slotIndex];
-    const shiftId = shiftList.find((s) => s.jam_masuk.slice(0, 5) === slot.jam)?.id ?? shiftList[0]?.id ?? null;
+    const slot = TEMPLATE_SLOT[slotIndex] ?? TEMPLATE_SLOT[0];
+    const shiftId = shiftIdUntukJam(slot.jam) || shiftList[0]?.id || null;
     const { data, error } = await supabase.from("audit_kebersihan_roster_harian").upsert({
       tanggal: tgl, karyawan_id: karyawanId, shift_id: shiftId,
       nama_tugas_datang: slot.datang, nama_tugas: slot.pulang,
@@ -166,6 +171,11 @@ export default function RosterTab() {
       ...d,
       [tgl]: [...(d[tgl] ?? []), { roster_id: newId, karyawan_id: karyawanId, shift_id: shiftId ?? "", tugas_datang: slot.datang, tugas_pulang: slot.pulang }],
     }));
+  }
+
+  // Tambahan di luar 13 slot baku (jarang perlu) — default ke slot pertama.
+  async function tambahKaryawanEkstra(tgl: string, karyawanId: string) {
+    await pilihNamaSlot(tgl, (dataHari[tgl] ?? []).length % TEMPLATE_SLOT.length, karyawanId);
   }
 
   // Tukar nama di baris yang sudah ada (shift & job desc slot itu tidak
@@ -215,10 +225,10 @@ export default function RosterTab() {
   return (
     <div className="space-y-4 pb-24">
       <p className="text-sm text-gray-500">
-        13 slot kerja (Shift + pasangan Job Desc Datang/Pulang) sudah baku — begitu pilih nama di &quot;+ Tambah karyawan&quot;,
-        Shift &amp; Job Desc-nya <b>otomatis terisi</b> sesuai urutan slot, tinggal diubah lewat dropdown kalau memang beda.
-        Minggu depan tinggal &quot;Salin dari minggu lalu&quot; lalu <b>tukar-tukar dropdown Nama</b> saja sesuai rolling shift —
-        tidak perlu hapus/tambah baris dari nol. Kalau di hari-H ternyata karyawannya izin/sakit/alpha, baris itu <b>otomatis dilewati</b> saat SPV audit.
+        13 baris (Shift + pasangan Job Desc Datang/Pulang) sudah <b>otomatis ada</b> dari awal setiap hari — tidak perlu diisi manual.
+        Tinggal pilih <b>Nama</b> lewat dropdown di tiap baris kapan pun siap. Minggu depan tinggal &quot;Salin dari minggu lalu&quot;
+        lalu tukar-tukar dropdown Nama saja sesuai rolling shift. Kalau di hari-H ternyata karyawannya izin/sakit/alpha,
+        baris itu <b>otomatis dilewati</b> saat SPV audit.
       </p>
 
       <div className="card flex items-center justify-between gap-2">
@@ -238,9 +248,17 @@ export default function RosterTab() {
         <div className="space-y-2">
           {hariList.map((tgl) => {
             const dow = new Date(`${tgl}T00:00:00+07:00`).getDay();
-            const rows = dataHari[tgl] ?? [];
+            const rowsAsli = dataHari[tgl] ?? [];
+            // Urutkan sesuai urutan shift (06:00 dulu, dst) biar sejajar visual sama urutan TEMPLATE_SLOT.
+            const rows = [...rowsAsli].sort((a, b) => {
+              const ja = shiftList.find((s) => s.id === a.shift_id)?.jam_masuk ?? "";
+              const jb = shiftList.find((s) => s.id === b.shift_id)?.jam_masuk ?? "";
+              return ja.localeCompare(jb);
+            });
             const namaTerpakai = new Set(rows.map((r) => r.karyawan_id));
             const karyawanTersedia = karyawanList.filter((k) => !namaTerpakai.has(k.id));
+            const jumlahTerisi = rows.filter((r) => r.karyawan_id).length;
+            const slotKosong = Math.max(0, TEMPLATE_SLOT.length - rows.length);
             const buka = expanded === tgl;
             return (
               <div key={tgl} className="card overflow-hidden !p-0">
@@ -249,7 +267,7 @@ export default function RosterTab() {
                     <ChevronDown size={16} className={`text-gray-400 transition-transform ${buka ? "rotate-180" : ""}`} />
                     <span className="font-semibold text-sm text-gray-700">{HARI[dow]}, {labelTglPendek(tgl)}</span>
                   </div>
-                  <span className="text-xs text-gray-400">{rows.length === 0 ? "Belum ada" : `${rows.length} karyawan`}</span>
+                  <span className="text-xs text-gray-400">{jumlahTerisi}/{TEMPLATE_SLOT.length} nama diisi</span>
                 </button>
 
                 {buka && (
@@ -258,8 +276,8 @@ export default function RosterTab() {
                       <table className="w-full text-sm min-w-[620px]">
                         <thead>
                           <tr className="text-left text-[11px] text-gray-400 uppercase">
-                            <th className="font-semibold pb-1.5 pr-2">Shift</th>
                             <th className="font-semibold pb-1.5 pr-2">Nama</th>
+                            <th className="font-semibold pb-1.5 pr-2">Shift</th>
                             <th className="font-semibold pb-1.5 pr-2">Job Desc Datang</th>
                             <th className="font-semibold pb-1.5 pr-2">Job Desc Pulang</th>
                             <th className="w-10"></th>
@@ -272,15 +290,15 @@ export default function RosterTab() {
                             return (
                               <tr key={r.roster_id} className="border-t border-gray-50">
                                 <td className="py-1.5 pr-2 align-top">
-                                  <select className="input text-xs py-1.5 w-24" value={r.shift_id}
-                                    onChange={(e) => simpanBaris(tgl, r, { shift_id: e.target.value })}>
-                                    {shiftList.map((s) => <option key={s.id} value={s.id}>{s.jam_masuk.slice(0, 5)}</option>)}
-                                  </select>
-                                </td>
-                                <td className="py-1.5 pr-2 align-top">
                                   <select className="input text-xs py-1.5" value={r.karyawan_id}
                                     onChange={(e) => gantiNama(tgl, r, e.target.value)}>
                                     {opsiNama.map((k) => <option key={k.id} value={k.id}>{k.nama}</option>)}
+                                  </select>
+                                </td>
+                                <td className="py-1.5 pr-2 align-top">
+                                  <select className="input text-xs py-1.5 w-24" value={r.shift_id}
+                                    onChange={(e) => simpanBaris(tgl, r, { shift_id: e.target.value })}>
+                                    {shiftList.map((s) => <option key={s.id} value={s.id}>{s.jam_masuk.slice(0, 5)}</option>)}
                                   </select>
                                 </td>
                                 <td className="py-1.5 pr-2 align-top">
@@ -309,11 +327,33 @@ export default function RosterTab() {
                               </tr>
                             );
                           })}
+                          {Array.from({ length: slotKosong }, (_, i) => {
+                            const slotIndex = rows.length + i;
+                            const slot = TEMPLATE_SLOT[slotIndex] ?? TEMPLATE_SLOT[0];
+                            const key = `${tgl}|slot${slotIndex}`;
+                            return (
+                              <tr key={`slot-${slotIndex}`} className="border-t border-gray-50">
+                                <td className="py-1.5 pr-2 align-top">
+                                  <select className="input text-xs py-1.5" value={BELUM_PILIH}
+                                    onChange={(e) => { if (e.target.value !== BELUM_PILIH) pilihNamaSlot(tgl, slotIndex, e.target.value); }}>
+                                    <option value={BELUM_PILIH}>Pilih nama…</option>
+                                    {karyawanTersedia.map((k) => <option key={k.id} value={k.id}>{k.nama}</option>)}
+                                  </select>
+                                </td>
+                                <td className="py-1.5 pr-2 align-top text-gray-400">{slot.jam}</td>
+                                <td className="py-1.5 pr-2 align-top text-gray-400">{slot.datang}</td>
+                                <td className="py-1.5 pr-2 align-top text-gray-400">{slot.pulang}</td>
+                                <td className="py-1.5 align-top text-center">
+                                  {savingKey === key && <span className="text-[10px] text-gray-400">…</span>}
+                                </td>
+                              </tr>
+                            );
+                          })}
                           <tr className="border-t border-gray-50">
                             <td colSpan={5} className="py-2">
-                              <select className="input text-xs py-1.5 w-full max-w-xs" value={BARIS_BARU}
-                                onChange={(e) => { if (e.target.value !== BARIS_BARU) tambahKaryawan(tgl, e.target.value); }}>
-                                <option value={BARIS_BARU}>+ Tambah karyawan…</option>
+                              <select className="input text-xs py-1.5 w-full max-w-xs" value={BELUM_PILIH}
+                                onChange={(e) => { if (e.target.value !== BELUM_PILIH) tambahKaryawanEkstra(tgl, e.target.value); }}>
+                                <option value={BELUM_PILIH}>+ Tambah karyawan (di luar 13 baku)…</option>
                                 {karyawanTersedia.map((k) => <option key={k.id} value={k.id}>{k.nama}</option>)}
                               </select>
                             </td>
