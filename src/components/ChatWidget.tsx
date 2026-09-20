@@ -204,13 +204,24 @@ async function logPushDebug(userId: string, step: string, detail: string) {
 }
 
 async function subscribeToPush(userId: string) {
+  await logPushDebug(userId, "start", "subscribeToPush dipanggil");
   try {
     if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
       await logPushDebug(userId, "unsupported", "serviceWorker/PushManager tidak didukung browser ini");
       return;
     }
 
-    const permission = await Notification.requestPermission();
+    // JANGAN panggil Notification.requestPermission() kalau statusnya sudah
+    // pasti (granted/denied) — di Safari/iOS, memanggil ulang di luar
+    // gesture klik langsung pernah macet (Promise tidak pernah selesai,
+    // tidak error) walau izinnya sebenarnya sudah ada. Baca status
+    // sinkronnya dulu, cuma minta izin kalau memang belum pernah ditentukan.
+    let permission = Notification.permission;
+    await logPushDebug(userId, "permission-sync", `Notification.permission=${permission}`);
+    if (permission === "default") {
+      permission = await Notification.requestPermission();
+      await logPushDebug(userId, "permission-asked", `hasil=${permission}`);
+    }
     if (permission !== "granted") {
       await logPushDebug(userId, "permission", `permission=${permission}`);
       return;
