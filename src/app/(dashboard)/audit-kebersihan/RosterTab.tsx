@@ -73,6 +73,10 @@ export default function RosterTab() {
   const [daftarTugas, setDaftarTugas] = useState<string[]>(TUGAS_AWAL);
   const [karyawanList, setKaryawanList] = useState<Karyawan[]>([]);
   const [shiftList, setShiftList] = useState<ShiftMaster[]>([]);
+  // Edit lokal ke slot yang BELUM ada namanya (shift/job desc diubah dari
+  // dropdown sebelum nama dipilih) — belum ada baris di DB buat slot ini,
+  // jadi disimpan di sini dulu, baru dipakai begitu nama akhirnya dipilih.
+  const [slotOverride, setSlotOverride] = useState<Record<string, { shift_id?: string; datang?: string; pulang?: string }>>({});
 
   useEffect(() => {
     const u = getUserSession(); setUser(u);
@@ -151,17 +155,28 @@ export default function RosterTab() {
     return shiftList.find((s) => s.jam_masuk.slice(0, 5) === jam)?.id ?? "";
   }
 
+  // Ubah shift/job desc slot yang BELUM ada namanya — cuma disimpan lokal,
+  // baru ditulis ke DB begitu nama dipilih (lewat pilihNamaSlot).
+  function ubahSlotOverride(tgl: string, slotIndex: number, patch: { shift_id?: string; datang?: string; pulang?: string }) {
+    const key = `${tgl}|${slotIndex}`;
+    setSlotOverride((prev) => ({ ...prev, [key]: { ...prev[key], ...patch } }));
+  }
+
   // Isi nama di slot kosong (index = urutan slot template ke berapa) →
-  // insert baris baru ke DB dengan shift & job desc dari slot itu.
+  // insert baris baru ke DB dengan shift & job desc dari slot itu (atau
+  // dari override kalau admin sempat mengubahnya sebelum pilih nama).
   async function pilihNamaSlot(tgl: string, slotIndex: number, karyawanId: string) {
     if (!karyawanId) return;
     const key = `${tgl}|slot${slotIndex}`;
     setSavingKey(key); setErr("");
-    const slot = TEMPLATE_SLOT[slotIndex] ?? TEMPLATE_SLOT[0];
-    const shiftId = shiftIdUntukJam(slot.jam) || shiftList[0]?.id || null;
+    const slot = TEMPLATE_SLOT[slotIndex] ?? { jam: shiftList[0]?.jam_masuk.slice(0, 5) ?? "06:00", datang: "", pulang: "" };
+    const override = slotOverride[`${tgl}|${slotIndex}`] ?? {};
+    const shiftId = override.shift_id || shiftIdUntukJam(slot.jam) || shiftList[0]?.id || null;
+    const datang = override.datang ?? slot.datang;
+    const pulang = override.pulang ?? slot.pulang;
     const { data, error } = await supabase.from("audit_kebersihan_roster_harian").upsert({
       tanggal: tgl, karyawan_id: karyawanId, shift_id: shiftId,
-      nama_tugas_datang: slot.datang, nama_tugas: slot.pulang,
+      nama_tugas_datang: datang, nama_tugas: pulang,
       created_by: user?.nama ?? null, is_aktif: true,
     }, { onConflict: "tanggal,karyawan_id" }).select("id").single();
     setSavingKey(null);
@@ -169,13 +184,31 @@ export default function RosterTab() {
     const newId = (data as { id: string }).id;
     setDataHari((d) => ({
       ...d,
-      [tgl]: [...(d[tgl] ?? []), { roster_id: newId, karyawan_id: karyawanId, shift_id: shiftId ?? "", tugas_datang: slot.datang, tugas_pulang: slot.pulang }],
+      [tgl]: [...(d[tgl] ?? []), { roster_id: newId, karyawan_id: karyawanId, shift_id: shiftId ?? "", tugas_datang: datang, tugas_pulang: pulang }],
     }));
+    setSlotOverride((prev) => { const n = { ...prev }; delete n[`${tgl}|${slotIndex}`]; return n; });
   }
 
-  // Tambahan di luar 13 slot baku (jarang perlu) — default ke slot pertama.
-  async function tambahKaryawanEkstra(tgl: string, karyawanId: string) {
-    await pilihNamaSlot(tgl, (dataHari[tgl] ?? []).length % TEMPLATE_SLOT.length, karyawanId);
+  // Tambahan di luar 13 slot baku (jarang perlu) — mulai kosong (bukan
+  // ikut salah satu dari 13 slot template), tinggal diisi manual lewat
+  // dropdown Shift/Job Desc begitu baris muncul.
+  async function tambahKaryawanBebas(tgl: string, karyawanId: string) {
+    if (!karyawanId) return;
+    const key = `${tgl}|bebas`;
+    setSavingKey(key); setErr("");
+    const shiftId = shiftList[0]?.id ?? null;
+    const { data, error } = await supabase.from("audit_kebersihan_roster_harian").upsert({
+      tanggal: tgl, karyawan_id: karyawanId, shift_id: shiftId,
+      nama_tugas_datang: null, nama_tugas: "",
+      created_by: user?.nama ?? null, is_aktif: true,
+    }, { onConflict: "tanggal,karyawan_id" }).select("id").single();
+    setSavingKey(null);
+    if (error) { setErr(error.message); return; }
+    const newId = (data as { id: string }).id;
+    setDataHari((d) => ({
+      ...d,
+      [tgl]: [...(d[tgl] ?? []), { roster_id: newId, karyawan_id: karyawanId, shift_id: shiftId ?? "", tugas_datang: "", tugas_pulang: "" }],
+    }));
   }
 
   // Tukar nama di baris yang sudah ada (shift & job desc slot itu tidak
@@ -225,10 +258,11 @@ export default function RosterTab() {
   return (
     <div className="space-y-4 pb-24">
       <p className="text-sm text-gray-500">
-        13 baris (Shift + pasangan Job Desc Datang/Pulang) sudah <b>otomatis ada</b> dari awal setiap hari — tidak perlu diisi manual.
-        Tinggal pilih <b>Nama</b> lewat dropdown di tiap baris kapan pun siap. Minggu depan tinggal &quot;Salin dari minggu lalu&quot;
-        lalu tukar-tukar dropdown Nama saja sesuai rolling shift. Kalau di hari-H ternyata karyawannya izin/sakit/alpha,
-        baris itu <b>otomatis dilewati</b> saat SPV audit.
+        13 baris (Shift + pasangan Job Desc Datang/Pulang) sudah <b>otomatis ada</b> dari awal setiap hari — tidak perlu diisi manual,
+        tapi tetap bisa diubah lewat dropdown kalau jumlah orang di suatu shift bertambah/berkurang. Tinggal pilih <b>Nama</b> di tiap
+        baris kapan pun siap — begitu shift-nya diubah, baris otomatis pindah ke kelompok shift itu. Minggu depan tinggal
+        &quot;Salin dari minggu lalu&quot; lalu tukar-tukar dropdown Nama saja sesuai rolling shift. Kalau di hari-H ternyata
+        karyawannya izin/sakit/alpha, baris itu <b>otomatis dilewati</b> saat SPV audit.
       </p>
 
       <div className="card flex items-center justify-between gap-2">
@@ -331,6 +365,10 @@ export default function RosterTab() {
                             const slotIndex = rows.length + i;
                             const slot = TEMPLATE_SLOT[slotIndex] ?? TEMPLATE_SLOT[0];
                             const key = `${tgl}|slot${slotIndex}`;
+                            const ov = slotOverride[`${tgl}|${slotIndex}`] ?? {};
+                            const shiftIdTampil = ov.shift_id ?? shiftIdUntukJam(slot.jam);
+                            const datangTampil = ov.datang ?? slot.datang;
+                            const pulangTampil = ov.pulang ?? slot.pulang;
                             return (
                               <tr key={`slot-${slotIndex}`} className="border-t border-gray-50">
                                 <td className="py-1.5 pr-2 align-top">
@@ -340,9 +378,44 @@ export default function RosterTab() {
                                     {karyawanTersedia.map((k) => <option key={k.id} value={k.id}>{k.nama}</option>)}
                                   </select>
                                 </td>
-                                <td className="py-1.5 pr-2 align-top text-gray-400">{slot.jam}</td>
-                                <td className="py-1.5 pr-2 align-top text-gray-400">{slot.datang}</td>
-                                <td className="py-1.5 pr-2 align-top text-gray-400">{slot.pulang}</td>
+                                <td className="py-1.5 pr-2 align-top">
+                                  <select className="input text-xs py-1.5 w-24" value={shiftIdTampil}
+                                    onChange={(e) => ubahSlotOverride(tgl, slotIndex, { shift_id: e.target.value })}>
+                                    {shiftList.map((s) => <option key={s.id} value={s.id}>{s.jam_masuk.slice(0, 5)}</option>)}
+                                  </select>
+                                </td>
+                                <td className="py-1.5 pr-2 align-top">
+                                  <select className="input text-xs py-1.5" value={datangTampil}
+                                    onChange={(e) => {
+                                      if (e.target.value === OPSI_BARU) {
+                                        const teks = prompt("Tulis tugas baru:");
+                                        if (teks && teks.trim()) ubahSlotOverride(tgl, slotIndex, { datang: teks.trim() });
+                                        return;
+                                      }
+                                      ubahSlotOverride(tgl, slotIndex, { datang: e.target.value });
+                                    }}>
+                                    <option value="">—</option>
+                                    {datangTampil && !daftarTugas.includes(datangTampil) && <option value={datangTampil}>{datangTampil}</option>}
+                                    {daftarTugas.map((t) => <option key={t} value={t}>{t}</option>)}
+                                    <option value={OPSI_BARU}>+ Tugas baru…</option>
+                                  </select>
+                                </td>
+                                <td className="py-1.5 pr-2 align-top">
+                                  <select className="input text-xs py-1.5" value={pulangTampil}
+                                    onChange={(e) => {
+                                      if (e.target.value === OPSI_BARU) {
+                                        const teks = prompt("Tulis tugas baru:");
+                                        if (teks && teks.trim()) ubahSlotOverride(tgl, slotIndex, { pulang: teks.trim() });
+                                        return;
+                                      }
+                                      ubahSlotOverride(tgl, slotIndex, { pulang: e.target.value });
+                                    }}>
+                                    <option value="">Pilih…</option>
+                                    {pulangTampil && !daftarTugas.includes(pulangTampil) && <option value={pulangTampil}>{pulangTampil}</option>}
+                                    {daftarTugas.map((t) => <option key={t} value={t}>{t}</option>)}
+                                    <option value={OPSI_BARU}>+ Tugas baru…</option>
+                                  </select>
+                                </td>
                                 <td className="py-1.5 align-top text-center">
                                   {savingKey === key && <span className="text-[10px] text-gray-400">…</span>}
                                 </td>
@@ -352,7 +425,7 @@ export default function RosterTab() {
                           <tr className="border-t border-gray-50">
                             <td colSpan={5} className="py-2">
                               <select className="input text-xs py-1.5 w-full max-w-xs" value={BELUM_PILIH}
-                                onChange={(e) => { if (e.target.value !== BELUM_PILIH) tambahKaryawanEkstra(tgl, e.target.value); }}>
+                                onChange={(e) => { if (e.target.value !== BELUM_PILIH) tambahKaryawanBebas(tgl, e.target.value); }}>
                                 <option value={BELUM_PILIH}>+ Tambah karyawan (di luar 13 baku)…</option>
                                 {karyawanTersedia.map((k) => <option key={k.id} value={k.id}>{k.nama}</option>)}
                               </select>
