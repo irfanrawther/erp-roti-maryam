@@ -184,30 +184,56 @@ function urlBase64ToUint8Array(base64String: string) {
   return outputArray;
 }
 
+async function logPushDebug(userId: string, step: string, detail: string) {
+  try {
+    await fetch("/api/push-debug", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId, step, detail, userAgent: navigator.userAgent }),
+    });
+  } catch { /* logging itself must never throw */ }
+}
+
 async function subscribeToPush(userId: string) {
   try {
-    if (!("serviceWorker" in navigator) || !("PushManager" in window)) return;
+    if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+      await logPushDebug(userId, "unsupported", "serviceWorker/PushManager tidak didukung browser ini");
+      return;
+    }
 
     const permission = await Notification.requestPermission();
-    if (permission !== "granted") return;
+    if (permission !== "granted") {
+      await logPushDebug(userId, "permission", `permission=${permission}`);
+      return;
+    }
 
     const registration = await navigator.serviceWorker.ready;
+    await logPushDebug(userId, "sw-ready", `scope=${registration.scope}`);
+
     let subscription = await registration.pushManager.getSubscription();
 
     if (!subscription) {
       const vapidKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY!;
-      subscription = await registration.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(vapidKey),
-      });
+      try {
+        subscription = await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(vapidKey),
+        });
+      } catch (subErr) {
+        await logPushDebug(userId, "subscribe-fail", String(subErr));
+        return;
+      }
     }
+    await logPushDebug(userId, "subscribed", subscription.endpoint.slice(0, 60));
 
-    await fetch("/api/push-subscribe", {
+    const res = await fetch("/api/push-subscribe", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ userId, subscription: subscription.toJSON() }),
     });
+    await logPushDebug(userId, "saved", `status=${res.status}`);
   } catch (err) {
     console.error("Push subscribe error:", err);
+    await logPushDebug(userId, "unexpected-error", String(err));
   }
 }
