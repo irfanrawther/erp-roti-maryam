@@ -30,40 +30,49 @@ const ROOM_ACCESS: Record<string, string[]> = {
 };
 
 export default function ChatWidget() {
+  // PENTING: getUserSession() lewat sessionStorage bisa balik null di render
+  // pertama lalu berubah jadi ada isinya — kalau ada `return null` DI ANTARA
+  // hook-hook (seperti versi sebelumnya), urutan hook jadi tidak konsisten
+  // antar-render dan React (terutama di production build) bisa diam-diam
+  // skip effect tertentu tanpa error yang kelihatan. Makanya SEMUA hook di
+  // bawah ini dipanggil tanpa syarat, guard `if (!user)` taruh di DALAM tiap
+  // effect atau di paling akhir sebelum return JSX — bukan di tengah.
   const user = getUserSession();
   const [open, setOpen] = useState(false);
-
-  useEffect(() => {
-    if (user) subscribeToPush(user.id);
-  }, [user?.id]);
   const [activeRoom, setActiveRoom] = useState<string>("general");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  if (!user) return null;
-
-  const allowedRoomIds = ROOM_ACCESS[user.role] ?? ["general"];
+  const allowedRoomIds = user ? (ROOM_ACCESS[user.role] ?? ["general"]) : [];
   const availableRooms = ALL_ROOMS.filter((r) => allowedRoomIds.includes(r.id));
 
   useEffect(() => {
+    if (user) subscribeToPush(user.id);
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!user) return;
     if (!allowedRoomIds.includes(activeRoom)) {
       setActiveRoom(availableRooms[0]?.id ?? "general");
     }
-  }, [user.role]);
+  }, [user?.role]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
+    if (!user) return;
     fetchMessages(activeRoom);
-        const interval = setInterval(() => {
+    const interval = setInterval(() => {
       fetchMessages(activeRoom);
     }, 3000);
     return () => clearInterval(interval);
-  }, [activeRoom]);
+  }, [activeRoom, user?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages]);
+
+  if (!user) return null;
 
   async function fetchMessages(roomId: string) {
     const { data } = await supabase
