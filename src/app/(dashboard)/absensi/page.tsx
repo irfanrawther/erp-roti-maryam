@@ -1994,7 +1994,7 @@ interface IzinRow {
   id: string; karyawan_id: string; tanggal_izin: string; jenis: string;
   foto_bukti_url: string | null; foto_surat_url: string | null; alasan: string | null;
   status: string; status_surat: string | null; batas_upload_surat: string | null;
-  override_by: string | null; denda?: number; kategori_lapor?: string | null; sakit_ke?: number | null;
+  override_by: string | null; denda?: number; kategori_lapor?: string | null; sakit_ke?: number | null; kuota_penuh?: boolean;
   dibatalkan_oleh: string | null; catatan_pembatalan: string | null; created_at: string;
   surat_uploaded_at?: string | null;
   foto_verified?: boolean; foto_verified_oleh?: string | null;
@@ -2055,7 +2055,7 @@ function PengajuanIzin({ userName }: { userName: string }) {
     }
     // 2) Fetch lengkap
     const { data } = await supabase.from("pengajuan_izin")
-      .select("id, karyawan_id, tanggal_izin, jenis, foto_bukti_url, foto_surat_url, alasan, status, status_surat, batas_upload_surat, override_by, denda, kategori_lapor, sakit_ke, dibatalkan_oleh, catatan_pembatalan, created_at, surat_uploaded_at, foto_verified, foto_verified_oleh, denda_dihapus, denda_dihapus_oleh, catatan_denda, karyawan:karyawan_id(nama)")
+      .select("id, karyawan_id, tanggal_izin, jenis, foto_bukti_url, foto_surat_url, alasan, status, status_surat, batas_upload_surat, override_by, denda, kategori_lapor, sakit_ke, kuota_penuh, dibatalkan_oleh, catatan_pembatalan, created_at, surat_uploaded_at, foto_verified, foto_verified_oleh, denda_dihapus, denda_dihapus_oleh, catatan_denda, karyawan:karyawan_id(nama)")
       .order("tanggal_izin", { ascending: false }).limit(200);
     const list = (data as unknown as IzinRow[]) ?? [];
     setRows(list);
@@ -2116,6 +2116,32 @@ function PengajuanIzin({ userName }: { userName: string }) {
     await supabase.from("absensi").upsert({
       karyawan_id: r.karyawan_id, tanggal: r.tanggal_izin,
       status_kehadiran: "izin_sakit", denda: 0, is_override: true,
+      override_by: userName, override_at: new Date().toISOString(),
+    }, { onConflict: "karyawan_id,tanggal" });
+    setBusyId(null);
+    fetchRows();
+  }
+
+  // Batalkan status Alpha (bukti/surat tidak sah) → kembalikan jadi Izin Biasa,
+  // denda mengikuti aturan izin biasa (bukan Rp 0, bukan denda Alpha Rp 50rb).
+  // Dipakai untuk kedua kasus: izin biasa tanpa bukti, maupun izin sakit yang
+  // foto suratnya tidak sah/tidak dikirim — keduanya diperlakukan sama sebagai
+  // izin biasa begitu di-override.
+  async function batalkanAlpha(r: IzinRow) {
+    const catatan = prompt(`Batalkan status Alpha, kembalikan jadi Izin Biasa?\nDenda mengikuti aturan izin biasa (bukan denda Alpha).\n\n${r.karyawan?.nama} · ${hariTglID(r.tanggal_izin)}\n\nCatatan (opsional):`, "");
+    if (catatan === null) return;
+    setBusyId(r.id);
+    const kat = (r.kategori_lapor as KatLapor) ?? "tepat_waktu";
+    const cfg = (await aturanUntuk(r.karyawan_id, r.tanggal_izin)).izin;
+    const denda = dendaIzinBiasa(kat, !!r.kuota_penuh, cfg);
+    await supabase.from("pengajuan_izin").update({
+      status: "aktif", jenis: "izin_biasa", status_surat: null, denda,
+      dibatalkan_oleh: null, dibatalkan_at: null, catatan_pembatalan: null,
+      override_by: userName, override_at: new Date().toISOString(), catatan_override: catatan || null,
+    }).eq("id", r.id);
+    await supabase.from("absensi").upsert({
+      karyawan_id: r.karyawan_id, tanggal: r.tanggal_izin,
+      status_kehadiran: "izin", denda, is_override: true,
       override_by: userName, override_at: new Date().toISOString(),
     }, { onConflict: "karyawan_id,tanggal" });
     setBusyId(null);
@@ -2227,7 +2253,15 @@ function PengajuanIzin({ userName }: { userName: string }) {
                 )}
               </>
             ) : (
-              <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-gray-200 text-gray-500">Tidak sah</span>
+              <>
+                <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-gray-200 text-gray-500">Tidak sah</span>
+                {r.status === "dibatalkan" && (
+                  <button onClick={() => batalkanAlpha(r)} disabled={busyId === r.id}
+                    className="mt-1.5 text-xs font-semibold px-2.5 py-1.5 rounded-lg bg-sky-100 text-sky-700 hover:bg-sky-200 transition-colors disabled:opacity-40">
+                    Batalkan Alpha → Izin Biasa
+                  </button>
+                )}
+              </>
             )}
           </div>
         </div>
