@@ -54,6 +54,8 @@ export default function AturanPage() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [toast, setToast] = useState("");
+  const [versiBaruFor, setVersiBaruFor] = useState<string | null>(null);
+  const [tglVersiBaru, setTglVersiBaru] = useState("");
 
   useEffect(() => {
     const u = getUserSession(); setUser(u);
@@ -94,6 +96,26 @@ export default function AturanPage() {
     invalidateAturanCache();
     await fetchAll();
     showToast(`Tersimpan — ${row.label ?? row.kunci}`);
+  }
+
+  // Bikin versi baru dari sebuah config, efektif mulai tanggal tertentu (jangka
+  // waktu berlaku), tanpa mengubah versi yang sedang aktif sekarang. Sebelumnya
+  // halaman ini cuma bisa edit-di-tempat (langsung timpa nilai versi aktif),
+  // jadi tidak ada cara untuk menjadwalkan perubahan aturan di masa depan.
+  async function buatVersiBaru(row: ConfigRow, tanggalMulai: string) {
+    if (!tanggalMulai) { showToast("Pilih tanggal mulai berlaku dulu"); return; }
+    setBusy(row.id);
+    const nilaiAwal = draft[row.id] ?? row.nilai;
+    const { error } = await supabase.from("aturan_config").insert({
+      jalur: row.jalur, kunci: row.kunci, label: row.label, nilai: nilaiAwal,
+      berlaku_mulai: tanggalMulai, updated_by: user?.nama ?? "", updated_at: new Date().toISOString(),
+    });
+    setBusy(null);
+    if (error) { showToast("Gagal membuat versi baru: " + error.message); return; }
+    setVersiBaruFor(null); setTglVersiBaru("");
+    invalidateAturanCache();
+    await fetchAll();
+    showToast(`Versi baru dibuat, berlaku mulai ${tglSaja(tanggalMulai)} — sekarang tinggal ubah angkanya lalu Simpan`);
   }
 
   async function simpanPelanggaran(row: PelanggaranRow) {
@@ -200,6 +222,27 @@ export default function AturanPage() {
                 </div>
                 <div className="pt-1">
                   <JsonEditor value={nilai} onChange={(next) => setDraft((d) => ({ ...d, [c.id]: next }))} />
+                </div>
+                <div className="pt-2 mt-1 border-t border-gray-100">
+                  {versiBaruFor === c.id ? (
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-xs text-gray-500">Berlaku mulai:</span>
+                      <input type="date" value={tglVersiBaru} min={hariIni}
+                        onChange={(e) => setTglVersiBaru(e.target.value)}
+                        className="input py-1 text-xs w-auto" />
+                      <button onClick={() => buatVersiBaru(c, tglVersiBaru)} disabled={busy === c.id}
+                        className="text-xs font-semibold px-2.5 py-1.5 rounded-lg bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-40">
+                        {busy === c.id ? "…" : "Buat Versi Baru"}
+                      </button>
+                      <button onClick={() => { setVersiBaruFor(null); setTglVersiBaru(""); }}
+                        className="text-xs text-gray-400 hover:text-gray-600">Batal</button>
+                    </div>
+                  ) : (
+                    <button onClick={() => { setVersiBaruFor(c.id); setTglVersiBaru(""); }}
+                      className="text-xs font-medium text-amber-600 hover:underline">
+                      + Jadwalkan versi baru (mulai berlaku tanggal lain)
+                    </button>
+                  )}
                 </div>
               </div>
             );
