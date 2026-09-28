@@ -115,13 +115,19 @@ export function RiwayatFilter({ preset, onPreset, customStart, customEnd, onCust
     ["custom", "Custom"],
   ];
 
+  // 1 klik tanggal = langsung pilih 1 hari itu saja (awal = akhir = tanggal yang
+  // diklik). Sebelumnya klik ke-2 otomatis dianggap "tanggal akhir" dari rentang
+  // yang sedang dibuka, jadi kalau baru mau lihat hari lain (bukan bikin rentang),
+  // klik itu malah nyangkut jadi akhir dari tanggal sebelumnya (ke-double).
+  // Sekarang mode "awal"/"akhir" harus dipilih manual lewat chip di atas kalender
+  // — klik tanggal tidak pernah auto-pindah mode.
   const handleCalendarSelect = (d: string) => {
     if (rangeStep === "start") {
-      onCustomStart(d); onCustomEnd(""); setRangeStep("end");
+      onCustomStart(d);
+      if (!customEnd || customEnd < d) onCustomEnd(d);
     } else {
-      if (d < customStart) { onCustomEnd(customStart); onCustomStart(d); }
+      if (d < customStart) onCustomStart(d);
       else onCustomEnd(d);
-      setRangeStep("start");
     }
   };
 
@@ -143,18 +149,22 @@ export function RiwayatFilter({ preset, onPreset, customStart, customEnd, onCust
       {preset === "custom" && (
         <div className="space-y-2">
           <div className="flex items-center gap-2 text-xs text-gray-500">
-            <span className={`px-2 py-1 rounded-lg font-medium ${rangeStep === "start" ? "bg-gray-200 text-gray-800" : "text-gray-400"}`}>
+            <button onClick={() => setRangeStep("start")}
+              className={`px-2 py-1 rounded-lg font-medium transition-colors ${rangeStep === "start" ? "bg-gray-200 text-gray-800" : "text-gray-400 hover:bg-gray-100"}`}>
               {customStart || "Pilih tanggal awal"}
-            </span>
+            </button>
             <span>→</span>
-            <span className={`px-2 py-1 rounded-lg font-medium ${rangeStep === "end" ? "bg-gray-200 text-gray-800" : "text-gray-400"}`}>
+            <button onClick={() => setRangeStep("end")}
+              className={`px-2 py-1 rounded-lg font-medium transition-colors ${rangeStep === "end" ? "bg-gray-200 text-gray-800" : "text-gray-400 hover:bg-gray-100"}`}>
               {customEnd || "Pilih tanggal akhir"}
-            </span>
+            </button>
             {(customStart || customEnd) && (
               <button onClick={() => { onCustomStart(""); onCustomEnd(""); setRangeStep("start"); }} className="ml-auto text-gray-400 hover:text-gray-600"><X size={14} /></button>
             )}
           </div>
-          <p className="text-xs text-gray-400">{rangeStep === "start" ? "Klik tanggal awal" : "Klik tanggal akhir"}</p>
+          <p className="text-xs text-gray-400">
+            {rangeStep === "start" ? "Klik tanggal di kalender untuk lihat 1 hari itu. Mau rentang beberapa hari? Klik \"Pilih tanggal akhir\" lalu klik tanggalnya." : "Klik tanggal akhir rentang di kalender."}
+          </p>
           <RangeCalendar start={customStart} end={customEnd} onSelect={handleCalendarSelect} accentColor={accentColor} />
         </div>
       )}
