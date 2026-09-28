@@ -6,7 +6,7 @@ import { supabase } from "@/lib/supabase";
 import { getUserSession } from "@/lib/auth";
 import { getCapabilities, homeRoute } from "@/lib/permissions";
 import { formatAngka } from "@/lib/utils";
-import { AlertTriangle, Store, RotateCcw, ChevronLeft, ChevronRight, Pencil, Check, X } from "lucide-react";
+import { AlertTriangle, Store, RotateCcw, ChevronLeft, ChevronRight, Pencil, Check, X, Trash2, List } from "lucide-react";
 import { RiwayatFilter, getRiwayatRange, ID_MONTHS } from "@/components/RiwayatFilter";
 import type { RiwayatPreset } from "@/components/RiwayatFilter";
 
@@ -57,6 +57,10 @@ export default function ProdukRejectPage() {
   const [editStokId,     setEditStokId]     = useState<string | null>(null);
   const [editStokVal,    setEditStokVal]    = useState("");
   const [savingStok,     setSavingStok]     = useState(false);
+  const [showDetail,     setShowDetail]     = useState(false);
+  const [editSaleId,     setEditSaleId]     = useState<string | null>(null);
+  const [editSaleVal,    setEditSaleVal]    = useState("");
+  const [savingSale,     setSavingSale]     = useState(false);
 
   // Form state
   const [packForm,   setPackForm]   = useState<Record<string, string>>({});
@@ -214,6 +218,56 @@ export default function ProdukRejectPage() {
     setShowUndoModal(false);
     setUndoBusy(false);
     showToast(`✓ Penjualan hari ini dibatalkan (${rows.length} input) & stok dikembalikan.`);
+    fetchReject(); fetchSales();
+  }
+
+  function openEditSale(row: SaleRow) {
+    setEditSaleId(row.id);
+    setEditSaleVal(String(row.jumlah_pack));
+  }
+
+  // Edit 1 baris transaksi reject: selisih pack lama vs baru disesuaikan ke stok
+  // (nambah pack = potong stok lagi, kurangin pack = kembalikan stok).
+  async function simpanEditSale(row: SaleRow) {
+    const packBaru = parseInt(editSaleVal);
+    if (isNaN(packBaru) || packBaru < 0) return;
+    const rejectRow = rejectList.find((r) => r.id === row.reject_id);
+    const perPack = rejectRow?.pcs_per_pack || (row.jumlah_pack > 0 ? row.jumlah_pcs / row.jumlah_pack : 1);
+    const pcsBaru = Math.round(packBaru * perPack);
+    const selisihPcs = pcsBaru - row.jumlah_pcs;
+    const stokSaatIni = rejectRow?.stok_pcs ?? 0;
+    if (selisihPcs > 0 && selisihPcs > stokSaatIni) {
+      showToast(`❌ Stok tidak cukup untuk nambah (tersedia ${stokSaatIni} pcs)`);
+      return;
+    }
+    setSavingSale(true);
+    const { error } = await supabase.from("penjualan_reject")
+      .update({ jumlah_pack: packBaru, jumlah_pcs: pcsBaru }).eq("id", row.id);
+    if (!error && rejectRow) {
+      await supabase.from("stok_produk_reject")
+        .update({ stok_pcs: Math.max(0, stokSaatIni - selisihPcs), updated_at: new Date().toISOString() })
+        .eq("id", rejectRow.id);
+    }
+    setSavingSale(false);
+    setEditSaleId(null);
+    if (error) showToast("❌ Gagal menyimpan, coba lagi");
+    else showToast("✓ Transaksi diperbarui");
+    fetchReject(); fetchSales();
+  }
+
+  async function hapusSale(row: SaleRow) {
+    if (!confirm(`Hapus transaksi ini?\n${row.brand === "cane" ? "Cane RawtheR" : "Mehana Boga Utama"} · ${row.varian} · ${row.jumlah_pack} pack · ${row.tanggal_keluar}\n\nStok akan dikembalikan.`)) return;
+    setSavingSale(true);
+    const rejectRow = rejectList.find((r) => r.id === row.reject_id);
+    const { error } = await supabase.from("penjualan_reject").delete().eq("id", row.id);
+    if (!error && rejectRow) {
+      await supabase.from("stok_produk_reject")
+        .update({ stok_pcs: rejectRow.stok_pcs + row.jumlah_pcs, updated_at: new Date().toISOString() })
+        .eq("id", rejectRow.id);
+    }
+    setSavingSale(false);
+    if (error) showToast("❌ Gagal menghapus, coba lagi");
+    else showToast("✓ Transaksi dihapus & stok dikembalikan");
     fetchReject(); fetchSales();
   }
 
@@ -466,6 +520,51 @@ export default function ProdukRejectPage() {
               );
             })()}
           </div>
+
+          {!readOnly && (
+            <div className="card overflow-hidden p-0">
+              <button type="button" onClick={() => setShowDetail((v) => !v)}
+                className="w-full px-4 py-3 flex items-center justify-between hover:bg-gray-50">
+                <div className="flex items-center gap-2">
+                  <List size={15} className="text-gray-500" />
+                  <span className="font-semibold text-sm text-gray-700">Detail Transaksi ({allSales.length})</span>
+                </div>
+                <span className="text-xs text-gray-400">{showDetail ? "Sembunyikan" : "Tampilkan"}</span>
+              </button>
+              {showDetail && (
+                <div className="border-t border-gray-100">
+                  {allSales.length === 0 ? (
+                    <p className="text-sm text-gray-400 text-center py-4">Tidak ada transaksi di periode ini</p>
+                  ) : (
+                    [...allSales].sort((a, b) => b.tanggal_keluar.localeCompare(a.tanggal_keluar)).map((s) => (
+                      <div key={s.id} className="px-4 py-2.5 border-b border-gray-50 last:border-0 flex items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="text-sm text-gray-700 font-medium">{s.brand === "cane" ? "Cane RawtheR" : "Mehana Boga Utama"} · {s.varian}</p>
+                          <p className="text-xs text-gray-400">{s.tanggal_keluar}</p>
+                        </div>
+                        {editSaleId === s.id ? (
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <input type="number" min={0} value={editSaleVal} onChange={(e) => setEditSaleVal(e.target.value)}
+                              className="w-16 text-sm border border-gray-200 rounded-lg px-2 py-1" autoFocus />
+                            <span className="text-xs text-gray-400">pack</span>
+                            <button onClick={() => simpanEditSale(s)} disabled={savingSale} className="p-1.5 rounded-lg bg-green-100 text-green-700 hover:bg-green-200 disabled:opacity-40"><Check size={14} /></button>
+                            <button onClick={() => setEditSaleId(null)} disabled={savingSale} className="p-1.5 rounded-lg bg-gray-100 text-gray-500 hover:bg-gray-200 disabled:opacity-40"><X size={14} /></button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <span className="text-sm font-semibold text-gray-800">{formatAngka(s.jumlah_pack)} pack</span>
+                            <span className="text-xs text-gray-400">({formatAngka(s.jumlah_pcs)} pcs)</span>
+                            <button onClick={() => openEditSale(s)} className="p-1.5 rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-600"><Pencil size={14} /></button>
+                            <button onClick={() => hapusSale(s)} disabled={savingSale} className="p-1.5 rounded-lg text-gray-400 hover:bg-red-50 hover:text-red-500 disabled:opacity-40"><Trash2 size={14} /></button>
+                          </div>
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
