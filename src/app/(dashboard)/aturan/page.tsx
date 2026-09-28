@@ -54,10 +54,7 @@ export default function AturanPage() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [toast, setToast] = useState("");
-  const [versiBaruOpen, setVersiBaruOpen] = useState(false);
-  const [versiBaruKunci, setVersiBaruKunci] = useState("");
   const [versiBaruTanggal, setVersiBaruTanggal] = useState("");
-  const [versiBaruDraft, setVersiBaruDraft] = useState<Json | null>(null);
 
   useEffect(() => {
     const u = getUserSession(); setUser(u);
@@ -100,45 +97,33 @@ export default function AturanPage() {
     showToast(`Tersimpan — ${row.label ?? row.kunci}`);
   }
 
-  // Ambil versi terbaru (kronologis) dari sebuah kunci, sebagai titik awal draft
-  // saat mulai menjadwalkan versi baru — supaya user tinggal ubah field yang
-  // memang mau diubah, bukan mulai dari kosong.
-  function versiTerbaru(kunci: string): ConfigRow | undefined {
-    const rows = configs.filter((c) => c.jalur === jalur && c.kunci === kunci);
-    return rows[rows.length - 1];
-  }
-
-  function pilihKunciVersiBaru(kunci: string) {
-    setVersiBaruKunci(kunci);
-    const template = versiTerbaru(kunci);
-    setVersiBaruDraft(template ? (JSON.parse(JSON.stringify(template.nilai)) as Json) : null);
-  }
-
-  function tutupVersiBaru() {
-    setVersiBaruOpen(false); setVersiBaruKunci(""); setVersiBaruTanggal(""); setVersiBaruDraft(null);
-  }
-
-  // Jadwalkan versi baru: pilih kunci & tanggal mulai berlaku dulu, edit semua
-  // field yang mau diubah di form ini (tanpa menyentuh versi yang aktif sekarang),
-  // baru satu kali klik Simpan untuk membuat baris barunya di database.
-  async function simpanVersiBaru() {
-    if (!versiBaruKunci) { showToast("Pilih aturan yang mau dijadwalkan dulu"); return; }
-    if (!versiBaruTanggal) { showToast("Pilih tanggal mulai berlaku dulu"); return; }
-    if (versiBaruDraft === null) return;
-    const template = versiTerbaru(versiBaruKunci);
+  // Mode jadwal: isi tanggal di atas dulu, lalu edit field manapun langsung di
+  // kartu masing-masing (draft yang sama dengan mode edit biasa) — bisa ubah
+  // beberapa aturan sekaligus dalam satu tanggal efektif. Klik "Simpan" di atas
+  // membuat SEMUA field yang berubah jadi baris versi baru (insert), tanpa
+  // menyentuh versi yang sedang aktif sekarang.
+  async function simpanSemuaVersiBaru() {
+    if (!versiBaruTanggal) { showToast("Isi tanggal mulai berlaku dulu"); return; }
+    const ids = Object.keys(draft);
+    if (ids.length === 0) { showToast("Belum ada field yang diubah"); return; }
     setBusy("versi-baru");
-    const { error } = await supabase.from("aturan_config").insert({
-      jalur, kunci: versiBaruKunci, label: template?.label ?? versiBaruKunci, nilai: versiBaruDraft,
-      berlaku_mulai: versiBaruTanggal, updated_by: user?.nama ?? "", updated_at: new Date().toISOString(),
-    });
+    let gagal = 0;
+    for (const id of ids) {
+      const row = configs.find((c) => c.id === id);
+      if (!row) continue;
+      const { error } = await supabase.from("aturan_config").insert({
+        jalur: row.jalur, kunci: row.kunci, label: row.label, nilai: draft[id],
+        berlaku_mulai: versiBaruTanggal, updated_by: user?.nama ?? "", updated_at: new Date().toISOString(),
+      });
+      if (error) gagal++;
+    }
     setBusy(null);
-    if (error) { showToast("Gagal membuat versi baru: " + error.message); return; }
-    const labelSelesai = template?.label ?? versiBaruKunci;
-    const tglSelesai = versiBaruTanggal;
-    tutupVersiBaru();
     invalidateAturanCache();
+    const tglSelesai = versiBaruTanggal;
+    setVersiBaruTanggal(""); setDraft({});
     await fetchAll();
-    showToast(`Versi baru "${labelSelesai}" dibuat, berlaku mulai ${tglSaja(tglSelesai)}`);
+    if (gagal > 0) showToast(`${ids.length - gagal} versi baru dibuat, ${gagal} gagal disimpan`);
+    else showToast(`${ids.length} aturan diperbarui, berlaku mulai ${tglSaja(tglSelesai)}`);
   }
 
   async function simpanPelanggaran(row: PelanggaranRow) {
@@ -205,49 +190,29 @@ export default function AturanPage() {
             ))}
           </div>
 
-          <div className="card space-y-3 border-2 border-amber-200">
-            {!versiBaruOpen ? (
-              <button onClick={() => setVersiBaruOpen(true)}
-                className="w-full text-sm font-semibold text-amber-700 hover:text-amber-800 text-left">
-                + Jadwalkan Versi Baru (aturan berubah mulai tanggal tertentu)
-              </button>
-            ) : (
-              <>
+          <div className="card space-y-2 border-2 border-amber-200">
+            <div className="flex items-center justify-between flex-wrap gap-3">
+              <div>
                 <p className="text-sm font-semibold text-gray-800">Jadwalkan Versi Baru</p>
-                <div className="flex flex-wrap items-end gap-3">
-                  <div>
-                    <label className="text-[11px] text-gray-500 block mb-0.5">Aturan mana</label>
-                    <select value={versiBaruKunci} onChange={(e) => pilihKunciVersiBaru(e.target.value)}
-                      className="input py-1.5 text-sm w-64">
-                      <option value="">— Pilih aturan —</option>
-                      {Array.from(new Map(configsJalur.map((c) => [c.kunci, c.label ?? c.kunci])).entries()).map(([kunci, label]) => (
-                        <option key={kunci} value={kunci}>{label}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-[11px] text-gray-500 block mb-0.5">Berlaku mulai</label>
-                    <input type="date" min={hariIni} value={versiBaruTanggal}
-                      onChange={(e) => setVersiBaruTanggal(e.target.value)}
-                      className="input py-1.5 text-sm" />
-                  </div>
-                  <button onClick={tutupVersiBaru} className="text-xs text-gray-400 hover:text-gray-600 pb-2">Batal</button>
-                </div>
-
-                {versiBaruDraft !== null && (
-                  <div className="pt-2 border-t border-gray-100">
-                    <p className="text-xs text-gray-400 mb-2">
-                      Ubah field yang perlu diubah saja — sisanya ikut nilai versi terakhir. Versi yang berlaku sekarang tidak berubah sampai tanggal di atas tiba.
-                    </p>
-                    <JsonEditor value={versiBaruDraft} onChange={setVersiBaruDraft} />
-                    <button onClick={simpanVersiBaru} disabled={busy === "versi-baru" || !versiBaruTanggal}
-                      className="mt-2 flex items-center gap-1 text-xs font-semibold px-3 py-2 rounded-lg bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-40">
-                      <Save size={12} /> {busy === "versi-baru" ? "Menyimpan…" : "Simpan Versi Baru"}
-                    </button>
-                  </div>
+                <p className="text-xs text-gray-400">Isi tanggal, lalu ubah field yang perlu di kartu manapun di bawah — versi aktif sekarang tidak berubah sampai tanggal ini tiba.</p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <input type="date" min={hariIni} value={versiBaruTanggal}
+                  onChange={(e) => setVersiBaruTanggal(e.target.value)}
+                  className="input py-1.5 text-sm" />
+                {Object.keys(draft).length > 0 && (
+                  <button onClick={() => versiBaruTanggal ? simpanSemuaVersiBaru() : showToast("Isi tanggal mulai berlaku dulu")}
+                    disabled={busy === "versi-baru"}
+                    className="flex items-center gap-1 text-xs font-semibold px-3 py-2 rounded-lg bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-40 whitespace-nowrap">
+                    <Save size={12} /> {busy === "versi-baru" ? "Menyimpan…" : `Simpan Versi Baru (${Object.keys(draft).length})`}
+                  </button>
                 )}
-              </>
-            )}
+                {(versiBaruTanggal || Object.keys(draft).length > 0) && (
+                  <button onClick={() => { setVersiBaruTanggal(""); setDraft({}); }}
+                    className="text-xs text-gray-400 hover:text-gray-600">Batal</button>
+                )}
+              </div>
+            </div>
           </div>
 
           {configsJalur.length === 0 ? (
@@ -274,6 +239,11 @@ export default function AturanPage() {
                         ? (aktifIds.has(c.id) ? "Berlaku sekarang" : `Sudah lewat · s/d sebelum versi berikutnya`)
                         : `Mulai berlaku ${tglSaja(c.berlaku_mulai)}`}
                     </span>
+                    {berubah && versiBaruTanggal && (
+                      <span className="inline-block mt-1 ml-1 text-[10px] px-1.5 py-0.5 rounded-full font-semibold bg-amber-100 text-amber-700">
+                        diedit → jadi versi baru {tglSaja(versiBaruTanggal)}
+                      </span>
+                    )}
                   </div>
                   {berubah && (
                     <div className="flex items-center gap-1.5 shrink-0">
@@ -281,10 +251,12 @@ export default function AturanPage() {
                         className="p-1.5 rounded-lg text-gray-400 hover:bg-gray-100" title="Batalkan perubahan">
                         <RotateCcw size={14} />
                       </button>
-                      <button onClick={() => simpanConfig(c)} disabled={busy === c.id}
-                        className="flex items-center gap-1 text-xs font-semibold px-2.5 py-1.5 rounded-lg bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-40">
-                        <Save size={12} /> {busy === c.id ? "…" : "Simpan"}
-                      </button>
+                      {!versiBaruTanggal && (
+                        <button onClick={() => simpanConfig(c)} disabled={busy === c.id}
+                          className="flex items-center gap-1 text-xs font-semibold px-2.5 py-1.5 rounded-lg bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-40">
+                          <Save size={12} /> {busy === c.id ? "…" : "Simpan"}
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
