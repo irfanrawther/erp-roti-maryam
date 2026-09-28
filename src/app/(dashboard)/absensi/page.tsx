@@ -2182,7 +2182,7 @@ function PengajuanIzin({ userName }: { userName: string }) {
     const isTelat = r.jenis === "izin_sakit" && r.status_surat === "surat_telat";
     return (
       <div className={`rounded-xl border p-3 ${r.status === "aktif" ? (r.jenis === "izin_sakit" ? "border-teal-100 bg-teal-50/40" : "border-sky-100 bg-sky-50/40") : "border-gray-100 bg-gray-50/60"}`}>
-        <div className="flex items-start justify-between gap-3">
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
           <div className="flex items-start gap-3 min-w-0">
             {fotoUrl ? (
               <button onClick={() => setFotoModal(fotoUrl)} className="w-14 h-14 rounded-lg overflow-hidden border border-gray-200 hover:ring-2 hover:ring-teal-400 shrink-0">
@@ -2226,7 +2226,7 @@ function PengajuanIzin({ userName }: { userName: string }) {
               )}
             </div>
           </div>
-          <div className="flex flex-col gap-1.5 shrink-0">
+          <div className="flex flex-row flex-wrap sm:flex-col gap-1.5 sm:shrink-0">
             {r.status === "aktif" ? (
               <>
                 {!r.foto_verified && (
