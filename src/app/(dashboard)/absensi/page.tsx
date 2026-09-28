@@ -84,7 +84,7 @@ const LIBUR_COLOR = "bg-gray-200 text-gray-500 border-gray-300";
 export default function AbsensiPage() {
   const router = useRouter();
   const [user, setUser] = useState<UserSession | null>(null);
-  const [tab, setTab] = useState<"karyawan" | "shift" | "review" | "izin" | "rekap" | "pengaturan">("karyawan");
+  const [tab, setTab] = useState<"karyawan" | "shift" | "review" | "izin" | "rekap" | "rekap_izin" | "pengaturan">("karyawan");
 
   const [karyawanList, setKaryawanList] = useState<Karyawan[]>([]);
   const [erpUsers,     setErpUsers]     = useState<ErpUser[]>([]);
@@ -120,7 +120,7 @@ export default function AbsensiPage() {
 
       {/* Tabs */}
       <div className="flex bg-white rounded-xl border border-gray-100 p-1 gap-1 max-w-3xl overflow-x-auto">
-        {([["karyawan", "Data Karyawan"], ["shift", "Atur Jadwal Shift"], ["review", "Review & Flag"], ["izin", "Lapor Izin"], ["rekap", "Rekap Absensi"], ["pengaturan", "Pengaturan Lokasi"]] as const).map(([k, label]) => (
+        {([["karyawan", "Data Karyawan"], ["shift", "Atur Jadwal Shift"], ["review", "Review & Flag"], ["izin", "Lapor Izin"], ["rekap", "Rekap Absensi"], ["rekap_izin", "Rekap Izin"], ["pengaturan", "Pengaturan Lokasi"]] as const).map(([k, label]) => (
           <button key={k} onClick={() => setTab(k)}
             className={`flex-1 whitespace-nowrap py-2 px-3 rounded-lg text-sm font-medium transition-colors ${tab === k ? "bg-amber-500 text-white" : "text-gray-600 hover:bg-gray-50"}`}>
             {label}
@@ -142,6 +142,9 @@ export default function AbsensiPage() {
       )}
       {tab === "rekap" && (
         <RekapAbsensi karyawanList={karyawanList} shifts={shifts} userName={user?.nama ?? ""} />
+      )}
+      {tab === "rekap_izin" && (
+        <RekapIzin />
       )}
       {tab === "pengaturan" && (
         <>
@@ -2257,6 +2260,123 @@ function PengajuanIzin({ userName }: { userName: string }) {
           <img src={fotoModal} alt="bukti izin" className="max-w-full max-h-[90vh] object-contain rounded-lg" />
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Rekap Izin per Bulan (Super Admin) ──
+interface RekapIzinRow {
+  id: string; karyawan_id: string; tanggal_izin: string; jenis: "izin_biasa" | "izin_sakit";
+  alasan: string | null; status: string; created_at: string;
+  karyawan: { nama: string } | null;
+}
+function RekapIzin() {
+  const [bulan, setBulan] = useState(() => new Date().toISOString().slice(0, 7)); // "YYYY-MM"
+  const [rows, setRows] = useState<RekapIzinRow[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  const fetchBulan = useCallback(async () => {
+    setLoading(true);
+    const awal = `${bulan}-01`;
+    const [y, m] = bulan.split("-").map(Number);
+    const akhir = new Date(y, m, 0).toISOString().slice(0, 10); // tanggal terakhir bulan itu
+    const { data } = await supabase.from("pengajuan_izin")
+      .select("id, karyawan_id, tanggal_izin, jenis, alasan, status, created_at, karyawan:karyawan_id(nama)")
+      .eq("status", "aktif")
+      .gte("tanggal_izin", awal).lte("tanggal_izin", akhir)
+      .order("tanggal_izin", { ascending: false });
+    setRows((data as unknown as RekapIzinRow[]) ?? []);
+    setLoading(false);
+  }, [bulan]);
+  useEffect(() => { fetchBulan(); }, [fetchBulan]);
+
+  const summary = (() => {
+    const m: Record<string, { nama: string; biasa: number; sakit: number }> = {};
+    for (const r of rows) {
+      const key = r.karyawan_id;
+      if (!m[key]) m[key] = { nama: r.karyawan?.nama ?? "—", biasa: 0, sakit: 0 };
+      if (r.jenis === "izin_sakit") m[key].sakit += 1; else m[key].biasa += 1;
+    }
+    return Object.values(m).sort((a, b) => (b.biasa + b.sakit) - (a.biasa + a.sakit));
+  })();
+
+  return (
+    <div className="space-y-4">
+      <div className="card space-y-3">
+        <div className="flex items-center gap-2 flex-wrap justify-between">
+          <div className="flex items-center gap-2">
+            <FileText size={16} className="text-sky-500" />
+            <h2 className="font-semibold text-gray-700 text-sm">Rekap Izin Bulanan</h2>
+          </div>
+          <input type="month" value={bulan} onChange={(e) => setBulan(e.target.value)}
+            className="input !w-auto text-sm" />
+        </div>
+        {loading && <p className="text-sm text-gray-400">Memuat…</p>}
+
+        <div>
+          <h3 className="text-xs font-semibold text-gray-500 mb-1.5">Ringkasan per Karyawan</h3>
+          {summary.length === 0 ? <p className="text-gray-400 text-sm text-center py-3">Tidak ada izin bulan ini</p> : (
+            <div className="overflow-x-auto -mx-1">
+              <table className="w-full text-xs min-w-[420px]">
+                <thead>
+                  <tr className="text-left text-gray-400 border-b border-gray-100">
+                    <th className="py-1.5 px-1 font-medium">Nama</th>
+                    <th className="py-1.5 px-1 font-medium">Total Tidak Masuk</th>
+                    <th className="py-1.5 px-1 font-medium">Izin Biasa</th>
+                    <th className="py-1.5 px-1 font-medium">Sakit</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {summary.map((s) => (
+                    <tr key={s.nama} className="border-b border-gray-50">
+                      <td className="py-1.5 px-1 font-semibold text-gray-700">{s.nama}</td>
+                      <td className="py-1.5 px-1 text-gray-600">{s.biasa + s.sakit}x</td>
+                      <td className="py-1.5 px-1 text-gray-600">{s.biasa}x</td>
+                      <td className="py-1.5 px-1 text-gray-600">{s.sakit}x</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="card space-y-3">
+        <h3 className="text-xs font-semibold text-gray-500">Daftar Detail ({rows.length})</h3>
+        {rows.length === 0 ? <p className="text-gray-400 text-sm text-center py-3">Tidak ada izin bulan ini</p> : (
+          <div className="overflow-x-auto -mx-1">
+            <table className="w-full text-xs min-w-[560px]">
+              <thead>
+                <tr className="text-left text-gray-400 border-b border-gray-100">
+                  <th className="py-1.5 px-1 font-medium">Tanggal</th>
+                  <th className="py-1.5 px-1 font-medium">Nama</th>
+                  <th className="py-1.5 px-1 font-medium">Jenis</th>
+                  <th className="py-1.5 px-1 font-medium">Alasan</th>
+                  <th className="py-1.5 px-1 font-medium">Jam Submit</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.id} className="border-b border-gray-50">
+                    <td className="py-1.5 px-1 whitespace-nowrap text-gray-600">{formatTglID(r.tanggal_izin)}</td>
+                    <td className="py-1.5 px-1 font-semibold text-gray-700">{r.karyawan?.nama ?? "—"}</td>
+                    <td className="py-1.5 px-1 text-gray-500">{r.jenis === "izin_sakit" ? "Izin Sakit" : "Izin Biasa"}</td>
+                    <td className="py-1.5 px-1 text-gray-600">
+                      {r.alasan
+                        ? r.alasan
+                        : r.jenis === "izin_sakit"
+                          ? <span className="text-gray-400 italic">Sakit (lihat foto surat)</span>
+                          : <span className="text-gray-300">—</span>}
+                    </td>
+                    <td className="py-1.5 px-1 whitespace-nowrap text-gray-600">{fmtWaktuWIB(r.created_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
