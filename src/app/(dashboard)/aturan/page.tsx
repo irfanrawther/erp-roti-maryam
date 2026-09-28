@@ -54,8 +54,10 @@ export default function AturanPage() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [toast, setToast] = useState("");
-  const [versiBaruFor, setVersiBaruFor] = useState<string | null>(null);
-  const [tglVersiBaru, setTglVersiBaru] = useState("");
+  const [versiBaruOpen, setVersiBaruOpen] = useState(false);
+  const [versiBaruKunci, setVersiBaruKunci] = useState("");
+  const [versiBaruTanggal, setVersiBaruTanggal] = useState("");
+  const [versiBaruDraft, setVersiBaruDraft] = useState<Json | null>(null);
 
   useEffect(() => {
     const u = getUserSession(); setUser(u);
@@ -98,24 +100,45 @@ export default function AturanPage() {
     showToast(`Tersimpan — ${row.label ?? row.kunci}`);
   }
 
-  // Bikin versi baru dari sebuah config, efektif mulai tanggal tertentu (jangka
-  // waktu berlaku), tanpa mengubah versi yang sedang aktif sekarang. Sebelumnya
-  // halaman ini cuma bisa edit-di-tempat (langsung timpa nilai versi aktif),
-  // jadi tidak ada cara untuk menjadwalkan perubahan aturan di masa depan.
-  async function buatVersiBaru(row: ConfigRow, tanggalMulai: string) {
-    if (!tanggalMulai) { showToast("Pilih tanggal mulai berlaku dulu"); return; }
-    setBusy(row.id);
-    const nilaiAwal = draft[row.id] ?? row.nilai;
+  // Ambil versi terbaru (kronologis) dari sebuah kunci, sebagai titik awal draft
+  // saat mulai menjadwalkan versi baru — supaya user tinggal ubah field yang
+  // memang mau diubah, bukan mulai dari kosong.
+  function versiTerbaru(kunci: string): ConfigRow | undefined {
+    const rows = configs.filter((c) => c.jalur === jalur && c.kunci === kunci);
+    return rows[rows.length - 1];
+  }
+
+  function pilihKunciVersiBaru(kunci: string) {
+    setVersiBaruKunci(kunci);
+    const template = versiTerbaru(kunci);
+    setVersiBaruDraft(template ? (JSON.parse(JSON.stringify(template.nilai)) as Json) : null);
+  }
+
+  function tutupVersiBaru() {
+    setVersiBaruOpen(false); setVersiBaruKunci(""); setVersiBaruTanggal(""); setVersiBaruDraft(null);
+  }
+
+  // Jadwalkan versi baru: pilih kunci & tanggal mulai berlaku dulu, edit semua
+  // field yang mau diubah di form ini (tanpa menyentuh versi yang aktif sekarang),
+  // baru satu kali klik Simpan untuk membuat baris barunya di database.
+  async function simpanVersiBaru() {
+    if (!versiBaruKunci) { showToast("Pilih aturan yang mau dijadwalkan dulu"); return; }
+    if (!versiBaruTanggal) { showToast("Pilih tanggal mulai berlaku dulu"); return; }
+    if (versiBaruDraft === null) return;
+    const template = versiTerbaru(versiBaruKunci);
+    setBusy("versi-baru");
     const { error } = await supabase.from("aturan_config").insert({
-      jalur: row.jalur, kunci: row.kunci, label: row.label, nilai: nilaiAwal,
-      berlaku_mulai: tanggalMulai, updated_by: user?.nama ?? "", updated_at: new Date().toISOString(),
+      jalur, kunci: versiBaruKunci, label: template?.label ?? versiBaruKunci, nilai: versiBaruDraft,
+      berlaku_mulai: versiBaruTanggal, updated_by: user?.nama ?? "", updated_at: new Date().toISOString(),
     });
     setBusy(null);
     if (error) { showToast("Gagal membuat versi baru: " + error.message); return; }
-    setVersiBaruFor(null); setTglVersiBaru("");
+    const labelSelesai = template?.label ?? versiBaruKunci;
+    const tglSelesai = versiBaruTanggal;
+    tutupVersiBaru();
     invalidateAturanCache();
     await fetchAll();
-    showToast(`Versi baru dibuat, berlaku mulai ${tglSaja(tanggalMulai)} — sekarang tinggal ubah angkanya lalu Simpan`);
+    showToast(`Versi baru "${labelSelesai}" dibuat, berlaku mulai ${tglSaja(tglSelesai)}`);
   }
 
   async function simpanPelanggaran(row: PelanggaranRow) {
@@ -182,6 +205,51 @@ export default function AturanPage() {
             ))}
           </div>
 
+          <div className="card space-y-3 border-2 border-amber-200">
+            {!versiBaruOpen ? (
+              <button onClick={() => setVersiBaruOpen(true)}
+                className="w-full text-sm font-semibold text-amber-700 hover:text-amber-800 text-left">
+                + Jadwalkan Versi Baru (aturan berubah mulai tanggal tertentu)
+              </button>
+            ) : (
+              <>
+                <p className="text-sm font-semibold text-gray-800">Jadwalkan Versi Baru</p>
+                <div className="flex flex-wrap items-end gap-3">
+                  <div>
+                    <label className="text-[11px] text-gray-500 block mb-0.5">Aturan mana</label>
+                    <select value={versiBaruKunci} onChange={(e) => pilihKunciVersiBaru(e.target.value)}
+                      className="input py-1.5 text-sm w-64">
+                      <option value="">— Pilih aturan —</option>
+                      {Array.from(new Map(configsJalur.map((c) => [c.kunci, c.label ?? c.kunci])).entries()).map(([kunci, label]) => (
+                        <option key={kunci} value={kunci}>{label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-gray-500 block mb-0.5">Berlaku mulai</label>
+                    <input type="date" min={hariIni} value={versiBaruTanggal}
+                      onChange={(e) => setVersiBaruTanggal(e.target.value)}
+                      className="input py-1.5 text-sm" />
+                  </div>
+                  <button onClick={tutupVersiBaru} className="text-xs text-gray-400 hover:text-gray-600 pb-2">Batal</button>
+                </div>
+
+                {versiBaruDraft !== null && (
+                  <div className="pt-2 border-t border-gray-100">
+                    <p className="text-xs text-gray-400 mb-2">
+                      Ubah field yang perlu diubah saja — sisanya ikut nilai versi terakhir. Versi yang berlaku sekarang tidak berubah sampai tanggal di atas tiba.
+                    </p>
+                    <JsonEditor value={versiBaruDraft} onChange={setVersiBaruDraft} />
+                    <button onClick={simpanVersiBaru} disabled={busy === "versi-baru" || !versiBaruTanggal}
+                      className="mt-2 flex items-center gap-1 text-xs font-semibold px-3 py-2 rounded-lg bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-40">
+                      <Save size={12} /> {busy === "versi-baru" ? "Menyimpan…" : "Simpan Versi Baru"}
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
           {configsJalur.length === 0 ? (
             <div className="card text-center py-8">
               <AlertCircle size={26} className="mx-auto text-amber-400 mb-2" />
@@ -222,27 +290,6 @@ export default function AturanPage() {
                 </div>
                 <div className="pt-1">
                   <JsonEditor value={nilai} onChange={(next) => setDraft((d) => ({ ...d, [c.id]: next }))} />
-                </div>
-                <div className="pt-2 mt-1 border-t border-gray-100">
-                  {versiBaruFor === c.id ? (
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-xs text-gray-500">Berlaku mulai:</span>
-                      <input type="date" value={tglVersiBaru} min={hariIni}
-                        onChange={(e) => setTglVersiBaru(e.target.value)}
-                        className="input py-1 text-xs w-auto" />
-                      <button onClick={() => buatVersiBaru(c, tglVersiBaru)} disabled={busy === c.id}
-                        className="text-xs font-semibold px-2.5 py-1.5 rounded-lg bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-40">
-                        {busy === c.id ? "…" : "Buat Versi Baru"}
-                      </button>
-                      <button onClick={() => { setVersiBaruFor(null); setTglVersiBaru(""); }}
-                        className="text-xs text-gray-400 hover:text-gray-600">Batal</button>
-                    </div>
-                  ) : (
-                    <button onClick={() => { setVersiBaruFor(c.id); setTglVersiBaru(""); }}
-                      className="text-xs font-medium text-amber-600 hover:underline">
-                      + Jadwalkan versi baru (mulai berlaku tanggal lain)
-                    </button>
-                  )}
                 </div>
               </div>
             );
