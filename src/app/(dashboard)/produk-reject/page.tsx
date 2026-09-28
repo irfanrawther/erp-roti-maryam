@@ -15,7 +15,17 @@ interface RejectStok {
 }
 interface SaleRow {
   id: string; reject_id: string; brand: string; varian: string;
-  jumlah_pack: number; jumlah_pcs: number; tanggal_keluar: string;
+  jumlah_pack: number; jumlah_pcs: number; tanggal_keluar: string; created_at: string;
+}
+
+// "28 Sep 2026, 14:05" (WIB) — dipakai supaya jam input transaksi kelihatan jelas
+function fmtWaktuWIB(iso: string): string {
+  return new Date(iso).toLocaleString("id-ID", {
+    timeZone: "Asia/Jakarta", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit",
+  }).replace(/\./g, ":");
+}
+function formatTglID(tgl: string): string {
+  return new Date(`${tgl}T00:00:00+07:00`).toLocaleDateString("id-ID", { timeZone: "Asia/Jakarta", day: "numeric", month: "short", year: "numeric" });
 }
 
 const BRAND_CONFIG = [
@@ -96,7 +106,7 @@ export default function ProdukRejectPage() {
   async function fetchSales() {
     const { start, end } = getRiwayatRange(preset, customStart, customEnd, selectedBulan);
     const { data } = await supabase.from("penjualan_reject")
-      .select("id, reject_id, brand, varian, jumlah_pack, jumlah_pcs, tanggal_keluar")
+      .select("id, reject_id, brand, varian, jumlah_pack, jumlah_pcs, tanggal_keluar, created_at")
       .gte("tanggal_keluar", start).lte("tanggal_keluar", end);
     if (data) setAllSales(data as SaleRow[]);
   }
@@ -536,11 +546,20 @@ export default function ProdukRejectPage() {
                   {allSales.length === 0 ? (
                     <p className="text-sm text-gray-400 text-center py-4">Tidak ada transaksi di periode ini</p>
                   ) : (
-                    [...allSales].sort((a, b) => b.tanggal_keluar.localeCompare(a.tanggal_keluar)).map((s) => (
+                    [...allSales]
+                      .sort((a, b) => b.tanggal_keluar.localeCompare(a.tanggal_keluar) || b.created_at.localeCompare(a.created_at))
+                      .map((s) => {
+                        const tglInputWIB = new Date(s.created_at).toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" });
+                        const telat = tglInputWIB !== s.tanggal_keluar;
+                        return (
                       <div key={s.id} className="px-4 py-2.5 border-b border-gray-50 last:border-0 flex items-center justify-between gap-2">
                         <div className="min-w-0">
                           <p className="text-sm text-gray-700 font-medium">{s.brand === "cane" ? "Cane RawtheR" : "Mehana Boga Utama"} · {s.varian}</p>
-                          <p className="text-xs text-gray-400">{s.tanggal_keluar}</p>
+                          <p className="text-xs text-gray-400">Transaksi {formatTglID(s.tanggal_keluar)}</p>
+                          <p className="text-xs text-gray-400">
+                            Input: {fmtWaktuWIB(s.created_at)}
+                            {telat && <span className="ml-1.5 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-orange-100 text-orange-600">telat, beda hari</span>}
+                          </p>
                         </div>
                         {editSaleId === s.id ? (
                           <div className="flex items-center gap-1.5 shrink-0">
@@ -559,7 +578,8 @@ export default function ProdukRejectPage() {
                           </div>
                         )}
                       </div>
-                    ))
+                        );
+                      })
                   )}
                 </div>
               )}
