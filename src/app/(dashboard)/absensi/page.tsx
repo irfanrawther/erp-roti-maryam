@@ -2267,9 +2267,24 @@ function PengajuanIzin({ userName }: { userName: string }) {
 // ── Rekap Izin per Bulan (Super Admin) ──
 interface RekapIzinRow {
   id: string; karyawan_id: string; tanggal_izin: string; jenis: "izin_biasa" | "izin_sakit";
-  alasan: string | null; status: string; created_at: string;
+  alasan: string | null; status: string; status_surat: string | null; catatan_pembatalan: string | null;
+  created_at: string;
   karyawan: { nama: string } | null;
 }
+type KategoriEfektif = "izin_biasa" | "izin_sakit" | "alpha";
+
+// Surat sakit telat/tidak dikirim → didenda & diperlakukan sebagai Izin Biasa (Pasal 3b), meski
+// kolom `jenis` di DB tetap "izin_sakit". Dan pengajuan yang ditandai tidak sah (status=dibatalkan)
+// jadi Alpha, bukan izin — keduanya harus dihitung sesuai kategori AKTUALNYA, bukan kolom `jenis` mentah.
+function kategoriEfektif(r: RekapIzinRow): KategoriEfektif {
+  if (r.status === "dibatalkan") return "alpha";
+  if (r.jenis === "izin_sakit" && r.status_surat === "surat_telat") return "izin_biasa";
+  return r.jenis;
+}
+function kategoriLabel(k: KategoriEfektif) {
+  return k === "izin_sakit" ? "Sakit" : k === "alpha" ? "Alpha (tidak sah)" : "Izin Biasa";
+}
+
 function RekapIzin() {
   const [bulan, setBulan] = useState(() => new Date().toISOString().slice(0, 7)); // "YYYY-MM"
   const [rows, setRows] = useState<RekapIzinRow[]>([]);
@@ -2281,8 +2296,7 @@ function RekapIzin() {
     const [y, m] = bulan.split("-").map(Number);
     const akhir = new Date(y, m, 0).toISOString().slice(0, 10); // tanggal terakhir bulan itu
     const { data } = await supabase.from("pengajuan_izin")
-      .select("id, karyawan_id, tanggal_izin, jenis, alasan, status, created_at, karyawan:karyawan_id(nama)")
-      .eq("status", "aktif")
+      .select("id, karyawan_id, tanggal_izin, jenis, alasan, status, status_surat, catatan_pembatalan, created_at, karyawan:karyawan_id(nama)")
       .gte("tanggal_izin", awal).lte("tanggal_izin", akhir)
       .order("tanggal_izin", { ascending: false });
     setRows((data as unknown as RekapIzinRow[]) ?? []);
@@ -2291,13 +2305,16 @@ function RekapIzin() {
   useEffect(() => { fetchBulan(); }, [fetchBulan]);
 
   const summary = (() => {
-    const m: Record<string, { nama: string; biasa: number; sakit: number }> = {};
+    const m: Record<string, { nama: string; biasa: number; sakit: number; alpha: number }> = {};
     for (const r of rows) {
       const key = r.karyawan_id;
-      if (!m[key]) m[key] = { nama: r.karyawan?.nama ?? "—", biasa: 0, sakit: 0 };
-      if (r.jenis === "izin_sakit") m[key].sakit += 1; else m[key].biasa += 1;
+      if (!m[key]) m[key] = { nama: r.karyawan?.nama ?? "—", biasa: 0, sakit: 0, alpha: 0 };
+      const kat = kategoriEfektif(r);
+      if (kat === "izin_sakit") m[key].sakit += 1;
+      else if (kat === "alpha") m[key].alpha += 1;
+      else m[key].biasa += 1;
     }
-    return Object.values(m).sort((a, b) => (b.biasa + b.sakit) - (a.biasa + a.sakit));
+    return Object.values(m).sort((a, b) => (b.biasa + b.sakit + b.alpha) - (a.biasa + a.sakit + a.alpha));
   })();
 
   return (
@@ -2324,15 +2341,17 @@ function RekapIzin() {
                     <th className="py-1.5 px-1 font-medium">Total Tidak Masuk</th>
                     <th className="py-1.5 px-1 font-medium">Izin Biasa</th>
                     <th className="py-1.5 px-1 font-medium">Sakit</th>
+                    <th className="py-1.5 px-1 font-medium">Alpha</th>
                   </tr>
                 </thead>
                 <tbody>
                   {summary.map((s) => (
                     <tr key={s.nama} className="border-b border-gray-50">
                       <td className="py-1.5 px-1 font-semibold text-gray-700">{s.nama}</td>
-                      <td className="py-1.5 px-1 text-gray-600">{s.biasa + s.sakit}x</td>
+                      <td className="py-1.5 px-1 text-gray-600">{s.biasa + s.sakit + s.alpha}x</td>
                       <td className="py-1.5 px-1 text-gray-600">{s.biasa}x</td>
                       <td className="py-1.5 px-1 text-gray-600">{s.sakit}x</td>
+                      <td className="py-1.5 px-1 text-gray-600">{s.alpha > 0 ? <span className="text-red-600 font-semibold">{s.alpha}x</span> : "0x"}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -2357,21 +2376,31 @@ function RekapIzin() {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r) => (
-                  <tr key={r.id} className="border-b border-gray-50">
-                    <td className="py-1.5 px-1 whitespace-nowrap text-gray-600">{formatTglID(r.tanggal_izin)}</td>
-                    <td className="py-1.5 px-1 font-semibold text-gray-700">{r.karyawan?.nama ?? "—"}</td>
-                    <td className="py-1.5 px-1 text-gray-500">{r.jenis === "izin_sakit" ? "Izin Sakit" : "Izin Biasa"}</td>
-                    <td className="py-1.5 px-1 text-gray-600">
-                      {r.alasan
-                        ? r.alasan
-                        : r.jenis === "izin_sakit"
-                          ? <span className="text-gray-400 italic">Sakit (lihat foto surat)</span>
-                          : <span className="text-gray-300">—</span>}
-                    </td>
-                    <td className="py-1.5 px-1 whitespace-nowrap text-gray-600">{fmtWaktuWIB(r.created_at)}</td>
-                  </tr>
-                ))}
+                {rows.map((r) => {
+                  const kat = kategoriEfektif(r);
+                  return (
+                    <tr key={r.id} className="border-b border-gray-50">
+                      <td className="py-1.5 px-1 whitespace-nowrap text-gray-600">{formatTglID(r.tanggal_izin)}</td>
+                      <td className="py-1.5 px-1 font-semibold text-gray-700">{r.karyawan?.nama ?? "—"}</td>
+                      <td className="py-1.5 px-1 text-gray-500">
+                        {kategoriLabel(kat)}
+                        {kat === "izin_biasa" && r.jenis === "izin_sakit" && (
+                          <span className="block text-[10px] text-orange-500">(surat sakit telat/tdk masuk)</span>
+                        )}
+                      </td>
+                      <td className="py-1.5 px-1 text-gray-600">
+                        {kat === "alpha"
+                          ? <span className="text-red-500 italic">{r.catatan_pembatalan ? `Tidak sah · ${r.catatan_pembatalan}` : "Bukti tidak sah"}</span>
+                          : r.alasan
+                            ? r.alasan
+                            : r.jenis === "izin_sakit"
+                              ? <span className="text-gray-400 italic">Sakit (lihat foto surat)</span>
+                              : <span className="text-gray-300">—</span>}
+                      </td>
+                      <td className="py-1.5 px-1 whitespace-nowrap text-gray-600">{fmtWaktuWIB(r.created_at)}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
