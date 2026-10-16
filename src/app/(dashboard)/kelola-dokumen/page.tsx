@@ -4,8 +4,8 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { getUserSession, canAccessAdmin, type UserSession } from "@/lib/auth";
 import { homeRoute } from "@/lib/permissions";
-import { SLOT_DOKUMEN, JALUR_LABEL_DOK, KATEGORI_DOKUMEN_LIST, type SlotDokumen } from "@/lib/dokumen";
-import { FileText, Upload, X, CheckCircle2, AlertCircle, Archive, RefreshCw, Printer, Pencil, Save } from "lucide-react";
+import { SLOT_DOKUMEN, JALUR_LABEL_DOK, KATEGORI_DOKUMEN_LIST, KATEGORI_FULFILLMENT_LIST, kategoriFulfillmentUntuk, type SlotDokumen } from "@/lib/dokumen";
+import { FileText, Upload, X, CheckCircle2, AlertCircle, Archive, RefreshCw, Printer, Pencil, Save, PackageSearch } from "lucide-react";
 import { fieldDikenalMilik } from "@/lib/dokumenParse";
 
 interface Dokumen {
@@ -14,7 +14,7 @@ interface Dokumen {
   jalur: string | null; jenis: string | null; uploaded_by: string | null;
   konten_html: string | null; file_baca_url: string | null;
 }
-interface Karyawan { id: string; nama: string; kategori_dokumen: string | null }
+interface Karyawan { id: string; nama: string; kategori_dokumen: string | null; boleh_fulfillment: boolean }
 interface Persetujuan {
   dokumen_id: string; dokumen_versi: number; karyawan_id: string; tipe: string;
   tanda_tangan_url: string | null; disetujui_at: string; data_isian: Record<string, string> | null;
@@ -37,6 +37,10 @@ export default function KelolaDokumenPage() {
   const [editData, setEditData] = useState(false);
   const [draftIsian, setDraftIsian] = useState<Record<string, string>>({});
   const [savingIsian, setSavingIsian] = useState(false);
+  const [editNamaKey, setEditNamaKey] = useState<string | null>(null);
+  const [editNamaVal, setEditNamaVal] = useState("");
+  const [savingNama, setSavingNama] = useState(false);
+  const [busyFulfillment, setBusyFulfillment] = useState<string | null>(null);
 
   useEffect(() => {
     const u = getUserSession(); setUser(u);
@@ -48,7 +52,7 @@ export default function KelolaDokumenPage() {
     setLoading(true);
     const [dRes, kRes, pRes] = await Promise.all([
       supabase.from("dokumen").select("id, nama, file_pdf_url, versi, wajib_ttd, is_aktif, jalur, jenis, uploaded_by, konten_html, file_baca_url, created_at").order("created_at"),
-      supabase.from("karyawan").select("id, nama, kategori_dokumen").eq("status", "aktif").order("nama"),
+      supabase.from("karyawan").select("id, nama, kategori_dokumen, boleh_fulfillment").eq("status", "aktif").order("nama"),
       supabase.from("dokumen_persetujuan").select("dokumen_id, dokumen_versi, karyawan_id, tipe, tanda_tangan_url, disetujui_at, data_isian"),
     ]);
     setDocs((dRes.data as Dokumen[]) ?? []);
@@ -62,9 +66,38 @@ export default function KelolaDokumenPage() {
 
   const arsip = docs.filter((d) => !d.is_aktif);
 
-  // Karyawan yang wajib menandatangani slot ini = yang kategori jabatannya cocok
+  // Karyawan yang wajib menandatangani slot ini = yang kategori jabatannya cocok.
+  // Untuk slot Fulfillment (bukan kategori utama), yang wajib adalah karyawan
+  // yang di-toggle boleh_fulfillment DAN levelnya (training/staff) cocok.
   const karyawanSlot = (s: SlotDokumen) =>
-    karyawan.filter((k) => k.kategori_dokumen === s.jalur);
+    KATEGORI_FULFILLMENT_LIST.includes(s.jalur)
+      ? karyawan.filter((k) => k.boleh_fulfillment && kategoriFulfillmentUntuk(k.kategori_dokumen) === s.jalur)
+      : karyawan.filter((k) => k.kategori_dokumen === s.jalur);
+
+  // Karyawan non-SPV yang bisa di-toggle "juga ikut Fulfillment" (SPV tidak
+  // punya varian Fulfillment).
+  const karyawanBisaFulfillment = karyawan.filter((k) => kategoriFulfillmentUntuk(k.kategori_dokumen) !== null);
+
+  async function toggleFulfillment(k: Karyawan) {
+    setBusyFulfillment(k.id);
+    const { error } = await supabase.from("karyawan").update({ boleh_fulfillment: !k.boleh_fulfillment }).eq("id", k.id);
+    setBusyFulfillment(null);
+    if (error) { setErr(error.message); return; }
+    await fetchAll();
+  }
+
+  // Edit nama tampilan dokumen (terpisah dari nama file) — simpan langsung ke
+  // baris dokumen aktif. Dicarry-forward saat upload versi baru (lihat
+  // uploadSlot) supaya nama custom tidak balik ke default tiap ganti versi.
+  async function simpanNamaSlot(d: Dokumen) {
+    if (!editNamaVal.trim()) { setEditNamaKey(null); return; }
+    setSavingNama(true);
+    const { error } = await supabase.from("dokumen").update({ nama: editNamaVal.trim() }).eq("id", d.id);
+    setSavingNama(false);
+    if (error) { setErr(error.message); return; }
+    setEditNamaKey(null);
+    await fetchAll();
+  }
 
   const approvalOf = (dok: Dokumen, karId: string) =>
     approvals.find((p) => p.dokumen_id === dok.id && p.dokumen_versi === dok.versi && p.karyawan_id === karId) ?? null;
@@ -155,7 +188,7 @@ export default function KelolaDokumenPage() {
           .update({ is_aktif: false }).eq("id", existing.id);
         if (archErr) throw new Error(archErr.message);
         const { error } = await supabase.from("dokumen").insert({
-          nama: s.nama, file_pdf_url: url, versi: existing.versi + 1, wajib_ttd: true, is_aktif: true,
+          nama: existing.nama || s.nama, file_pdf_url: url, versi: existing.versi + 1, wajib_ttd: true, is_aktif: true,
           jalur: s.jalur, jenis: s.jenis, kategori: s.jalur, uploaded_by: user?.nama ?? "",
           konten_html: html, konten_html_at: html ? new Date().toISOString() : null,
         });
@@ -216,7 +249,27 @@ export default function KelolaDokumenPage() {
 
       {loading ? <p className="text-sm text-gray-400 text-center py-8">Memuat…</p> : (
         <>
-          {KATEGORI_DOKUMEN_LIST.map((jalur) => (
+          <div className="card space-y-2">
+            <h2 className="font-semibold text-gray-700 text-sm flex items-center gap-1.5"><PackageSearch size={15} className="text-teal-600" /> Backup Fulfillment</h2>
+            <p className="text-xs text-gray-400">
+              Karyawan yang dicentang akan WAJIB tanda tangan PK + PP Fulfillment juga (sesuai level training/staff
+              mereka saat ini), terpisah dari dokumen kategori utamanya — untuk yang kadang backup di Fulfillment.
+            </p>
+            <div className="flex flex-wrap gap-1.5 pt-1">
+              {karyawanBisaFulfillment.length === 0 ? (
+                <p className="text-xs text-gray-400">Belum ada karyawan dengan kategori dokumen Training/Staff.</p>
+              ) : karyawanBisaFulfillment.map((k) => (
+                <button key={k.id} onClick={() => toggleFulfillment(k)} disabled={busyFulfillment === k.id}
+                  className={`text-xs font-medium px-2.5 py-1.5 rounded-lg border flex items-center gap-1.5 transition-colors disabled:opacity-50 ${
+                    k.boleh_fulfillment ? "bg-teal-500 border-teal-500 text-white" : "bg-white border-gray-200 text-gray-600 hover:bg-gray-50"
+                  }`}>
+                  {k.boleh_fulfillment && <CheckCircle2 size={12} />} {k.nama}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {[...KATEGORI_DOKUMEN_LIST, ...KATEGORI_FULFILLMENT_LIST].map((jalur) => (
             <div key={jalur} className="card space-y-2">
               <h2 className="font-semibold text-gray-700 text-sm">{JALUR_LABEL_DOK[jalur]}</h2>
               {SLOT_DOKUMEN.filter((s) => s.jalur === jalur).map((s) => {
@@ -228,7 +281,24 @@ export default function KelolaDokumenPage() {
                   <div key={key} className={`rounded-xl border p-3 ${d ? "border-gray-100" : "border-dashed border-amber-200 bg-amber-50/40"}`}>
                     <div className="flex items-start justify-between gap-2 flex-wrap">
                       <div className="min-w-0">
-                        <p className="font-semibold text-sm text-gray-800">{s.nama}</p>
+                        {editNamaKey === key ? (
+                          <div className="flex items-center gap-1.5">
+                            <input value={editNamaVal} onChange={(e) => setEditNamaVal(e.target.value)} autoFocus
+                              className="text-sm font-semibold text-gray-800 border border-gray-200 rounded-lg px-2 py-1 w-56" />
+                            <button onClick={() => d && simpanNamaSlot(d)} disabled={savingNama} className="p-1 rounded-lg bg-green-100 text-green-700 hover:bg-green-200 disabled:opacity-40"><Save size={13} /></button>
+                            <button onClick={() => setEditNamaKey(null)} disabled={savingNama} className="p-1 rounded-lg bg-gray-100 text-gray-500 hover:bg-gray-200"><X size={13} /></button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-1.5">
+                            <p className="font-semibold text-sm text-gray-800">{d?.nama || s.nama}</p>
+                            {d && (
+                              <button onClick={() => { setEditNamaKey(key); setEditNamaVal(d.nama || s.nama); }}
+                                className="text-gray-300 hover:text-gray-500" title="Ubah nama tampilan (bukan nama file)">
+                                <Pencil size={12} />
+                              </button>
+                            )}
+                          </div>
+                        )}
                         {d ? (
                           <p className="text-[11px] text-gray-400">
                             Versi {d.versi} · {sudah}/{wajib.length} karyawan sudah TTD

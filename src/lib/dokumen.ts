@@ -11,7 +11,24 @@
 // Dokumen boleh beda konten per kategori meski rules-nya sama.
 // ============================================================
 
-export type KategoriDokumen = "training_produksi" | "training_packing" | "staff_produksi" | "staff_packing" | "spv";
+export type KategoriDokumen = "training_produksi" | "training_packing" | "staff_produksi" | "staff_packing" | "spv" | "training_fulfillment" | "staff_fulfillment";
+
+// Kategori Fulfillment BUKAN kategori utama (karyawan tidak di-assign ke sini
+// via kategori_dokumen) — ini dokumen TAMBAHAN untuk karyawan Produksi/Packing
+// tertentu yang kadang backup di Fulfillment (toggle per-karyawan, lihat
+// karyawan.boleh_fulfillment). Dipisah dari KATEGORI_DOKUMEN_LIST supaya tidak
+// ikut muncul sebagai pilihan kategori jabatan biasa.
+export const KATEGORI_FULFILLMENT_LIST: KategoriDokumen[] = ["training_fulfillment", "staff_fulfillment"];
+
+// Kategori Fulfillment yang relevan untuk seorang karyawan, mengikuti level
+// (training/staff) dari kategori_dokumen utamanya. SPV tidak punya varian
+// Fulfillment.
+export function kategoriFulfillmentUntuk(kategoriUtama: string | null): KategoriDokumen | null {
+  if (!kategoriUtama) return null;
+  if (kategoriUtama.startsWith("training_")) return "training_fulfillment";
+  if (kategoriUtama.startsWith("staff_")) return "staff_fulfillment";
+  return null;
+}
 
 export type JenisDokumen = "pk" | "pp";
 
@@ -33,6 +50,10 @@ export const SLOT_DOKUMEN: SlotDokumen[] = [
   { jalur: "staff_packing",     jenis: "pp", nama: "Peraturan Perusahaan — Staff Packing",      singkat: "PP Staff Packing" },
   { jalur: "spv",               jenis: "pk", nama: "Perjanjian Kerja — Supervisor (SPV)",       singkat: "PK SPV" },
   { jalur: "spv",               jenis: "pp", nama: "Peraturan Perusahaan — Supervisor (SPV)",   singkat: "PP SPV" },
+  { jalur: "training_fulfillment", jenis: "pk", nama: "Perjanjian Kerja — Fulfillment (Training)",    singkat: "PK Fulfillment Training" },
+  { jalur: "training_fulfillment", jenis: "pp", nama: "Peraturan Perusahaan — Fulfillment (Training)", singkat: "PP Fulfillment Training" },
+  { jalur: "staff_fulfillment",    jenis: "pk", nama: "Perjanjian Kerja — Fulfillment (Staff)",        singkat: "PK Fulfillment Staff" },
+  { jalur: "staff_fulfillment",    jenis: "pp", nama: "Peraturan Perusahaan — Fulfillment (Staff)",    singkat: "PP Fulfillment Staff" },
 ];
 
 export const KATEGORI_DOKUMEN_LIST: KategoriDokumen[] = ["training_produksi", "training_packing", "staff_produksi", "staff_packing", "spv"];
@@ -43,6 +64,8 @@ export const JALUR_LABEL_DOK: Record<KategoriDokumen, string> = {
   staff_produksi: "Staff Produksi",
   staff_packing: "Staff Packing",
   spv: "Supervisor (SPV)",
+  training_fulfillment: "Fulfillment — Training (backup)",
+  staff_fulfillment: "Fulfillment — Staff (backup)",
 };
 
 export function slotUntukKategori(kategori: KategoriDokumen): SlotDokumen[] {

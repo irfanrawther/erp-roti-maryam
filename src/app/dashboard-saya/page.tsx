@@ -6,10 +6,11 @@ import { hashPin } from "@/lib/auth";
 import { UserCircle, Clock, ClipboardList, CalendarDays, FileText, CheckCircle2, AlertCircle, X, ExternalLink, ShieldAlert, PenLine, Eye } from "lucide-react";
 import { kuartalSekarang, labelKuartal, POIN_PER_SP } from "@/lib/poin";
 import { hitungKlarifikasiDeadline, type StatusLaporan } from "@/lib/pelanggaranAlur";
+import { kategoriFulfillmentUntuk } from "@/lib/dokumen";
 
 const TandaTanganDokumen = dynamic(() => import("./TandaTanganDokumen"), { ssr: false });
 
-interface Karyawan { id: string; nama: string; jabatan: string | null; kategori_dokumen: string | null; tanggal_masuk_kerja: string | null }
+interface Karyawan { id: string; nama: string; jabatan: string | null; kategori_dokumen: string | null; tanggal_masuk_kerja: string | null; boleh_fulfillment: boolean }
 interface ShiftInfo { nama_shift: string; jam_masuk: string; jam_pulang: string }
 interface AssignRow { tanggal: string; is_libur: boolean; shift_id: string | null; shift_master: ShiftInfo | null }
 interface AbsRow {
@@ -37,10 +38,15 @@ interface TtdPerusahaanRow { dokumen_id: string; dokumen_versi: number }
 // 2. Dokumen aktif LAIN yang pernah ditandatangani (dari riwayat dokumen_persetujuan),
 //    meski kategorinya sudah berubah — supaya dokumen Training lama TETAP tampil
 //    walau yang wajib ditandatangani sekarang sudah pindah ke Staff.
-async function fetchDokumenKaryawan(karyawanId: string, kategoriDokumen: string | null): Promise<DokItem[]> {
+async function fetchDokumenKaryawan(karyawanId: string, kategoriDokumen: string | null, boleh_fulfillment = false): Promise<DokItem[]> {
+  // Kategori utama + (kalau di-toggle) kategori Fulfillment yang levelnya cocok
+  // (training/staff) — dokumen tambahan untuk karyawan yang kadang backup di
+  // Fulfillment, supaya mereka ikut wajib TTD PK+PP Fulfillment juga.
+  const kategoriList = [kategoriDokumen, boleh_fulfillment ? kategoriFulfillmentUntuk(kategoriDokumen) : null]
+    .filter((k): k is string => !!k);
   const [dk, pj, tp] = await Promise.all([
-    kategoriDokumen
-      ? supabase.from("dokumen").select("id, nama, versi, wajib_ttd, file_pdf_url, konten_html, file_baca_url").eq("is_aktif", true).eq("jalur", kategoriDokumen).order("jenis")
+    kategoriList.length > 0
+      ? supabase.from("dokumen").select("id, nama, versi, wajib_ttd, file_pdf_url, konten_html, file_baca_url").eq("is_aktif", true).in("jalur", kategoriList).order("jenis")
       : Promise.resolve({ data: [] as DokRow[] }),
     supabase.from("dokumen_persetujuan").select("dokumen_id, dokumen_versi, disetujui_at, tipe, tanda_tangan_url, data_isian").eq("karyawan_id", karyawanId),
     supabase.from("dokumen_ttd_perusahaan").select("dokumen_id, dokumen_versi").eq("karyawan_id", karyawanId),
@@ -112,7 +118,7 @@ export default function DashboardSayaPage() {
     try {
       const hash = await hashPin(pin);
       const { data: k } = await supabase.from("karyawan")
-        .select("id, nama, jabatan, kategori_dokumen, tanggal_masuk_kerja").eq("pin_absensi", hash).eq("status", "aktif").maybeSingle();
+        .select("id, nama, jabatan, kategori_dokumen, tanggal_masuk_kerja, boleh_fulfillment").eq("pin_absensi", hash).eq("status", "aktif").maybeSingle();
       if (!k) { setPinErr("PIN tidak ditemukan"); return; }
       const kar = k as Karyawan; setKaryawan(kar);
 
@@ -124,7 +130,7 @@ export default function DashboardSayaPage() {
           .eq("karyawan_id", kar.id).gte("tanggal", monthStart).lte("tanggal", today).order("tanggal", { ascending: false }),
         supabase.from("audit_kebersihan_roster_harian").select("tanggal, nama_tugas_datang, nama_tugas")
           .eq("karyawan_id", kar.id).eq("is_aktif", true).gte("tanggal", today).lte("tanggal", upTo).order("tanggal"),
-        fetchDokumenKaryawan(kar.id, kar.kategori_dokumen),
+        fetchDokumenKaryawan(kar.id, kar.kategori_dokumen, kar.boleh_fulfillment),
         supabase.from("poin_karyawan").select("tanggal, poin, sumber, catatan, master_pelanggaran:pelanggaran_id(nama_pelanggaran)").eq("karyawan_id", kar.id).eq("kuartal", kuartalSekarang()).order("tanggal", { ascending: false }),
         supabase.from("status_sp_karyawan").select("level_sp, kuartal_kena").eq("karyawan_id", kar.id).eq("is_aktif", true),
         supabase.from("laporan_pelanggaran").select("id, tanggal_kejadian, status, respon_deadline, klarifikasi_deadline, poin_override, master_pelanggaran:pelanggaran_id(nama_pelanggaran, poin)")
@@ -146,7 +152,7 @@ export default function DashboardSayaPage() {
 
   async function refreshDocs() {
     if (!karyawan) return;
-    setDocs(await fetchDokumenKaryawan(karyawan.id, karyawan.kategori_dokumen));
+    setDocs(await fetchDokumenKaryawan(karyawan.id, karyawan.kategori_dokumen, karyawan.boleh_fulfillment));
   }
 
   // Pasal 6: karyawan boleh minta klarifikasi tatap muka ke Manajer
