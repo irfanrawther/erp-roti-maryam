@@ -274,8 +274,14 @@ export default function DashboardSayaPage() {
               const totalPoin = poinRows.reduce((s, p) => s + Number(p.poin), 0);
               const poinGantung = perluKlarifikasi.reduce((s, l) => s + Number(l.poin_override ?? l.master_pelanggaran?.poin ?? 0), 0);
               const totalTampil = totalPoin + poinGantung;
-              const curSP = Math.min(3, spBefore + Math.floor(totalTampil / POIN_PER_SP));
-              const dalamLevel = totalTampil % POIN_PER_SP;
+              // curSP HARUS sama dengan spLevel (badge "Status: SPx" di atas) —
+              // itu sumber kebenaran dari status_sp_karyawan yang sudah
+              // dievaluasi sesuai aturan_config (carry-over antar kuartal atau
+              // tidak). Sebelumnya di sini dihitung ulang sendiri dengan asumsi
+              // carry-over selalu aktif, jadi bisa beda dari badge di atasnya
+              // (mis. badge sudah SP2 tapi di bawah masih tulis "SP3 tercapai").
+              const curSP = spLevel;
+              const dalamLevel = Math.max(0, totalTampil - curSP * POIN_PER_SP);
               const nextSP = curSP + 1;
               return (
                 <div className="bg-white rounded-2xl shadow-sm p-4 space-y-3">
