@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { getUserSession, canAccessAdmin, type UserSession } from "@/lib/auth";
 import { homeRoute } from "@/lib/permissions";
-import { tambahPoin, kuartalSekarang, labelKuartal, POIN_PER_SP } from "@/lib/poin";
+import { tambahPoin, kuartalSekarang, labelKuartal, POIN_PER_SP, evaluasiUlangSP } from "@/lib/poin";
 import {
   ambilSpvKhusus, ambilPelanggaranUmum, TIER_LABEL, TIER_ORDER, TIER_BADGE, labelStatus, badgeStatus,
   hitungKlarifikasiDeadline, hitungResponDeadline, prosesOtomatisTanpaKlarifikasi,
@@ -170,9 +170,15 @@ export default function PelanggaranPage() {
     setBusyId(null); setKlarifikasiModal(null); setKlarifikasiCatatan(""); fetchAll();
   }
 
-  async function hapusPoin(id: string) {
+  async function hapusPoin(p: PoinRow) {
     if (!confirm("Hapus poin ini?")) return;
-    await supabase.from("poin_karyawan").delete().eq("id", id);
+    await supabase.from("poin_karyawan").delete().eq("id", p.id);
+    // Poin kuartal berkurang bisa bikin status SP (badge SP1/SP2/SP3) yang
+    // sudah aktif jadi tidak lagi didukung totalnya — turunkan/nonaktifkan
+    // SP yang kelebihan itu, supaya badge & teks "X dari 5 menuju SP..."
+    // langsung mencerminkan poin akhir setelah dihapus, bukan nyangkut di
+    // level lama.
+    await evaluasiUlangSP(p.karyawan_id, p.kuartal, p.tanggal);
     fetchPoin();
   }
   async function setInsidenStatus(id: string, status: string) {
@@ -187,12 +193,17 @@ export default function PelanggaranPage() {
   const poinKuartal = poin.filter((p) => p.kuartal === kuartal);
   const poinOf = (kid: string) => poinKuartal.filter((p) => p.karyawan_id === kid).reduce((s, p) => s + Number(p.poin), 0);
   const spOf = (kid: string) => sp.filter((s) => s.karyawan_id === kid).reduce((mx, s) => Math.max(mx, s.level_sp), 0);
-  const spBeforeQuarter = (kid: string) => sp.filter((s) => s.karyawan_id === kid && s.kuartal_kena !== kuartal).reduce((mx, s) => Math.max(mx, s.level_sp), 0);
+  // Progress menuju SP berikutnya HARUS pakai level SP yang sama dengan badge
+  // "Status SP" (spOf, sumber kebenaran dari status_sp_karyawan yang sudah
+  // dievaluasi ulang sesuai aturan_config — carry-over antar kuartal atau
+  // tidak, dll). Sebelumnya fungsi ini menghitung ulang levelnya sendiri
+  // dengan asumsi carry-over selalu aktif, jadi bisa beda dari badge-nya
+  // sendiri (mis. badge sudah turun ke SP2 tapi teks di sini masih
+  // "SP3 (maksimal)").
   const nextSPInfo = (kid: string) => {
-    const q = poinOf(kid); const before = spBeforeQuarter(kid);
-    const cur = Math.min(3, before + Math.floor(q / POIN_PER_SP));
+    const q = poinOf(kid); const cur = spOf(kid);
     if (cur >= 3) return { text: "SP3 (maksimal)", danger: true };
-    const menuju = cur + 1; const sisa = q % POIN_PER_SP;
+    const menuju = cur + 1; const sisa = Math.max(0, q - cur * POIN_PER_SP);
     return { text: `${sisa} dari ${POIN_PER_SP} menuju SP${menuju}`, danger: sisa >= POIN_PER_SP - 1 };
   };
   const sp3List = karyawan.filter((k) => spOf(k.id) >= 3);
@@ -568,7 +579,7 @@ export default function PelanggaranPage() {
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
                       <span className="text-sm font-bold text-red-600">+{p.poin}</span>
-                      <button onClick={() => hapusPoin(p.id)} className="text-gray-300 hover:text-red-500" title="Hapus poin"><Trash2 size={13} /></button>
+                      <button onClick={() => hapusPoin(p)} className="text-gray-300 hover:text-red-500" title="Hapus poin"><Trash2 size={13} /></button>
                     </div>
                   </div>
                 ))}
